@@ -59,6 +59,20 @@ type CashAdjustment = {
   at: string;
   createdBy: string;
 };
+type CashShift = {
+  id: string;
+  site: string;
+  openedAt: string;
+  openedBy: string;
+  initialFund: number;
+  closedAt?: string;
+  closedBy?: string;
+};
+type OperationalLimits = {
+  maxDiscount: number;
+  maxExpense: number;
+  maxCashDifference: number;
+};
 type StockMovement = {
   id: string;
   site: string;
@@ -813,6 +827,25 @@ export default function Home() {
   const [stockRequests, setStockRequests] = useState<StockRequest[]>([]);
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
+  const [activeShiftBySite, setActiveShiftBySite] = useState<
+    Record<string, CashShift | undefined>
+  >({});
+  const [shiftLog, setShiftLog] = useState<CashShift[]>([]);
+  const [limitsBySite, setLimitsBySite] = useState<
+    Record<string, OperationalLimits>
+  >(() =>
+    Object.fromEntries(
+      SITES.map((local) => [
+        local,
+        { maxDiscount: 10, maxExpense: 100000, maxCashDifference: 0 },
+      ]),
+    ),
+  );
+  const [connectionMode, setConnectionMode] = useState<"En línea" | "Contingencia">("En línea");
+  const [pendingSync, setPendingSync] = useState(0);
+  const [backupFrequency, setBackupFrequency] = useState("Semanal");
+  const [retentionYears, setRetentionYears] = useState(7);
+  const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -923,6 +956,8 @@ export default function Home() {
   }));
   const requiresEnvelope = site !== "Novo Pacheco";
   const cashIsOpen = Boolean(cashOpenBySite[site]);
+  const siteLimits = limitsBySite[site];
+  const activeShift = activeShiftBySite[site];
   const canAdjustStock = user?.name === "Andrea" || user?.name === "Betzi";
   const canCountRealStock = user?.name === "Andrea";
   const managesCentralOrders = ["Vendedora Villa Mitre", "Andrea", "Betzi"].includes(
@@ -970,6 +1005,33 @@ export default function Home() {
       minimum: minimumStock[local][product.id] || 0,
     })),
   );
+  const roleTasks = [
+    ...(!cashIsOpen && user.role !== "administracion"
+      ? [{ title: "Abrir caja", detail: `${site}: declarando el fondo inicial y responsable.`, action: "Caja" }]
+      : []),
+    ...savedOrders
+      .filter((order) => order.site === site)
+      .map((order) => ({ title: "Comanda abierta", detail: `${order.customer} · ${order.items.length} productos.`, action: "Ventas" })),
+    ...(!managesCentralOrders
+      ? lowStockProducts.map(({ product, current, minimum }) => ({ title: "Stock bajo", detail: `${product.name}: ${current}/${minimum}.`, action: "Pedido" }))
+      : []),
+    ...stockRequests
+      .filter((request) => request.site === site && (request.status === "Despachado" || request.status === "Despachado parcial"))
+      .map((request) => ({ title: "Confirmar recepción", detail: `Pedido ${request.id.slice(0, 8)} enviado por Central.`, action: "Pedido" })),
+    ...(managesCentralOrders
+      ? stockRequests
+          .filter((request) => request.status === "Pendiente" || request.status === "En preparación")
+          .map((request) => ({ title: "Preparar pedido", detail: `${request.site} · ${request.status}.`, action: "Central de pedidos" }))
+      : []),
+    ...(user.name === "Betzi"
+      ? stockAdjustments
+          .filter((adjustment) => adjustment.status === "Pendiente")
+          .map((adjustment) => ({ title: "Aprobar ajuste", detail: `${adjustment.site} · ajuste de inventario.`, action: "Central de pedidos" }))
+      : []),
+    ...(user.role === "administracion"
+      ? [{ title: "Revisar alertas operativas", detail: "Controlá cajas, stock, pedidos y comprobantes pendientes.", action: "Administración" }]
+      : []),
+  ];
   const selectedRequest = stockRequests.find(
     (request) => request.id === selectedRequestId,
   );
@@ -1347,6 +1409,10 @@ export default function Home() {
   const submitExpense = () => {
     if (expenseAmount <= 0 || !expenseDetail.trim())
       return setMessage("Completá importe y detalle del egreso.");
+    if (expenseAmount > siteLimits.maxExpense)
+      return setMessage(
+        `El egreso supera el límite de ${money.format(siteLimits.maxExpense)} configurado por Administración para ${site}.`,
+      );
     const expense: Expense = {
       id: crypto.randomUUID(),
       site,
@@ -1624,6 +1690,10 @@ export default function Home() {
     if (!cashIsOpen)
       return setMessage("Primero tenés que abrir la caja de este local.");
     if (!cart.length) return setMessage("Agregá productos a la venta.");
+    if (!invitation && discount > siteLimits.maxDiscount)
+      return setMessage(
+        `El descuento supera el máximo autorizado de ${siteLimits.maxDiscount}% para ${site}.`,
+      );
     const sale: Sale = {
       id: crypto.randomUUID(),
       site,
@@ -1645,6 +1715,7 @@ export default function Home() {
       { method: payment, amount: net, saleId: sale.id },
     ]);
     setSales((x) => [sale, ...x]);
+    if (connectionMode === "Contingencia") setPendingSync((value) => value + 1);
     setStock((x) => {
       const a = { ...x[site] };
       cart.forEach((p) => (a[p.id] = Math.max(0, a[p.id] - 1)));
@@ -1762,12 +1833,23 @@ export default function Home() {
       return setMessage(
         `No se puede cerrar la caja: hay ${openOrders.length} comanda${openOrders.length === 1 ? "" : "s"} abierta${openOrders.length === 1 ? "" : "s"} en ${site}. Cobralas o recuperalas desde Ventas.`,
       );
-    if (diff !== 0)
+    if (Math.abs(diff) > siteLimits.maxCashDifference)
       return setMessage(
-        "No se puede cerrar: la diferencia de caja debe ser $ 0.",
+        `No se puede cerrar: la diferencia supera el máximo autorizado de ${money.format(siteLimits.maxCashDifference)}.`,
       );
     setClosed(true);
     setCashOpenBySite((items) => ({ ...items, [site]: false }));
+    if (activeShift) {
+      const finalShift = {
+        ...activeShift,
+        closedAt: new Date().toLocaleString("es-AR"),
+        closedBy: user.name,
+      };
+      setShiftLog((items) =>
+        items.map((shift) => (shift.id === finalShift.id ? finalShift : shift)),
+      );
+      setActiveShiftBySite((items) => ({ ...items, [site]: undefined }));
+    }
     if (requiresEnvelope && envelope > 0)
       setEnvelopeRecords((items) => [
         {
@@ -1792,10 +1874,46 @@ export default function Home() {
     );
   };
   const openCash = () => {
+    if (cashIsOpen) return setMessage("La caja ya se encuentra abierta.");
+    const shift: CashShift = {
+      id: crypto.randomUUID(),
+      site,
+      openedAt: new Date().toLocaleString("es-AR"),
+      openedBy: user.name,
+      initialFund: fund,
+    };
     setCashOpenBySite((items) => ({ ...items, [site]: true }));
+    setActiveShiftBySite((items) => ({ ...items, [site]: shift }));
+    setShiftLog((items) => [shift, ...items]);
     setClosed(false);
     recordAudit("Caja abierta", `Fondo inicial ${money.format(fund)}`);
     setMessage(`Caja abierta para ${site}. Ya se pueden registrar cobros.`);
+  };
+  const closeShift = () => {
+    if (!cashIsOpen || !activeShift)
+      return setMessage("Primero debe existir una caja y turno abiertos.");
+    const closedShift = {
+      ...activeShift,
+      closedAt: new Date().toLocaleString("es-AR"),
+      closedBy: user.name,
+    };
+    setShiftLog((items) =>
+      items.map((shift) => (shift.id === closedShift.id ? closedShift : shift)),
+    );
+    setActiveShiftBySite((items) => ({ ...items, [site]: undefined }));
+    recordAudit(
+      "Turno cerrado",
+      `${site} · ${activeShift.openedBy} a ${user.name} · caja continúa abierta`,
+    );
+    setMessage("Turno cerrado y auditado. La caja permanece abierta para el siguiente turno.");
+  };
+  const syncContingency = () => {
+    if (connectionMode === "Contingencia")
+      return setMessage("Volvé a modo En línea antes de sincronizar.");
+    if (!pendingSync) return setMessage("No hay operaciones pendientes de sincronización.");
+    recordAudit("Operaciones sincronizadas", `${pendingSync} operación(es) de contingencia.`);
+    setPendingSync(0);
+    setMessage("Operaciones de contingencia marcadas para sincronización segura.");
   };
   if (!user)
     return (
@@ -1849,16 +1967,20 @@ export default function Home() {
     );
   const baseTabs =
     user.role === "administracion"
-      ? [
+        ? [
           "Administración",
+          "Tareas",
           "Usuarios",
           "Precios",
+          "Límites",
           "Recetas y costos",
           "Legajos",
+          "Protección de datos",
           "Integraciones",
         ]
       : [
           "Ventas",
+          "Tareas",
           "Caja",
           "Stock",
           ...(managesCentralOrders ? [] : ["Pedido"]),
@@ -1933,7 +2055,59 @@ export default function Home() {
           </nav>
         </aside>
         <section className="p-4 sm:p-5 md:p-8">
-          {tab === "Ventas" ? (
+          {tab === "Tareas" ? (
+            <>
+              <Heading
+                k={user.role === "administracion" ? "ADMINISTRACIÓN" : `LOCAL · ${site.toUpperCase()}`}
+                h="Bandeja de tareas"
+                p="Acciones pendientes según tu rol, local y permisos."
+              />
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-4">
+                <div>
+                  <b>Estado de conexión: {connectionMode}</b>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {connectionMode === "Contingencia"
+                      ? `${pendingSync} operación(es) quedan guardadas localmente hasta recuperar conexión.`
+                      : pendingSync
+                        ? `${pendingSync} operación(es) de contingencia pendientes de sincronizar.`
+                        : "Sin operaciones pendientes de sincronización."}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setConnectionMode((mode) => mode === "En línea" ? "Contingencia" : "En línea")}
+                    className="rounded border px-3 py-2 text-sm font-bold"
+                  >
+                    {connectionMode === "En línea" ? "Activar contingencia" : "Volver a En línea"}
+                  </button>
+                  {pendingSync > 0 && (
+                    <button onClick={syncContingency} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white">
+                      Sincronizar pendientes
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {roleTasks.length ? roleTasks.map((task, index) => (
+                  <button
+                    key={`${task.title}-${index}`}
+                    onClick={() => setTab(task.action)}
+                    className="rounded-2xl border bg-white p-5 text-left transition hover:border-[#183a67]"
+                  >
+                    <p className="text-xs font-bold text-[#ec3a35]">PENDIENTE</p>
+                    <b className="mt-2 block">{task.title}</b>
+                    <p className="mt-2 text-sm text-slate-600">{task.detail}</p>
+                    <span className="mt-4 inline-block text-sm font-bold underline">Ir al módulo</span>
+                  </button>
+                )) : (
+                  <div className="rounded-2xl bg-[#eef5ef] p-5 md:col-span-2 xl:col-span-3">
+                    <b>Todo al día</b>
+                    <p className="mt-1 text-sm">No hay tareas operativas pendientes para este perfil.</p>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : tab === "Ventas" ? (
             <>
               <Heading
                 k={`PUNTO DE VENTA · ${site.toUpperCase()}`}
@@ -2252,6 +2426,18 @@ export default function Home() {
                     >
                       Abrir caja
                     </button>
+                  )}
+                  {cashIsOpen && activeShift && (
+                    <div className="mt-3 rounded border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm">
+                      <b>Turno abierto</b>
+                      <p className="mt-1">Responsable: {activeShift.openedBy} · Fondo declarado: {money.format(activeShift.initialFund)}</p>
+                      <button
+                        onClick={closeShift}
+                        className="mt-3 rounded border border-[#183a67] px-3 py-2 text-xs font-bold"
+                      >
+                        Cerrar turno y pasar caja
+                      </button>
+                    </div>
                   )}
                   <label className="mt-3 block text-sm font-bold">Gastos</label>
                   <input
@@ -3541,6 +3727,69 @@ export default function Home() {
                 ))}
               </div>
             </>
+          ) : tab === "Protección de datos" && user.role === "administracion" ? (
+            <>
+              <Heading
+                k="ADMINISTRACIÓN · SEGURIDAD"
+                h="Protección de datos y respaldos"
+                p="Política de auditoría, retención y respaldo para proteger la operación de todos los locales."
+              />
+              <div className="grid gap-5 lg:grid-cols-2">
+                <div className="rounded-2xl border bg-white p-5">
+                  <b>Auditoría inalterable</b>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Las ventas, anulaciones, cambios de cobro, cierres, stock y permisos deberán registrarse con fecha, usuaria y local. En producción no podrán editarse ni eliminarse desde la interfaz.
+                  </p>
+                  <p className="mt-4 rounded bg-[#eef2f6] p-3 text-sm">
+                    Eventos auditados en esta prueba: <b>{audit.length}</b>
+                  </p>
+                </div>
+                <div className="rounded-2xl border bg-white p-5">
+                  <b>Política de retención</b>
+                  <label className="mt-4 block text-sm font-bold">
+                    Conservar historial durante
+                    <input
+                      type="number"
+                      min="1"
+                      value={retentionYears}
+                      onChange={(event) => setRetentionYears(Math.max(1, Number(event.target.value) || 1))}
+                      className="mt-1 w-28 rounded border p-2 text-center font-normal"
+                    /> años
+                  </label>
+                  <p className="mt-3 text-sm text-slate-600">Incluye ventas, cajas, stock, pedidos, egresos y auditoría.</p>
+                </div>
+                <div className="rounded-2xl border bg-white p-5">
+                  <b>Respaldo automático</b>
+                  <label className="mt-4 block text-sm font-bold">
+                    Frecuencia
+                    <select value={backupFrequency} onChange={(event) => setBackupFrequency(event.target.value)} className="mt-1 block w-full rounded border p-2 font-normal">
+                      <option>Semanal</option>
+                      <option>Cada 15 días</option>
+                      <option>Mensual</option>
+                    </select>
+                  </label>
+                  <button
+                    onClick={() => {
+                      setBackupStatus(`Respaldo ${backupFrequency.toLowerCase()} preparado: se enviará a Drive y al correo autorizado al conectar el backend.`);
+                      recordAudit("Política de respaldo actualizada", `${backupFrequency} · retención ${retentionYears} años`);
+                    }}
+                    className="mt-4 rounded bg-[#183a67] px-4 py-2 font-bold text-white"
+                  >
+                    Guardar política
+                  </button>
+                  <p className="mt-3 text-sm text-slate-600">{backupStatus}</p>
+                </div>
+                <div className="rounded-2xl border bg-white p-5">
+                  <b>Recuperación</b>
+                  <p className="mt-2 text-sm text-slate-600">
+                    La recuperación se realizará desde una copia verificada de la base de datos, respaldos en Drive y el correo designado. Se probará antes de habilitar el uso diario.
+                  </p>
+                  <p className="mt-4 rounded bg-[#fff5d8] p-3 text-sm">
+                    Pendiente técnico: conectar D1/base de datos, Drive y envío de correo. Esta pantalla ya deja definida la política operativa.
+                  </p>
+                </div>
+              </div>
+            </>
           ) : tab === "Integraciones" && user.role === "administracion" ? (
             <>
               <Heading
@@ -3645,6 +3894,73 @@ export default function Home() {
                   </li>
                 </ol>
               </div>
+            </>
+          ) : tab === "Límites" && user.role === "administracion" ? (
+            <>
+              <Heading
+                k="ADMINISTRACIÓN · CONTROLES"
+                h="Límites operativos por local"
+                p="Definí los topes que el sistema aplicará antes de permitir descuentos, egresos y cierres de caja."
+              />
+              <div className="overflow-auto rounded-2xl border bg-white">
+                <table className="w-full min-w-[780px] text-sm">
+                  <thead className="bg-[#eef2f6]">
+                    <tr>
+                      <th className="p-3 text-left">Local</th>
+                      <th className="p-3 text-center">Descuento máximo</th>
+                      <th className="p-3 text-center">Egreso máximo</th>
+                      <th className="p-3 text-center">Diferencia máxima de caja</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {SITES.map((local) => (
+                      <tr key={local} className="border-t">
+                        <td className="p-3 font-bold">{local}</td>
+                        <td className="p-3 text-center">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={limitsBySite[local].maxDiscount}
+                            onChange={(event) => setLimitsBySite((items) => ({
+                              ...items,
+                              [local]: { ...items[local], maxDiscount: Math.min(100, Math.max(0, Number(event.target.value) || 0)) },
+                            }))}
+                            className="w-24 rounded border p-2 text-center"
+                          /> %
+                        </td>
+                        <td className="p-3 text-center">
+                          <input
+                            type="number"
+                            min="0"
+                            value={limitsBySite[local].maxExpense}
+                            onChange={(event) => setLimitsBySite((items) => ({
+                              ...items,
+                              [local]: { ...items[local], maxExpense: Math.max(0, Number(event.target.value) || 0) },
+                            }))}
+                            className="w-32 rounded border p-2 text-center"
+                          />
+                        </td>
+                        <td className="p-3 text-center">
+                          <input
+                            type="number"
+                            min="0"
+                            value={limitsBySite[local].maxCashDifference}
+                            onChange={(event) => setLimitsBySite((items) => ({
+                              ...items,
+                              [local]: { ...items[local], maxCashDifference: Math.max(0, Number(event.target.value) || 0) },
+                            }))}
+                            className="w-32 rounded border p-2 text-center"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-4 rounded border border-[#e7c26a] bg-[#fff5d8] p-4 text-sm">
+                Estos controles son exclusivos de Administración. Cada cambio deberá conservarse en la auditoría al conectar la base de datos.
+              </p>
             </>
           ) : tab === "Precios" && user.role === "administracion" ? (
             <>
