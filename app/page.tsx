@@ -866,6 +866,9 @@ export default function Home() {
   const cashIsOpen = Boolean(cashOpenBySite[site]);
   const canAdjustStock = user?.name === "Andrea" || user?.name === "Betzi";
   const canCountRealStock = user?.name === "Andrea";
+  const managesCentralOrders = ["Vendedora Villa Mitre", "Andrea", "Betzi"].includes(
+    user?.name || "",
+  );
   const can = (permission: string) =>
     Boolean(user?.actionPermissions.includes(permission));
   const currentRequestLines = PRODUCTS.filter(
@@ -1071,6 +1074,10 @@ export default function Home() {
       ...events,
     ]);
   const submitStockRequest = () => {
+    if (managesCentralOrders)
+      return setMessage(
+        "Central no realiza pedidos: revisá las solicitudes recibidas en Central de pedidos.",
+      );
     if (!can("pedidos"))
       return setMessage("Tu usuario no tiene permiso para crear pedidos.");
     if (!currentRequestLines.length)
@@ -1098,6 +1105,8 @@ export default function Home() {
     request: StockRequest,
     status: StockRequest["status"],
   ) => {
+    if (!managesCentralOrders)
+      return setMessage("Solo Central puede actualizar el estado de un pedido.");
     setStockRequests((items) =>
       items.map((item) =>
         item.id === request.id ? { ...item, status } : item,
@@ -1194,6 +1203,8 @@ export default function Home() {
     adjustment: StockAdjustment,
     approve: boolean,
   ) => {
+    if (user?.name !== "Betzi")
+      return setMessage("Solo Betzi puede aprobar o rechazar ajustes de stock.");
     setStockAdjustments((items) =>
       items.map((item) =>
         item.id === adjustment.id
@@ -1606,15 +1617,18 @@ export default function Home() {
           "Ventas",
           "Caja",
           "Stock",
-          "Pedido",
+          ...(managesCentralOrders ? [] : ["Pedido"]),
           "Egresos",
           "Incidencias",
           "Fichaje",
           "Clientes",
           "Guía",
         ];
-  const tabs =
-    user.name === "Betzi" ? [...baseTabs, "Solicitudes", "Horarios"] : baseTabs;
+  const tabs = [
+    ...baseTabs,
+    ...(managesCentralOrders ? ["Central de pedidos"] : []),
+    ...(user.name === "Betzi" ? ["Horarios"] : []),
+  ];
   const availableAdminReports =
     user.role === "administracion"
       ? ADMIN_REPORTS.filter((report) =>
@@ -2506,8 +2520,8 @@ export default function Home() {
                 <aside className="h-fit rounded-2xl border bg-white p-5 shadow-sm">
                   <h2 className="font-bold">Confirmar solicitud</h2>
                   <p className="mt-2 text-sm text-slate-500">
-                    La recibe Betzi en su módulo Solicitudes. No descuenta ni
-                    ingresa stock hasta que Central realice el movimiento.
+                    La recibe Central de pedidos. No descuenta ni ingresa stock
+                    hasta que Central realice el movimiento.
                   </p>
                   <label className="mt-4 block text-sm font-bold">
                     Observaciones
@@ -2565,12 +2579,12 @@ export default function Home() {
                 </aside>
               </div>
             </>
-          ) : tab === "Solicitudes" && user.name === "Betzi" ? (
+          ) : tab === "Central de pedidos" && managesCentralOrders ? (
             <>
               <Heading
-                k="CENTRAL · BETZI"
-                h="Solicitudes de mercadería"
-                p="Revisá los pedidos de los locales, gestioná su estado y prepará el despacho."
+                k="CENTRAL · PEDIDOS DE LOCALES"
+                h="Central de pedidos"
+                p="Revisá los pedidos de los locales, gestioná su estado y prepará el despacho desde Villa Mitre."
               />
               <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
                 <div className="overflow-hidden rounded-2xl border bg-white">
@@ -2743,24 +2757,30 @@ export default function Home() {
                             <td className="p-3">{adjustment.reason}</td>
                             <td className="p-3 text-center">
                               {adjustment.status === "Pendiente" ? (
-                                <div className="flex justify-center gap-2">
-                                  <button
-                                    onClick={() =>
-                                      approveStockAdjustment(adjustment, true)
-                                    }
-                                    className="rounded bg-[#183a67] px-3 py-2 font-bold text-white"
-                                  >
-                                    Aprobar
-                                  </button>
-                                  <button
-                                    onClick={() =>
-                                      approveStockAdjustment(adjustment, false)
-                                    }
-                                    className="rounded border px-3 py-2 font-bold"
-                                  >
-                                    Rechazar
-                                  </button>
-                                </div>
+                                user.name === "Betzi" ? (
+                                  <div className="flex justify-center gap-2">
+                                    <button
+                                      onClick={() =>
+                                        approveStockAdjustment(adjustment, true)
+                                      }
+                                      className="rounded bg-[#183a67] px-3 py-2 font-bold text-white"
+                                    >
+                                      Aprobar
+                                    </button>
+                                    <button
+                                      onClick={() =>
+                                        approveStockAdjustment(adjustment, false)
+                                      }
+                                      className="rounded border px-3 py-2 font-bold"
+                                    >
+                                      Rechazar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-500">
+                                    Revisión de Betzi
+                                  </span>
+                                )
                               ) : (
                                 adjustment.status
                               )}
