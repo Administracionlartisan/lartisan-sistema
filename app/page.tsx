@@ -14,7 +14,8 @@ type User = { name: string; role: Role; location?: string };
 type ManagedUser = User & {
   id: string;
   active: boolean;
-  email: string;
+  username: string;
+  email?: string;
   password: string;
   mfaRequired: boolean;
   reportPermissions: string[];
@@ -72,6 +73,14 @@ type OperationalLimits = {
   maxDiscount: number;
   maxExpense: number;
   maxCashDifference: number;
+};
+type PasswordResetRequest = {
+  id: string;
+  userId: string;
+  username: string;
+  site?: string;
+  requestedAt: string;
+  status: "Pendiente" | "Restablecida";
 };
 type StockMovement = {
   id: string;
@@ -209,6 +218,13 @@ const workEmail = (name: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ".")
     .replace(/^\.|\.$/g, "")}@lartisantaller.com`;
+const usernameFromName = (name: string) =>
+  name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.|\.$/g, "");
 const INITIAL_SCHEDULES: EmployeeSchedule[] = SITES.flatMap((site) => [
   {
     id: `${site}-vendedora`,
@@ -485,7 +501,13 @@ const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
     ...profile,
     id: profile.role === "administracion" ? "primary-admin" : `demo-${index}`,
     active: true,
-    email: workEmail(profile.name),
+    username: usernameFromName(profile.name),
+    email:
+      profile.role === "administracion" ||
+      profile.name === "Andrea" ||
+      profile.name === "Betzi"
+        ? workEmail(profile.name)
+        : undefined,
     password: "Lartisan2026!",
     mfaRequired:
       profile.role === "administracion" ||
@@ -769,7 +791,7 @@ export default function Home() {
       INITIAL_MANAGED_USERS,
     ),
     [login, setLogin] = useState(
-      portal === "admin" ? workEmail("Administración") : workEmail("Vendedora Recoleta"),
+      portal === "admin" ? workEmail("Administración") : usernameFromName("Vendedora Recoleta"),
     ),
     [password, setPassword] = useState(""),
     [user, setUser] = useState<ManagedUser | null>(null),
@@ -811,9 +833,11 @@ export default function Home() {
     [newUserName, setNewUserName] = useState(""),
     [newUserRole, setNewUserRole] = useState<Role>("vendedora"),
     [newUserSite, setNewUserSite] = useState("Recoleta"),
+    [newUserUsername, setNewUserUsername] = useState(""),
     [newUserEmail, setNewUserEmail] = useState(""),
     [newUserPassword, setNewUserPassword] = useState(""),
     [newUserMfaRequired, setNewUserMfaRequired] = useState(false),
+    [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([]),
     [priceIncrease, setPriceIncrease] = useState(0),
     [priceRounding, setPriceRounding] = useState(100),
     [priceCategory, setPriceCategory] = useState("Todos"),
@@ -1133,7 +1157,9 @@ export default function Home() {
     diff = counted + (requiresEnvelope ? envelope : 0) - expected;
   const enter = () => {
     const next = managedUsers.find(
-      (profile) => profile.email.toLowerCase() === login.trim().toLowerCase(),
+      (profile) =>
+        profile.username.toLowerCase() === login.trim().toLowerCase() ||
+        profile.email?.toLowerCase() === login.trim().toLowerCase(),
     );
     if (!next || !next.active)
       return setMessage("Este usuario está bloqueado o no existe.");
@@ -1158,8 +1184,14 @@ export default function Home() {
   const createManagedUser = () => {
     const cleanName = newUserName.trim();
     if (!cleanName) return setMessage("Ingresá el nombre del nuevo usuario.");
+    const cleanUsername = newUserUsername.trim().toLowerCase();
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(cleanUsername))
+      return setMessage("Ingresá un usuario válido, por ejemplo nombre.apellido.");
     const cleanEmail = newUserEmail.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail))
+    if (
+      newUserRole !== "vendedora" &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)
+    )
       return setMessage("Ingresá un correo laboral válido.");
     if (newUserPassword.length < 10)
       return setMessage("La contraseña temporal debe tener al menos 10 caracteres.");
@@ -1167,7 +1199,8 @@ export default function Home() {
       managedUsers.some(
         (profile) =>
           profile.name.toLowerCase() === cleanName.toLowerCase() ||
-          profile.email.toLowerCase() === cleanEmail,
+          profile.username.toLowerCase() === cleanUsername ||
+          (cleanEmail && profile.email?.toLowerCase() === cleanEmail),
       )
     )
       return setMessage("Ya existe un usuario con ese nombre.");
@@ -1177,7 +1210,8 @@ export default function Home() {
       role: newUserRole,
       location: newUserRole === "vendedora" ? newUserSite : undefined,
       active: true,
-      email: cleanEmail,
+      username: cleanUsername,
+      email: cleanEmail || undefined,
       password: newUserPassword,
       mfaRequired:
         newUserMfaRequired || newUserRole === "administracion",
@@ -1190,6 +1224,7 @@ export default function Home() {
       `${created.name} · ${created.role}${created.location ? ` · ${created.location}` : ""}`,
     );
     setNewUserName("");
+    setNewUserUsername("");
     setNewUserEmail("");
     setNewUserPassword("");
     setNewUserMfaRequired(false);
@@ -1201,6 +1236,46 @@ export default function Home() {
         profile.id === id ? { ...profile, ...changes } : profile,
       ),
     );
+  };
+  const requestPasswordReset = () => {
+    const profile = managedUsers.find(
+      (item) =>
+        item.username.toLowerCase() === login.trim().toLowerCase() ||
+        item.email?.toLowerCase() === login.trim().toLowerCase(),
+    );
+    if (!profile || !profile.active)
+      return setMessage("No encontramos un usuario habilitado con esos datos.");
+    if (resetRequests.some((request) => request.userId === profile.id && request.status === "Pendiente"))
+      return setMessage("Ya hay una solicitud de recuperación pendiente para este usuario.");
+    setResetRequests((items) => [
+      {
+        id: crypto.randomUUID(),
+        userId: profile.id,
+        username: profile.username,
+        site: profile.location,
+        requestedAt: new Date().toLocaleString("es-AR"),
+        status: "Pendiente",
+      },
+      ...items,
+    ]);
+    setMessage("Solicitud enviada a Administración. Te asignarán una contraseña temporal.");
+  };
+  const resetPassword = (request: PasswordResetRequest) => {
+    const temporaryPassword = `Lart${Math.random().toString(36).slice(2, 8)}!`;
+    setManagedUsers((items) =>
+      items.map((profile) =>
+        profile.id === request.userId
+          ? { ...profile, password: temporaryPassword }
+          : profile,
+      ),
+    );
+    setResetRequests((items) =>
+      items.map((item) =>
+        item.id === request.id ? { ...item, status: "Restablecida" } : item,
+      ),
+    );
+    recordAudit("Contraseña restablecida", `${request.username} · contraseña temporal generada`);
+    setMessage(`Contraseña temporal para ${request.username}: ${temporaryPassword}`);
   };
   const increasedPrice = (productId: number) => {
     const increased = prices[productId] * (1 + priceIncrease / 100);
@@ -1930,13 +2005,15 @@ export default function Home() {
           <h1 className="mt-6 text-2xl font-bold">
             {portal === "admin" ? "Acceso administrativo" : "Ingresar"}
           </h1>
-          <label className="mt-5 block text-sm font-bold">Correo laboral</label>
+          <label className="mt-5 block text-sm font-bold">
+            {portal === "admin" ? "Usuario o correo laboral" : "Usuario"}
+          </label>
           <input
             value={login}
             onChange={(e) => setLogin(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && enter()}
-            type="email"
-            placeholder="nombre.apellido@lartisantaller.com"
+            type="text"
+            placeholder={portal === "admin" ? "administracion o correo laboral" : "nombre.apellido"}
             className="mt-1 w-full rounded-lg border p-3"
           />
           <label className="mt-4 block text-sm font-bold">Contraseña</label>
@@ -1951,6 +2028,12 @@ export default function Home() {
           <p className="mt-3 text-xs text-slate-500">
             Administración, Betzi y Andrea tendrán doble factor al activar la autenticación segura.
           </p>
+          <button
+            onClick={requestPasswordReset}
+            className="mt-4 text-sm font-bold underline"
+          >
+            Olvidé mi contraseña
+          </button>
           <button
             onClick={enter}
             className="mt-5 w-full rounded-lg bg-[#183a67] py-3 font-bold text-white"
@@ -2844,13 +2927,13 @@ export default function Home() {
               <Heading
                 k={`PERSONAL · ${site.toUpperCase()}`}
                 h="Fichaje"
-                p="Registro personal de entrada y salida con PIN."
+                p="Registro personal de entrada y salida con credencial individual."
               />
               <div className="grid max-w-3xl gap-5 md:grid-cols-2">
                 <div className="rounded-2xl border bg-white p-6">
                   <input
                     type="password"
-                    placeholder="PIN personal"
+                    placeholder="Contraseña personal"
                     className="w-full rounded border p-3"
                   />
                   <div className="mt-3 grid grid-cols-2 gap-3">
@@ -4229,7 +4312,7 @@ export default function Home() {
               </p>
               <div className="rounded-2xl border bg-white p-5">
                 <h2 className="font-bold">Crear nuevo usuario</h2>
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.2fr_1.4fr_1fr_1fr_1.2fr_auto] xl:items-end">
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.1fr_1fr_1.35fr_1fr_1fr_1.2fr_auto] xl:items-end">
                   <label className="text-sm font-bold">
                     Nombre
                     <input
@@ -4240,7 +4323,16 @@ export default function Home() {
                     />
                   </label>
                   <label className="text-sm font-bold">
-                    Correo laboral
+                    Usuario
+                    <input
+                      value={newUserUsername}
+                      onChange={(e) => setNewUserUsername(e.target.value.toLowerCase().replace(/\s+/g, "."))}
+                      placeholder="nombre.apellido"
+                      className="mt-1 block w-full rounded border p-2 font-normal"
+                    />
+                  </label>
+                  <label className="text-sm font-bold">
+                    Correo laboral {newUserRole === "vendedora" ? "(opcional)" : ""}
                     <input
                       value={newUserEmail}
                       onChange={(e) => setNewUserEmail(e.target.value)}
@@ -4331,6 +4423,7 @@ export default function Home() {
                       <tr key={profile.id} className="border-t">
                         <td className="p-3">
                           <b>{profile.name}</b>
+                          <span className="mt-1 block text-xs text-slate-500">@{profile.username}</span>
                           {profile.primary && (
                             <span className="ml-2 rounded bg-[#eef2f6] px-2 py-1 text-xs">
                               Cuenta principal
@@ -4339,7 +4432,7 @@ export default function Home() {
                         </td>
                         <td className="p-3">
                           <input
-                            value={profile.email}
+                            value={profile.email || ""}
                             type="email"
                             disabled={profile.primary}
                             onChange={(e) =>
@@ -4455,6 +4548,40 @@ export default function Home() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="mt-6 rounded-xl border bg-white p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <b>Recuperación de contraseñas</b>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Las vendedoras solicitan recuperación desde el acceso; Administración entrega una contraseña temporal por un canal validado.
+                    </p>
+                  </div>
+                  <span className="rounded bg-[#fff5d8] px-3 py-1 text-sm font-bold">
+                    {resetRequests.filter((request) => request.status === "Pendiente").length} pendientes
+                  </span>
+                </div>
+                <div className="mt-4 divide-y">
+                  {resetRequests.length ? resetRequests.map((request) => (
+                    <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+                      <span>
+                        <b>@{request.username}</b> · {request.site || "Administración"} · {request.requestedAt}
+                      </span>
+                      {request.status === "Pendiente" ? (
+                        <button
+                          onClick={() => resetPassword(request)}
+                          className="rounded bg-[#183a67] px-3 py-2 font-bold text-white"
+                        >
+                          Generar contraseña temporal
+                        </button>
+                      ) : (
+                        <span className="font-bold text-green-700">Restablecida</span>
+                      )}
+                    </div>
+                  )) : (
+                    <p className="py-3 text-sm text-slate-500">No hay solicitudes de recuperación.</p>
+                  )}
+                </div>
               </div>
               <div className="mt-6 space-y-4">
                 <div>
