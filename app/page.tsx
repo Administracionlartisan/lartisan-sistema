@@ -1594,7 +1594,14 @@ export default function Home() {
     );
   const baseTabs =
     user.role === "administracion"
-      ? ["Administración", "Usuarios", "Precios", "Integraciones"]
+      ? [
+          "Administración",
+          "Usuarios",
+          "Precios",
+          "Recetas y costos",
+          "Legajos",
+          "Integraciones",
+        ]
       : [
           "Ventas",
           "Caja",
@@ -2993,6 +3000,63 @@ export default function Home() {
               <button className="rounded bg-[#183a67] px-4 py-3 font-bold text-white">
                 Registrar cliente
               </button>
+            </>
+          ) : tab === "Recetas y costos" && user.role === "administracion" ? (
+            <>
+              <Heading
+                k="ADMINISTRACIÓN · PRODUCCIÓN"
+                h="Recetas y costos"
+                p="Módulo reservado para fichas técnicas, rendimiento, insumos y costo por producto."
+              />
+              <div className="max-w-4xl rounded-2xl border border-[#e7c26a] bg-[#fff5d8] p-6">
+                <p className="font-bold">Próximamente</p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  Esta sección quedará preparada para cargar recetas, materias
+                  primas, unidades, merma, rendimiento, costo teórico y margen
+                  de cada producto. Se trabajará al finalizar los módulos
+                  operativos de ventas, caja, stock y reportes.
+                </p>
+              </div>
+              <div className="mt-5 grid max-w-4xl gap-4 md:grid-cols-3">
+                {[
+                  "Fichas técnicas y rendimientos",
+                  "Costo de insumos y variación",
+                  "Margen por producto y categoría",
+                ].map((item) => (
+                  <div key={item} className="rounded-xl border bg-white p-5">
+                    <p className="font-bold">{item}</p>
+                    <p className="mt-2 text-sm text-slate-500">Pendiente de configuración.</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : tab === "Legajos" && user.role === "administracion" ? (
+            <>
+              <Heading
+                k="ADMINISTRACIÓN · PERSONAL"
+                h="Legajos"
+                p="Módulo reservado para la documentación y el historial laboral del equipo."
+              />
+              <div className="max-w-4xl rounded-2xl border border-[#e7c26a] bg-[#fff5d8] p-6">
+                <p className="font-bold">Próximamente</p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  Aquí se concentrarán los datos del empleado, documentación,
+                  altas y bajas, puesto, local asignado, horarios, observaciones
+                  y vencimientos. El acceso quedará limitado a Administración.
+                </p>
+              </div>
+              <div className="mt-5 grid max-w-4xl gap-4 md:grid-cols-3">
+                {[
+                  "Datos y documentación",
+                  "Historial y observaciones",
+                  "Vencimientos y alertas",
+                ].map((item) => (
+                  <div key={item} className="rounded-xl border bg-white p-5">
+                    <p className="font-bold">{item}</p>
+                    <p className="mt-2 text-sm text-slate-500">Pendiente de configuración.</p>
+                  </div>
+                ))}
+              </div>
             </>
           ) : tab === "Integraciones" && user.role === "administracion" ? (
             <>
