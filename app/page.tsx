@@ -14,7 +14,9 @@ type User = { name: string; role: Role; location?: string };
 type ManagedUser = User & {
   id: string;
   active: boolean;
-  pin: string;
+  email: string;
+  password: string;
+  mfaRequired: boolean;
   reportPermissions: string[];
   actionPermissions: string[];
   primary?: boolean;
@@ -186,6 +188,13 @@ const defaultActionPermissions = (role: Role) =>
           "exportar",
         ]
       : ["cobrar", "egresos", "pedidos", "incidencias"];
+const workEmail = (name: string) =>
+  `${name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.|\.$/g, "")}@lartisantaller.com`;
 const INITIAL_SCHEDULES: EmployeeSchedule[] = SITES.flatMap((site) => [
   {
     id: `${site}-vendedora`,
@@ -462,7 +471,12 @@ const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
     ...profile,
     id: profile.role === "administracion" ? "primary-admin" : `demo-${index}`,
     active: true,
-    pin: "1234",
+    email: workEmail(profile.name),
+    password: "Lartisan2026!",
+    mfaRequired:
+      profile.role === "administracion" ||
+      profile.name === "Andrea" ||
+      profile.name === "Betzi",
     reportPermissions:
       profile.role === "administracion"
         ? ADMIN_REPORTS.map((report) => report.id)
@@ -741,9 +755,9 @@ export default function Home() {
       INITIAL_MANAGED_USERS,
     ),
     [login, setLogin] = useState(
-      portal === "admin" ? "Administración" : "Vendedora Recoleta",
+      portal === "admin" ? workEmail("Administración") : workEmail("Vendedora Recoleta"),
     ),
-    [pin, setPin] = useState(""),
+    [password, setPassword] = useState(""),
     [user, setUser] = useState<ManagedUser | null>(null),
     [site, setSite] = useState("Recoleta"),
     [tab, setTab] = useState("Ventas"),
@@ -783,7 +797,9 @@ export default function Home() {
     [newUserName, setNewUserName] = useState(""),
     [newUserRole, setNewUserRole] = useState<Role>("vendedora"),
     [newUserSite, setNewUserSite] = useState("Recoleta"),
-    [newUserPin, setNewUserPin] = useState(""),
+    [newUserEmail, setNewUserEmail] = useState(""),
+    [newUserPassword, setNewUserPassword] = useState(""),
+    [newUserMfaRequired, setNewUserMfaRequired] = useState(false),
     [priceIncrease, setPriceIncrease] = useState(0),
     [priceRounding, setPriceRounding] = useState(100),
     [priceCategory, setPriceCategory] = useState("Todos"),
@@ -1054,11 +1070,13 @@ export default function Home() {
       withdrawals,
     diff = counted + (requiresEnvelope ? envelope : 0) - expected;
   const enter = () => {
-    const next = managedUsers.find((profile) => profile.name === login);
+    const next = managedUsers.find(
+      (profile) => profile.email.toLowerCase() === login.trim().toLowerCase(),
+    );
     if (!next || !next.active)
       return setMessage("Este usuario está bloqueado o no existe.");
-    if (pin !== next.pin)
-      return setMessage("PIN incorrecto. Los perfiles iniciales usan 1234.");
+    if (password !== next.password)
+      return setMessage("Contraseña incorrecta.");
     if (portal === "admin" && next.role !== "administracion")
       return setMessage("Este acceso es exclusivo para Administración.");
     if (portal === "ventas" && next.role === "administracion")
@@ -1078,11 +1096,16 @@ export default function Home() {
   const createManagedUser = () => {
     const cleanName = newUserName.trim();
     if (!cleanName) return setMessage("Ingresá el nombre del nuevo usuario.");
-    if (newUserPin.length < 4)
-      return setMessage("El PIN temporal debe tener al menos 4 dígitos.");
+    const cleanEmail = newUserEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail))
+      return setMessage("Ingresá un correo laboral válido.");
+    if (newUserPassword.length < 10)
+      return setMessage("La contraseña temporal debe tener al menos 10 caracteres.");
     if (
       managedUsers.some(
-        (profile) => profile.name.toLowerCase() === cleanName.toLowerCase(),
+        (profile) =>
+          profile.name.toLowerCase() === cleanName.toLowerCase() ||
+          profile.email.toLowerCase() === cleanEmail,
       )
     )
       return setMessage("Ya existe un usuario con ese nombre.");
@@ -1092,7 +1115,10 @@ export default function Home() {
       role: newUserRole,
       location: newUserRole === "vendedora" ? newUserSite : undefined,
       active: true,
-      pin: newUserPin,
+      email: cleanEmail,
+      password: newUserPassword,
+      mfaRequired:
+        newUserMfaRequired || newUserRole === "administracion",
       reportPermissions: newUserRole === "administracion" ? ["Resumen"] : [],
       actionPermissions: defaultActionPermissions(newUserRole),
     };
@@ -1102,7 +1128,9 @@ export default function Home() {
       `${created.name} · ${created.role}${created.location ? ` · ${created.location}` : ""}`,
     );
     setNewUserName("");
-    setNewUserPin("");
+    setNewUserEmail("");
+    setNewUserPassword("");
+    setNewUserMfaRequired(false);
     setMessage(`Usuario ${created.name} creado y habilitado.`);
   };
   const updateManagedUser = (id: string, changes: Partial<ManagedUser>) => {
@@ -1784,33 +1812,27 @@ export default function Home() {
           <h1 className="mt-6 text-2xl font-bold">
             {portal === "admin" ? "Acceso administrativo" : "Ingresar"}
           </h1>
-          <label className="mt-5 block text-sm font-bold">Perfil</label>
-          <select
+          <label className="mt-5 block text-sm font-bold">Correo laboral</label>
+          <input
             value={login}
             onChange={(e) => setLogin(e.target.value)}
-            className="mt-1 w-full rounded-lg border p-3"
-          >
-            {managedUsers
-              .filter(
-                (profile) =>
-                  profile.active &&
-                  (portal === "admin"
-                    ? profile.role === "administracion"
-                    : profile.role !== "administracion"),
-              )
-              .map((profile) => (
-                <option key={profile.id}>{profile.name}</option>
-              ))}
-          </select>
-          <label className="mt-4 block text-sm font-bold">PIN</label>
-          <input
-            value={pin}
-            onChange={(e) => setPin(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && enter()}
-            type="password"
-            placeholder="1234"
+            type="email"
+            placeholder="nombre.apellido@lartisantaller.com"
             className="mt-1 w-full rounded-lg border p-3"
           />
+          <label className="mt-4 block text-sm font-bold">Contraseña</label>
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && enter()}
+            type="password"
+            placeholder="Tu contraseña"
+            className="mt-1 w-full rounded-lg border p-3"
+          />
+          <p className="mt-3 text-xs text-slate-500">
+            Administración, Betzi y Andrea tendrán doble factor al activar la autenticación segura.
+          </p>
           <button
             onClick={enter}
             className="mt-5 w-full rounded-lg bg-[#183a67] py-3 font-bold text-white"
@@ -3533,7 +3555,7 @@ export default function Home() {
                 después de probar el envío en una copia por local.
               </div>
               <div className="mt-5 overflow-auto rounded-xl border bg-white">
-                <table className="w-full min-w-[850px] text-sm">
+                <table className="w-full min-w-[1050px] text-sm">
                   <thead className="bg-[#eef2f6]">
                     <tr>
                       <th className="p-3 text-left">Local</th>
@@ -3887,19 +3909,27 @@ export default function Home() {
                 p="Creá accesos, asigná cargos y locales, bloqueá usuarios y definí qué reportes puede consultar cada administrativo."
               />
               <p className="mb-5 rounded border border-[#e7c26a] bg-[#fff5d8] p-4 text-sm">
-                Prototipo local: los cambios funcionan durante esta sesión. La
-                persistencia y el almacenamiento seguro de credenciales se
-                activarán con la base de datos.
+                Cada acceso será individual y se identificará por correo laboral. Administración, Betzi y Andrea quedan marcadas con doble factor obligatorio. La verificación real con Authenticator se activará junto con la autenticación segura y la base de datos; no se guardarán contraseñas reales en el navegador.
               </p>
               <div className="rounded-2xl border bg-white p-5">
                 <h2 className="font-bold">Crear nuevo usuario</h2>
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.4fr_1fr_1fr_1fr_auto] xl:items-end">
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.2fr_1.4fr_1fr_1fr_1.2fr_auto] xl:items-end">
                   <label className="text-sm font-bold">
                     Nombre
                     <input
                       value={newUserName}
                       onChange={(e) => setNewUserName(e.target.value)}
                       placeholder="Nombre y apellido"
+                      className="mt-1 block w-full rounded border p-2 font-normal"
+                    />
+                  </label>
+                  <label className="text-sm font-bold">
+                    Correo laboral
+                    <input
+                      value={newUserEmail}
+                      onChange={(e) => setNewUserEmail(e.target.value)}
+                      type="email"
+                      placeholder="nombre@lartisantaller.com"
                       className="mt-1 block w-full rounded border p-2 font-normal"
                     />
                   </label>
@@ -3929,19 +3959,23 @@ export default function Home() {
                     </select>
                   </label>
                   <label className="text-sm font-bold">
-                    PIN temporal
+                    Contraseña temporal
                     <input
-                      value={newUserPin}
-                      onChange={(e) =>
-                        setNewUserPin(
-                          e.target.value.replace(/\D/g, "").slice(0, 8),
-                        )
-                      }
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
                       type="password"
-                      inputMode="numeric"
-                      placeholder="Mínimo 4 dígitos"
+                      placeholder="Mínimo 10 caracteres"
                       className="mt-1 block w-full rounded border p-2 font-normal"
                     />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm font-bold xl:pb-3">
+                    <input
+                      type="checkbox"
+                      checked={newUserMfaRequired || newUserRole === "administracion"}
+                      disabled={newUserRole === "administracion"}
+                      onChange={(e) => setNewUserMfaRequired(e.target.checked)}
+                    />
+                    Requiere doble factor
                   </label>
                   <button
                     onClick={createManagedUser}
@@ -3968,8 +4002,10 @@ export default function Home() {
                   <thead className="bg-[#eef2f6]">
                     <tr>
                       <th className="p-3 text-left">Usuario</th>
+                      <th className="p-3 text-left">Correo laboral</th>
                       <th className="p-3 text-left">Cargo</th>
                       <th className="p-3 text-left">Local asignado</th>
+                      <th className="p-3 text-center">Doble factor</th>
                       <th className="p-3 text-center">Estado</th>
                       <th className="p-3 text-center">Acción</th>
                     </tr>
@@ -3984,6 +4020,19 @@ export default function Home() {
                               Cuenta principal
                             </span>
                           )}
+                        </td>
+                        <td className="p-3">
+                          <input
+                            value={profile.email}
+                            type="email"
+                            disabled={profile.primary}
+                            onChange={(e) =>
+                              updateManagedUser(profile.id, {
+                                email: e.target.value.trim().toLowerCase(),
+                              })
+                            }
+                            className="w-56 rounded border p-2 disabled:bg-slate-100"
+                          />
                         </td>
                         <td className="p-3">
                           <select
@@ -4005,6 +4054,10 @@ export default function Home() {
                                     : [],
                                 actionPermissions:
                                   defaultActionPermissions(role),
+                                mfaRequired:
+                                  role === "administracion"
+                                    ? true
+                                    : profile.mfaRequired,
                               });
                             }}
                             className="rounded border p-2 disabled:bg-slate-100"
@@ -4036,6 +4089,21 @@ export default function Home() {
                               Todos los locales
                             </span>
                           )}
+                        </td>
+                        <td className="p-3 text-center">
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={profile.mfaRequired}
+                              disabled={profile.primary || profile.name === "Andrea" || profile.name === "Betzi"}
+                              onChange={(e) =>
+                                updateManagedUser(profile.id, {
+                                  mfaRequired: e.target.checked,
+                                })
+                              }
+                            />
+                            {profile.mfaRequired ? "Requerido" : "No requerido"}
+                          </label>
                         </td>
                         <td className="p-3 text-center">
                           <span
