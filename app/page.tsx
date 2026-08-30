@@ -107,8 +107,18 @@ type StockRequest = {
   requestedBy: string;
   requestedAt: string;
   notes: string;
-  status: "Pendiente" | "En preparación" | "Despachado" | "Entregado";
-  lines: { productId: number; quantity: number }[];
+  status:
+    | "Pendiente"
+    | "En preparación"
+    | "Despachado"
+    | "Despachado parcial"
+    | "Entregado";
+  lines: {
+    productId: number;
+    quantity: number;
+    preparedQuantity?: number;
+    missingReason?: string;
+  }[];
 };
 type Expense = {
   id: string;
@@ -1117,13 +1127,77 @@ export default function Home() {
       `${request.site} · ${request.id.slice(0, 8)} · ${status}`,
     );
   };
+  const updatePreparedQuantity = (
+    requestId: string,
+    productId: number,
+    preparedQuantity: number,
+  ) => {
+    setStockRequests((items) =>
+      items.map((request) =>
+        request.id === requestId
+          ? {
+              ...request,
+              lines: request.lines.map((line) =>
+                line.productId === productId
+                  ? {
+                      ...line,
+                      preparedQuantity: Math.min(
+                        line.quantity,
+                        Math.max(0, preparedQuantity),
+                      ),
+                    }
+                  : line,
+              ),
+            }
+          : request,
+      ),
+    );
+  };
+  const updateMissingReason = (
+    requestId: string,
+    productId: number,
+    missingReason: string,
+  ) => {
+    setStockRequests((items) =>
+      items.map((request) =>
+        request.id === requestId
+          ? {
+              ...request,
+              lines: request.lines.map((line) =>
+                line.productId === productId ? { ...line, missingReason } : line,
+              ),
+            }
+          : request,
+      ),
+    );
+  };
+  const confirmCentralDispatch = (request: StockRequest) => {
+    if (!managesCentralOrders) return;
+    const hasShortage = request.lines.some(
+      (line) => (line.preparedQuantity ?? line.quantity) < line.quantity,
+    );
+    updateRequestStatus(
+      request,
+      hasShortage ? "Despachado parcial" : "Despachado",
+    );
+    setMessage(
+      hasShortage
+        ? "Despacho parcial confirmado. El local verá los faltantes."
+        : "Despacho completo confirmado.",
+    );
+  };
   const confirmRequestReception = (request: StockRequest) => {
-    if (request.status !== "Despachado") return;
+    if (
+      request.status !== "Despachado" &&
+      request.status !== "Despachado parcial"
+    )
+      return;
     setStock((items) => {
       const nextSiteStock = { ...items[request.site] };
       request.lines.forEach((line) => {
         nextSiteStock[line.productId] =
-          (nextSiteStock[line.productId] || 0) + line.quantity;
+          (nextSiteStock[line.productId] || 0) +
+          (line.preparedQuantity ?? line.quantity);
       });
       return { ...items, [request.site]: nextSiteStock };
     });
@@ -2559,8 +2633,10 @@ export default function Home() {
                             )}{" "}
                             unidades solicitadas
                           </p>
-                          {request.status === "Despachado" &&
-                            can("pedidos") && (
+                            {["Despachado", "Despachado parcial"].includes(
+                              request.status,
+                            ) &&
+                              can("pedidos") && (
                               <button
                                 onClick={() => confirmRequestReception(request)}
                                 className="mt-2 rounded bg-[#183a67] px-3 py-2 font-bold text-white"
@@ -2655,6 +2731,7 @@ export default function Home() {
                           <option>Pendiente</option>
                           <option>En preparación</option>
                           <option>Despachado</option>
+                          <option>Despachado parcial</option>
                           <option>Entregado</option>
                         </select>
                       </label>
@@ -2668,21 +2745,60 @@ export default function Home() {
                             (item) => item.id === line.productId,
                           );
                           return (
-                            <div
-                              key={line.productId}
-                              className="flex justify-between gap-3 py-2 text-sm"
-                            >
+                            <div key={line.productId} className="border-b py-3 text-sm last:border-0">
                               <span>
                                 <b>{product?.name}</b>
                                 <span className="block text-xs text-slate-500">
                                   {product?.detail}
                                 </span>
                               </span>
-                              <b>{line.quantity}</b>
+                              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_96px] sm:items-center">
+                                <label className="text-xs font-bold">
+                                  Solicitado: {line.quantity} · Enviado
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={line.quantity}
+                                    value={line.preparedQuantity ?? line.quantity}
+                                    onChange={(event) =>
+                                      updatePreparedQuantity(
+                                        selectedRequest.id,
+                                        line.productId,
+                                        Number(event.target.value) || 0,
+                                      )
+                                    }
+                                    className="mt-1 w-full rounded border p-2 text-center font-bold"
+                                  />
+                                </label>
+                                <p className="rounded bg-[#fff5d8] p-2 text-center text-xs font-bold">
+                                  Faltan {line.quantity - (line.preparedQuantity ?? line.quantity)}
+                                </p>
+                              </div>
+                              {(line.preparedQuantity ?? line.quantity) < line.quantity && (
+                                <input
+                                  value={line.missingReason || ""}
+                                  onChange={(event) =>
+                                    updateMissingReason(
+                                      selectedRequest.id,
+                                      line.productId,
+                                      event.target.value,
+                                    )
+                                  }
+                                  placeholder="Motivo del faltante (opcional)"
+                                  className="mt-2 w-full rounded border p-2 text-xs"
+                                />
+                              )}
                             </div>
                           );
                         })}
                       </div>
+                      <button
+                        onClick={() => confirmCentralDispatch(selectedRequest)}
+                        disabled={selectedRequest.status === "Entregado"}
+                        className="no-print mt-4 w-full rounded bg-[#ec3a35] px-3 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                      >
+                        Confirmar despacho
+                      </button>
                       <div className="no-print mt-4 grid gap-2 sm:grid-cols-2">
                         <button
                           onClick={() => exportRequestExcel(selectedRequest)}
