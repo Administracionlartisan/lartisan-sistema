@@ -827,6 +827,16 @@ export default function Home() {
       ]),
     ),
   );
+  const [minimumStock, setMinimumStock] = useState<
+    Record<string, Record<number, number>>
+  >(() =>
+    Object.fromEntries(
+      SITES.map((s) => [
+        s,
+        Object.fromEntries(PRODUCTS.map((product) => [product.id, 0])),
+      ]),
+    ),
+  );
   const [realStock, setRealStock] = useState<
     Record<string, Record<number, string>>
   >(() =>
@@ -887,6 +897,19 @@ export default function Home() {
     productId: product.id,
     quantity: requestQuantities[product.id],
   }));
+  const lowStockProducts = PRODUCTS.map((product) => ({
+    product,
+    current: stock[site][product.id] || 0,
+    minimum: minimumStock[site][product.id] || 0,
+  })).filter(({ current, minimum }) => minimum > 0 && current <= minimum);
+  const suggestedOrderLines = lowStockProducts
+    .map(({ product, current, minimum }) => ({
+      product,
+      quantity: Math.max(minimum - current, 0),
+      current,
+      minimum,
+    }))
+    .filter((line) => line.quantity > 0);
   const siteRequests = stockRequests.filter((request) => request.site === site);
   const selectedRequest = stockRequests.find(
     (request) => request.id === selectedRequestId,
@@ -2234,6 +2257,18 @@ export default function Home() {
                 h="Inventario"
                 p="La venta descuenta una unidad de la presentación vendida."
               />
+              {lowStockProducts.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[#f0bd4e] bg-[#fff5d8] p-4">
+                  <b>Alerta de stock bajo</b>
+                  <p className="mt-1 text-sm text-slate-700">
+                    {lowStockProducts.length} producto{lowStockProducts.length === 1 ? "" : "s"} llegó o quedó por debajo del mínimo configurado.
+                    {!managesCentralOrders && " Podés usar el pedido sugerido en Solicitud de mercadería."}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-[#183a67]">
+                    {lowStockProducts.map(({ product }) => product.name).join(" · ")}
+                  </p>
+                </div>
+              )}
               {canAdjustStock && (
                 <button
                   onClick={() =>
@@ -2269,7 +2304,29 @@ export default function Home() {
                         </td>
                         <td className="p-3">{p.detail}</td>
                         <td className="p-3 text-center">{stock[site][p.id]}</td>
-                        <td className="p-3 text-center">8</td>
+                        <td className="p-3 text-center">
+                          {canAdjustStock ? (
+                            <input
+                              type="number"
+                              min="0"
+                              value={minimumStock[site][p.id] || ""}
+                              placeholder="0"
+                              onChange={(e) =>
+                                setMinimumStock((current) => ({
+                                  ...current,
+                                  [site]: {
+                                    ...current[site],
+                                    [p.id]: Math.max(0, Number(e.target.value) || 0),
+                                  },
+                                }))
+                              }
+                              aria-label={`Stock mínimo de ${p.name}`}
+                              className="w-20 rounded border p-1 text-center"
+                            />
+                          ) : (
+                            <span>{minimumStock[site][p.id] || "—"}</span>
+                          )}
+                        </td>
                         <td className="p-3 text-center">
                           {canCountRealStock ? (
                             <input
@@ -2304,7 +2361,7 @@ export default function Home() {
               </div>
               <p className="mt-3 text-sm text-slate-500">
                 El conteo real se carga únicamente con el perfil de Andrea. Los
-                ajustes de stock quedarán reservados a Andrea y Betzi.
+                mínimos de reposición y ajustes de stock quedan reservados a Andrea y Betzi.
               </p>
               {canCountRealStock && (
                 <div className="mt-5 rounded-2xl border bg-white p-5">
@@ -2531,6 +2588,47 @@ export default function Home() {
                       unidades
                     </span>
                   </div>
+                  {lowStockProducts.length > 0 && (
+                    <div className="mb-4 rounded-xl border border-[#f0bd4e] bg-[#fff5d8] p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <b>Pedido sugerido por stock mínimo</b>
+                          <p className="mt-1 text-sm text-slate-700">
+                            El sistema propone reponer hasta el mínimo configurado. Los productos que ya están en mínimo requieren revisión, pero no agregan unidades automáticamente.
+                          </p>
+                        </div>
+                        {suggestedOrderLines.length > 0 && (
+                          <button
+                            onClick={() =>
+                              setRequestQuantities((items) => ({
+                                ...items,
+                                ...Object.fromEntries(
+                                  suggestedOrderLines.map((line) => [
+                                    line.product.id,
+                                    Math.max(items[line.product.id] || 0, line.quantity),
+                                  ]),
+                                ),
+                              }))
+                            }
+                            className="rounded bg-[#183a67] px-4 py-2 font-bold text-white"
+                          >
+                            Cargar pedido sugerido
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                        {lowStockProducts.map(({ product, current, minimum }) => {
+                          const suggestion = Math.max(minimum - current, 0);
+                          return (
+                            <span key={product.id} className="rounded-full bg-white px-3 py-1 font-semibold">
+                              {product.name}: {current}/{minimum}
+                              {suggestion > 0 ? ` · sugerido ${suggestion}` : " · revisar"}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {PRODUCTS.map((product) => {
                       const quantity = requestQuantities[product.id] || 0;
