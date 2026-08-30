@@ -130,6 +130,18 @@ type Expense = {
   createdAt: string;
   createdBy: string;
 };
+type ReturnTransaction = {
+  id: string;
+  saleId: string;
+  site: string;
+  kind: "Devolución" | "Cambio";
+  amount: number;
+  refundMethod: string;
+  reason: string;
+  restock: boolean;
+  createdAt: string;
+  createdBy: string;
+};
 type Incident = {
   id: string;
   site: string;
@@ -390,6 +402,11 @@ const ADMIN_REPORTS = [
     title: "Incidencias",
     detail:
       "Faltantes, problemas operativos, devoluciones y reclamos por local.",
+  },
+  {
+    id: "Alertas",
+    title: "Alertas operativas",
+    detail: "Caja, stock, pedidos, devoluciones, egresos y novedades que requieren acción.",
   },
 ];
 const SOLD_COLLECTED_REFERENCE = [
@@ -797,6 +814,12 @@ export default function Home() {
     null,
   );
   const [expensesLog, setExpensesLog] = useState<Expense[]>([]);
+  const [returnsLog, setReturnsLog] = useState<ReturnTransaction[]>([]);
+  const [returnSaleId, setReturnSaleId] = useState("");
+  const [returnKind, setReturnKind] = useState<ReturnTransaction["kind"]>("Devolución");
+  const [returnReason, setReturnReason] = useState("");
+  const [returnRefundMethod, setReturnRefundMethod] = useState("Efectivo");
+  const [returnRestock, setReturnRestock] = useState(true);
   const [expenseCategory, setExpenseCategory] = useState("Insumos");
   const [expenseAmount, setExpenseAmount] = useState(0);
   const [expenseDetail, setExpenseDetail] = useState("");
@@ -911,6 +934,26 @@ export default function Home() {
     }))
     .filter((line) => line.quantity > 0);
   const siteRequests = stockRequests.filter((request) => request.site === site);
+  const siteReturns = returnsLog.filter((transaction) => transaction.site === site);
+  const totalExpenses = expensesLog.reduce(
+    (total, expense) => total + expense.amount,
+    0,
+  );
+  const totalReturns = returnsLog.reduce(
+    (total, transaction) => total + transaction.amount,
+    0,
+  );
+  const lowStockAlerts = SITES.flatMap((local) =>
+    PRODUCTS.filter((product) => {
+      const minimum = minimumStock[local][product.id] || 0;
+      return minimum > 0 && (stock[local][product.id] || 0) <= minimum;
+    }).map((product) => ({
+      site: local,
+      product,
+      current: stock[local][product.id] || 0,
+      minimum: minimumStock[local][product.id] || 0,
+    })),
+  );
   const selectedRequest = stockRequests.find(
     (request) => request.id === selectedRequestId,
   );
@@ -937,6 +980,28 @@ export default function Home() {
       .map((request) => ({
         label: `Pedido pendiente · ${request.site}`,
         detail: "Central debe iniciar la preparación.",
+        tone: "bg-[#fff5d8]",
+      })),
+    ...stockRequests
+      .filter(
+        (request) =>
+          request.status === "Despachado" || request.status === "Despachado parcial",
+      )
+      .map((request) => ({
+        label: `Recepción pendiente · ${request.site}`,
+        detail: "El local debe confirmar la mercadería recibida para actualizar stock.",
+        tone: "bg-[#e8f1fb]",
+      })),
+    ...lowStockAlerts.map((alert) => ({
+      label: `Stock crítico · ${alert.site}`,
+      detail: `${alert.product.name}: ${alert.current} en stock / mínimo ${alert.minimum}.`,
+      tone: "bg-[#fff1ec]",
+    })),
+    ...expensesLog
+      .filter((expense) => !expense.receiptName)
+      .map((expense) => ({
+        label: `Egreso sin comprobante · ${expense.site}`,
+        detail: `${expense.category} · ${money.format(expense.amount)}.`,
         tone: "bg-[#fff5d8]",
       })),
     ...stockAdjustments
@@ -1229,11 +1294,27 @@ export default function Home() {
         item.id === request.id ? { ...item, status: "Entregado" } : item,
       ),
     );
+    setStockMovements((items) => [
+      ...request.lines
+        .filter((line) => (line.preparedQuantity ?? line.quantity) > 0)
+        .map((line) => ({
+          id: crypto.randomUUID(),
+          site: request.site,
+          productId: line.productId,
+          kind: "Ingreso" as const,
+          quantity: line.preparedQuantity ?? line.quantity,
+          remito: `Pedido ${request.id.slice(0, 8)}`,
+          detail: "Recepción confirmada por el local",
+          at: new Date().toLocaleString("es-AR"),
+          createdBy: user.name,
+        })),
+      ...items,
+    ]);
     recordAudit(
       "Mercadería recibida",
       `${request.site} · ${request.id.slice(0, 8)} · stock actualizado`,
     );
-    setMessage("Recepción confirmada: el stock del local fue actualizado.");
+    setMessage("Recepción confirmada: se actualizó el stock y quedó registrado el ingreso de mercadería.");
   };
   const submitExpense = () => {
     if (expenseAmount <= 0 || !expenseDetail.trim())
@@ -1574,6 +1655,50 @@ export default function Home() {
       "Venta anulada: se restituyó el stock y se descontó del cierre.",
     );
   };
+  const registerReturn = () => {
+    if (!can("anular"))
+      return setMessage("Tu usuario no tiene permiso para registrar devoluciones o cambios.");
+    const sale = sales.find((item) => item.id === returnSaleId && item.site === site);
+    if (!sale) return setMessage("Elegí una venta activa del local.");
+    if (!returnReason.trim()) return setMessage("Indicá el motivo de la devolución o cambio.");
+    if (returnsLog.some((transaction) => transaction.saleId === sale.id))
+      return setMessage("Esta venta ya tiene una devolución o cambio registrado.");
+    const transaction: ReturnTransaction = {
+      id: crypto.randomUUID(),
+      saleId: sale.id,
+      site,
+      kind: returnKind,
+      amount: sale.net,
+      refundMethod: returnRefundMethod,
+      reason: returnReason.trim(),
+      restock: returnRestock,
+      createdAt: new Date().toLocaleString("es-AR"),
+      createdBy: user.name,
+    };
+    setReturnsLog((items) => [transaction, ...items]);
+    if (returnRestock) {
+      setStock((items) => {
+        const next = { ...items[site] };
+        sale.items.forEach((product) => {
+          next[product.id] = (next[product.id] || 0) + 1;
+        });
+        return { ...items, [site]: next };
+      });
+    }
+    if (returnKind === "Devolución") {
+      setPayments((items) => items.filter((item) => item.saleId !== sale.id));
+    }
+    recordAudit(
+      `${returnKind} registrada`,
+      `${sale.id.slice(0, 8)} · ${money.format(sale.net)} · ${returnRefundMethod}`,
+    );
+    setReturnSaleId("");
+    setReturnReason("");
+    setReturnRestock(true);
+    setMessage(
+      `${returnKind} registrada${returnRestock ? "; se repuso el stock" : ""}.`,
+    );
+  };
   const changeSalePayment = (sale: Sale, method: string) => {
     setSales((items) =>
       items.map((item) => (item.id === sale.id ? { ...item, method } : item)),
@@ -1715,6 +1840,7 @@ export default function Home() {
           "Caja",
           "Stock",
           ...(managesCentralOrders ? [] : ["Pedido"]),
+          "Devoluciones",
           "Egresos",
           "Incidencias",
           "Fichaje",
@@ -3010,6 +3136,107 @@ export default function Home() {
                       )}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            </>
+          ) : tab === "Devoluciones" ? (
+            <>
+              <Heading
+                k={`LOCAL · ${site.toUpperCase()}`}
+                h="Devoluciones y cambios"
+                p="Registrá la operación, su motivo y el reintegro. La venta original queda auditada."
+              />
+              <div className="grid max-w-5xl gap-6 lg:grid-cols-[.9fr_1.1fr]">
+                <div className="rounded-2xl border bg-white p-5">
+                  <label className="block text-sm font-bold">
+                    Venta original
+                    <select
+                      value={returnSaleId}
+                      onChange={(event) => setReturnSaleId(event.target.value)}
+                      className="mt-1 w-full rounded border p-2 font-normal"
+                    >
+                      <option value="">Seleccionar venta</option>
+                      {sales
+                        .filter(
+                          (sale) => sale.site === site && sale.status === "activa" && !returnsLog.some((transaction) => transaction.saleId === sale.id),
+                        )
+                        .map((sale) => (
+                          <option key={sale.id} value={sale.id}>
+                            {sale.createdAt} · {sale.customer} · {money.format(sale.net)}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="text-sm font-bold">
+                      Operación
+                      <select
+                        value={returnKind}
+                        onChange={(event) => setReturnKind(event.target.value as ReturnTransaction["kind"])}
+                        className="mt-1 w-full rounded border p-2 font-normal"
+                      >
+                        <option>Devolución</option>
+                        <option>Cambio</option>
+                      </select>
+                    </label>
+                    <label className="text-sm font-bold">
+                      Medio de reintegro
+                      <select
+                        value={returnRefundMethod}
+                        onChange={(event) => setReturnRefundMethod(event.target.value)}
+                        className="mt-1 w-full rounded border p-2 font-normal"
+                      >
+                        {methods.map((method) => <option key={method}>{method}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="mt-3 block text-sm font-bold">
+                    Motivo
+                    <textarea
+                      value={returnReason}
+                      onChange={(event) => setReturnReason(event.target.value)}
+                      placeholder="Ej.: producto dañado, cliente cambió de elección"
+                      className="mt-1 min-h-24 w-full rounded border p-2 font-normal"
+                    />
+                  </label>
+                  <label className="mt-3 flex items-center gap-2 text-sm font-bold">
+                    <input
+                      type="checkbox"
+                      checked={returnRestock}
+                      onChange={(event) => setReturnRestock(event.target.checked)}
+                    />
+                    Reingresar la mercadería al stock
+                  </label>
+                  <button
+                    onClick={registerReturn}
+                    disabled={!can("anular")}
+                    className="mt-4 w-full rounded bg-[#ec3a35] py-3 font-bold text-white disabled:opacity-40"
+                  >
+                    Registrar operación
+                  </button>
+                </div>
+                <div className="rounded-2xl border bg-white p-5">
+                  <b>Historial de devoluciones y cambios</b>
+                  <div className="mt-3 divide-y">
+                    {siteReturns.length ? (
+                      siteReturns.map((transaction) => (
+                        <div key={transaction.id} className="py-3 text-sm">
+                          <div className="flex justify-between gap-3">
+                            <b>{transaction.kind}</b>
+                            <b>{money.format(transaction.amount)}</b>
+                          </div>
+                          <p className="mt-1">{transaction.reason}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {transaction.createdAt} · {transaction.createdBy} · {transaction.refundMethod} · {transaction.restock ? "Stock repuesto" : "Sin reingreso a stock"}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="py-4 text-sm text-slate-500">
+                        No hay devoluciones ni cambios registrados.
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             </>
@@ -4357,6 +4584,36 @@ export default function Home() {
                       </div>
                     </div>
                   )}
+                  {adminReport === "Alertas" && (
+                    <div className="mt-5">
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <div className="rounded bg-[#fff1ec] p-4">
+                          <p className="text-sm">Alertas activas</p>
+                          <b className="mt-2 block text-2xl">{operationalAlerts.length}</b>
+                        </div>
+                        <div className="rounded bg-[#fff5d8] p-4">
+                          <p className="text-sm">Stock crítico</p>
+                          <b className="mt-2 block text-2xl">{lowStockAlerts.length}</b>
+                        </div>
+                        <div className="rounded bg-[#e8f1fb] p-4">
+                          <p className="text-sm">Recepciones pendientes</p>
+                          <b className="mt-2 block text-2xl">
+                            {stockRequests.filter((request) => request.status === "Despachado" || request.status === "Despachado parcial").length}
+                          </b>
+                        </div>
+                      </div>
+                      <div className="mt-4 space-y-2">
+                        {operationalAlerts.length ? operationalAlerts.map((alert, index) => (
+                          <div key={`${alert.label}-${index}`} className={`rounded border p-4 ${alert.tone}`}>
+                            <b>{alert.label}</b>
+                            <p className="mt-1 text-sm">{alert.detail}</p>
+                          </div>
+                        )) : (
+                          <p className="rounded bg-[#eef5ef] p-4 text-sm">No hay alertas operativas activas.</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   {adminReport === "Ventas" && (
                     <div className="mt-5 grid gap-4 md:grid-cols-3">
                       <div className="rounded bg-[#eef2f6] p-4">
@@ -4816,16 +5073,24 @@ export default function Home() {
                   )}
                   {adminReport === "Egresos" && (
                     <div className="mt-5">
-                      <div className="grid gap-4 sm:grid-cols-3">
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded bg-[#183a67] p-4 text-white">
+                          <p className="text-sm">Resultado operativo</p>
+                          <b className="mt-2 block text-2xl">
+                            {money.format(adminTotals.net - totalExpenses - totalReturns)}
+                          </b>
+                          <p className="mt-1 text-xs">Venta neta - egresos - devoluciones</p>
+                        </div>
                         <div className="rounded bg-[#fff5d8] p-4">
                           <p className="text-sm">Total egresos</p>
                           <b className="mt-2 block text-2xl">
-                            {money.format(
-                              expensesLog.reduce(
-                                (total, expense) => total + expense.amount,
-                                0,
-                              ),
-                            )}
+                            {money.format(totalExpenses)}
+                          </b>
+                        </div>
+                        <div className="rounded bg-[#fff1ec] p-4">
+                          <p className="text-sm">Devoluciones</p>
+                          <b className="mt-2 block text-2xl">
+                            {money.format(totalReturns)}
                           </b>
                         </div>
                         <div className="rounded bg-[#eef2f6] p-4">
