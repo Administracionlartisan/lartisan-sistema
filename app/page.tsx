@@ -1145,7 +1145,8 @@ export default function Home() {
       (totals.find((x) => x.method === "Efectivo")?.amount || 0) -
       expenses -
       withdrawals,
-    diff = counted + (requiresEnvelope ? envelope : 0) - expected;
+    cashRemaining = counted - (requiresEnvelope ? envelope : 0),
+    cashVariance = counted - expected;
   const enter = () => {
     const next = managedUsers.find(
       (profile) =>
@@ -1899,7 +1900,9 @@ export default function Home() {
       return setMessage(
         `No se puede cerrar la caja: hay ${openOrders.length} comanda${openOrders.length === 1 ? "" : "s"} abierta${openOrders.length === 1 ? "" : "s"} en ${site}. Cobralas o recuperalas desde Ventas.`,
       );
-    if (Math.abs(diff) > siteLimits.maxCashDifference)
+    if (requiresEnvelope && envelope > counted)
+      return setMessage("El monto del sobre no puede ser mayor al efectivo físico contado.");
+    if (Math.abs(cashVariance) > siteLimits.maxCashDifference)
       return setMessage(
         `No se puede cerrar: la diferencia supera el máximo autorizado de ${money.format(siteLimits.maxCashDifference)}.`,
       );
@@ -2612,15 +2615,20 @@ export default function Home() {
                         className="mt-1 w-full rounded border p-2"
                       />
                       <p className="mt-1 text-xs text-slate-500">
-                        El sobre se suma al efectivo contado para conciliar la
-                        caja.
+                        El sobre se descuenta del efectivo físico contado: así
+                        se muestra cuánto queda realmente en caja.
                       </p>
                     </>
                   )}
                   <p
-                    className={`mt-3 rounded p-3 font-bold ${diff === 0 ? "bg-[#eef5ef]" : "bg-[#fff1ec]"}`}
+                    className="mt-3 rounded bg-[#eef2f6] p-3 font-bold"
                   >
-                    Diferencia: {money.format(diff)}
+                    Efectivo que queda en caja: {money.format(cashRemaining)}
+                  </p>
+                  <p
+                    className={`mt-2 rounded p-3 text-sm font-bold ${cashVariance === 0 ? "bg-[#eef5ef]" : "bg-[#fff1ec]"}`}
+                  >
+                    Diferencia contra efectivo esperado: {money.format(cashVariance)}
                   </p>
                   {savedOrders.filter((order) => order.site === site).length >
                     0 && (
