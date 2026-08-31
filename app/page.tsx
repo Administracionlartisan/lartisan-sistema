@@ -2468,7 +2468,9 @@ export default function Home() {
                 onClick={() => setTab(t)}
                 className={`rounded p-2 text-left text-sm font-bold ${tab === t ? "bg-[#183a67] text-white" : "hover:bg-[#eef2f6]"}`}
               >
-                {t}
+                {t === "Recetas y costos" || t === "Legajos"
+                  ? `${t} (Próximamente)`
+                  : t}
               </button>
             ))}
           </nav>
