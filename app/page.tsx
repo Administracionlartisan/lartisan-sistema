@@ -10,7 +10,12 @@ type Product = {
   price: number;
 };
 type Role = "vendedora" | "supervisora" | "administracion";
-type User = { name: string; role: Role; location?: string };
+type User = {
+  name: string;
+  role: Role;
+  location?: string;
+  accessAllLocations?: boolean;
+};
 type ManagedUser = User & {
   id: string;
   active: boolean;
@@ -467,32 +472,15 @@ const SOLD_COLLECTED_REFERENCE = [
   ["agosto 2026", "Cobrado", 4551142, 4594701, 5526605],
 ] as const;
 const USERS: Record<string, User> = {
-  "Vendedora Recoleta": {
-    name: "Vendedora Recoleta",
-    role: "vendedora",
-    location: "Recoleta",
-  },
-  "Vendedora Villa Mitre": {
-    name: "Vendedora Villa Mitre",
-    role: "vendedora",
-    location: "Villa Mitre",
-  },
-  "Vendedora Congreso": {
-    name: "Vendedora Congreso",
-    role: "vendedora",
-    location: "Congreso",
-  },
-  "Vendedora Maure": {
-    name: "Vendedora Maure",
-    role: "vendedora",
-    location: "Maure",
-  },
-  "Vendedora Novo Pacheco": {
-    name: "Vendedora Novo Pacheco",
-    role: "vendedora",
-    location: "Novo Pacheco",
-  },
-  Andrea: { name: "Andrea", role: "supervisora" },
+  "Stefany García": { name: "Stefany García", role: "vendedora", location: "Congreso" },
+  "Jessica Vivas": { name: "Jessica Vivas", role: "vendedora", accessAllLocations: true },
+  "Anni Lai Muñoz": { name: "Anni Lai Muñoz", role: "vendedora", location: "Maure" },
+  "Gabriela Florez": { name: "Gabriela Florez", role: "vendedora", location: "Maure" },
+  "Ezequiel Bonasegla": { name: "Ezequiel Bonasegla", role: "vendedora", location: "Recoleta" },
+  "Dante Mandelbaum": { name: "Dante Mandelbaum", role: "vendedora", location: "Recoleta" },
+  "Yamila Palavecino": { name: "Yamila Palavecino", role: "vendedora", location: "Villa Mitre" },
+  "Valentina Parra": { name: "Valentina Parra", role: "vendedora", location: "Villa Mitre" },
+  "Andrea Fernández": { name: "Andrea Fernández", role: "supervisora" },
   Betzi: { name: "Betzi", role: "supervisora" },
   Administración: { name: "Administración", role: "administracion" },
 };
@@ -504,14 +492,14 @@ const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
     username: usernameFromName(profile.name),
     email:
       profile.role === "administracion" ||
-      profile.name === "Andrea" ||
+      profile.name.startsWith("Andrea") ||
       profile.name === "Betzi"
         ? workEmail(profile.name)
         : undefined,
     password: "Lartisan2026!",
     mfaRequired:
       profile.role === "administracion" ||
-      profile.name === "Andrea" ||
+      profile.name.startsWith("Andrea") ||
       profile.name === "Betzi",
     reportPermissions:
       profile.role === "administracion"
@@ -791,7 +779,7 @@ export default function Home() {
       INITIAL_MANAGED_USERS,
     ),
     [login, setLogin] = useState(
-      portal === "admin" ? workEmail("Administración") : usernameFromName("Vendedora Recoleta"),
+      portal === "admin" ? workEmail("Administración") : usernameFromName("Stefany García"),
     ),
     [password, setPassword] = useState(""),
     [user, setUser] = useState<ManagedUser | null>(null),
@@ -982,11 +970,13 @@ export default function Home() {
   const cashIsOpen = Boolean(cashOpenBySite[site]);
   const siteLimits = limitsBySite[site];
   const activeShift = activeShiftBySite[site];
-  const canAdjustStock = user?.name === "Andrea" || user?.name === "Betzi";
-  const canCountRealStock = user?.name === "Andrea";
-  const managesCentralOrders = ["Vendedora Villa Mitre", "Andrea", "Betzi"].includes(
-    user?.name || "",
-  );
+  const isAndrea = user?.name.startsWith("Andrea") || false;
+  const canAdjustStock = isAndrea || user?.name === "Betzi";
+  const canCountRealStock = isAndrea;
+  const managesCentralOrders =
+    user?.name === "Betzi" ||
+    isAndrea ||
+    (user?.role === "vendedora" && user.location === "Villa Mitre");
   const can = (permission: string) =>
     Boolean(user?.actionPermissions.includes(permission));
   const currentRequestLines = PRODUCTS.filter(
@@ -2105,7 +2095,7 @@ export default function Home() {
               <label className="text-xs font-bold text-slate-500">
                 SUCURSAL ACTIVA
               </label>
-              {user.role === "vendedora" ? (
+              {user.role === "vendedora" && !user.accessAllLocations ? (
                 <p className="mt-2 rounded bg-[#eef2f6] p-2 font-bold">
                   {site}
                 </p>
@@ -4480,19 +4470,23 @@ export default function Home() {
                         </td>
                         <td className="p-3">
                           {profile.role === "vendedora" ? (
-                            <select
-                              value={profile.location || "Recoleta"}
-                              onChange={(e) =>
-                                updateManagedUser(profile.id, {
-                                  location: e.target.value,
-                                })
-                              }
-                              className="rounded border p-2"
-                            >
-                              {SITES.map((local) => (
-                                <option key={local}>{local}</option>
-                              ))}
-                            </select>
+                            profile.accessAllLocations ? (
+                              <span className="font-bold text-[#183a67]">Todos los locales</span>
+                            ) : (
+                              <select
+                                value={profile.location || "Recoleta"}
+                                onChange={(e) =>
+                                  updateManagedUser(profile.id, {
+                                    location: e.target.value,
+                                  })
+                                }
+                                className="rounded border p-2"
+                              >
+                                {SITES.map((local) => (
+                                  <option key={local}>{local}</option>
+                                ))}
+                              </select>
+                            )
                           ) : (
                             <span className="text-slate-500">
                               Todos los locales
@@ -4504,7 +4498,7 @@ export default function Home() {
                             <input
                               type="checkbox"
                               checked={profile.mfaRequired}
-                              disabled={profile.primary || profile.name === "Andrea" || profile.name === "Betzi"}
+                              disabled={profile.primary || profile.name.startsWith("Andrea") || profile.name === "Betzi"}
                               onChange={(e) =>
                                 updateManagedUser(profile.id, {
                                   mfaRequired: e.target.checked,
