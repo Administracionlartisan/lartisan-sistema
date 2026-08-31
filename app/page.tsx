@@ -41,6 +41,7 @@ type Sale = {
     "Factura B" | "Factura B electrónica" | "Factura A" | "Remito interno";
   customer: string;
   invitation: boolean;
+  invitedProductIds?: number[];
   channel: "Mostrador" | "Online";
   status: "activa" | "anulada";
 };
@@ -54,6 +55,7 @@ type SavedOrder = {
   payment: string;
   invoiceType: Sale["invoiceType"];
   invitation: boolean;
+  invitedProductIds?: number[];
   channel: "Mostrador" | "Online";
 };
 type CashAdjustment = {
@@ -793,7 +795,7 @@ export default function Home() {
     ),
     [invoiceType, setInvoiceType] = useState<Sale["invoiceType"]>("Factura B"),
     [customer, setCustomer] = useState("Consumidor final"),
-    [invitation, setInvitation] = useState(false),
+    [invitedProductIds, setInvitedProductIds] = useState<number[]>([]),
     [message, setMessage] = useState(""),
     [fund, setFund] = useState(0),
     [expenses, setExpenses] = useState(0),
@@ -942,9 +944,7 @@ export default function Home() {
     [cat, setCat] = useState("Todos");
   const visible =
     cat === "Todos" ? PRODUCTS : PRODUCTS.filter((p) => p.category === cat);
-  const total = cart.reduce((a, p) => a + p.price, 0),
-    discountedNet = total - Math.round((total * discount) / 100),
-    net = invitation ? 0 : discountedNet;
+  const total = cart.reduce((a, p) => a + p.price, 0);
   const isOnlineChannel = saleChannel === "Online";
   const selectedPrice = (product: Product) =>
     isOnlineChannel ? onlinePrices[product.id] : prices[product.id];
@@ -960,6 +960,13 @@ export default function Home() {
       ),
     [cart],
   );
+  const invitation = invitedProductIds.length > 0;
+  const invitationTotal = lines
+    .filter(({ p }) => invitedProductIds.includes(p.id))
+    .reduce((sum, { p, q }) => sum + p.price * q, 0);
+  const discountableTotal = total - invitationTotal;
+  const discountAmount = Math.round((discountableTotal * discount) / 100);
+  const net = discountableTotal - discountAmount;
   const totals = methods.map((method) => ({
     method,
     amount: payments
@@ -1612,12 +1619,13 @@ export default function Home() {
       payment,
       invoiceType,
       invitation,
+      invitedProductIds,
       channel: saleChannel,
     };
     setSavedOrders((items) => [order, ...items]);
     setCart([]);
     setDiscount(0);
-    setInvitation(false);
+    setInvitedProductIds([]);
     setMessage("Comanda guardada. Podés continuar otra venta.");
   };
   const loadOrder = (order: SavedOrder) => {
@@ -1626,7 +1634,7 @@ export default function Home() {
     setDiscount(order.discount);
     setPayment(order.payment);
     setInvoiceType(order.invoiceType);
-    setInvitation(order.invitation);
+    setInvitedProductIds(order.invitedProductIds ?? []);
     setSaleChannel(order.channel);
     setSavedOrders((items) => items.filter((item) => item.id !== order.id));
     setMessage("Comanda recuperada para continuar el cobro.");
@@ -1757,7 +1765,7 @@ export default function Home() {
     if (!cashIsOpen)
       return setMessage("Primero tenés que abrir la caja de este local.");
     if (!cart.length) return setMessage("Agregá productos a la venta.");
-    if (!invitation && discount > siteLimits.maxDiscount)
+    if (discount > siteLimits.maxDiscount)
       return setMessage(
         `El descuento supera el máximo autorizado de ${siteLimits.maxDiscount}% para ${site}.`,
       );
@@ -1774,6 +1782,7 @@ export default function Home() {
       invoiceType,
       customer,
       invitation,
+      invitedProductIds,
       channel: saleChannel,
       status: "activa",
     };
@@ -1797,7 +1806,7 @@ export default function Home() {
     );
     setCart([]);
     setDiscount(0);
-    setInvitation(false);
+    setInvitedProductIds([]);
     setCustomer("Consumidor final");
   };
   const cancelSale = (sale: Sale) => {
@@ -2324,16 +2333,34 @@ export default function Home() {
                     {lines.length ? (
                       lines.map(({ p, q }) => (
                         <div className="flex justify-between py-3" key={p.id}>
-                          <span>
+                          <span className="pr-3">
                             <b>{p.name}</b> × {q}
+                            <label className="mt-1 flex items-center gap-1 text-xs font-medium text-slate-600">
+                              <input
+                                type="checkbox"
+                                checked={invitedProductIds.includes(p.id)}
+                                onChange={(event) =>
+                                  setInvitedProductIds((ids) =>
+                                    event.target.checked
+                                      ? [...ids, p.id]
+                                      : ids.filter((id) => id !== p.id),
+                                  )
+                                }
+                              />
+                              Invitación para este producto
+                            </label>
                           </span>
                           <button
-                            onClick={() =>
+                            onClick={() => {
                               setCart((c) => {
                                 const i = c.findIndex((x) => x.id === p.id);
                                 return c.filter((_, n) => n !== i);
-                              })
-                            }
+                              });
+                              if (q === 1)
+                                setInvitedProductIds((ids) =>
+                                  ids.filter((id) => id !== p.id),
+                                );
+                            }}
                             className="text-sm underline"
                           >
                             Quitar
@@ -2356,9 +2383,13 @@ export default function Home() {
                     className="mt-1 w-full rounded border p-2"
                   />
                   <p className="mt-2 text-sm">
-                    Bruto {money.format(total)} · Descuento{" "}
-                    {money.format(total - net)}
+                    Bruto {money.format(total)} · Descuento {money.format(discountAmount)}
                   </p>
+                  {invitationTotal > 0 && (
+                    <p className="mt-1 text-sm text-emerald-700">
+                      Invitación de producto −{money.format(invitationTotal)}
+                    </p>
+                  )}
                   <p className="mt-2 text-xl font-bold">
                     Total {money.format(net)}
                   </p>
@@ -2402,14 +2433,6 @@ export default function Home() {
                       className="mt-1 w-full rounded border p-2 font-normal"
                       placeholder="Consumidor final o razón social"
                     />
-                  </label>
-                  <label className="mt-3 flex items-center gap-2 text-sm font-bold">
-                    <input
-                      type="checkbox"
-                      checked={invitation}
-                      onChange={(event) => setInvitation(event.target.checked)}
-                    />
-                    Invitación (se registra separada del descuento)
                   </label>
                   <button
                     onClick={pay}
