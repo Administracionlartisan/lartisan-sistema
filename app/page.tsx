@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 
 type Product = {
@@ -26,6 +26,7 @@ type ManagedUser = User & {
   reportPermissions: string[];
   actionPermissions: string[];
   primary?: boolean;
+  mustChangePassword?: boolean;
 };
 type Sale = {
   id: string;
@@ -232,6 +233,51 @@ const usernameFromName = (name: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ".")
     .replace(/^\.|\.$/g, "");
+const API_BASE = "https://www.lartisantaller.com/sistema-api";
+type ApiUser = {
+  id: number | string;
+  username: string;
+  fullName?: string;
+  full_name?: string;
+  role: Role;
+  assignedLocation?: string | null;
+  assigned_location?: string | null;
+  accessAllLocations?: boolean;
+  access_all_locations?: boolean | number;
+  active?: boolean | number;
+  mustChangePassword?: boolean;
+  must_change_password?: boolean | number;
+};
+const managedUserFromApi = (profile: ApiUser): ManagedUser => {
+  const name = profile.fullName || profile.full_name || profile.username;
+  const accessAllLocations = Boolean(
+    profile.accessAllLocations ?? profile.access_all_locations,
+  );
+  return {
+    id: String(profile.id),
+    name,
+    username: profile.username,
+    password: "",
+    role: profile.role,
+    location:
+      profile.assignedLocation || profile.assigned_location || undefined,
+    accessAllLocations,
+    active: profile.active === undefined ? true : Boolean(profile.active),
+    mfaRequired:
+      profile.role === "administracion" ||
+      profile.username === "andrea.fernandez" ||
+      profile.username === "betzi.avila",
+    reportPermissions:
+      profile.role === "administracion"
+        ? ADMIN_REPORTS.map((report) => report.id)
+        : [],
+    actionPermissions: defaultActionPermissions(profile.role),
+    primary: profile.username === "administracion",
+    mustChangePassword: Boolean(
+      profile.mustChangePassword ?? profile.must_change_password,
+    ),
+  };
+};
 const INITIAL_SCHEDULES: EmployeeSchedule[] = SITES.flatMap((site) => [
   {
     id: `${site}-vendedora`,
@@ -498,7 +544,7 @@ const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
       profile.name.startsWith("Betzi")
         ? workEmail(profile.name)
         : undefined,
-    password: "Lartisan2026!",
+    password: "",
     mfaRequired:
       profile.role === "administracion" ||
       profile.name.startsWith("Andrea") ||
@@ -781,10 +827,14 @@ export default function Home() {
       INITIAL_MANAGED_USERS,
     ),
     [login, setLogin] = useState(
-      portal === "admin" ? workEmail("Administración") : usernameFromName("Stefany García"),
+      portal === "admin" ? "administracion" : usernameFromName("Stefany García"),
     ),
     [password, setPassword] = useState(""),
     [user, setUser] = useState<ManagedUser | null>(null),
+    [authLoading, setAuthLoading] = useState(true),
+    [currentPassword, setCurrentPassword] = useState(""),
+    [newPassword, setNewPassword] = useState(""),
+    [confirmNewPassword, setConfirmNewPassword] = useState(""),
     [site, setSite] = useState("Recoleta"),
     [tab, setTab] = useState("Ventas"),
     [cart, setCart] = useState<Product[]>([]),
@@ -939,6 +989,79 @@ export default function Home() {
     { method: "Mercado Pago / QR", amount: 43000 },
     { method: "Transferencia", amount: 12000 },
   ]);
+  const applyAuthenticatedUser = (profile: ApiUser) => {
+    const next = managedUserFromApi(profile);
+    if (portal === "admin" && next.role !== "administracion") {
+      setMessage("Este acceso es exclusivo para Administración.");
+      return false;
+    }
+    if (portal === "ventas" && next.role === "administracion") {
+      setMessage("Administración debe ingresar desde admin.lartisantaller.com.");
+      return false;
+    }
+    setUser(next);
+    setSite(next.location || "Recoleta");
+    setPayment(METHODS[next.location || "Recoleta"][0]);
+    setTab(next.role === "administracion" ? "Administración" : "Ventas");
+    setMessage("");
+    return true;
+  };
+  const loadAdminSecurityData = async () => {
+    const [usersResponse, resetResponse] = await Promise.all([
+      fetch(`${API_BASE}/admin/users`, { credentials: "include" }),
+      fetch(`${API_BASE}/admin/reset-requests`, { credentials: "include" }),
+    ]);
+    if (usersResponse.ok) {
+      const data = await usersResponse.json();
+      setManagedUsers((data.users as ApiUser[]).map(managedUserFromApi));
+    }
+    if (resetResponse.ok) {
+      const data = await resetResponse.json();
+      setResetRequests(
+        data.requests.map(
+          (request: {
+            id: number;
+            user_id: number;
+            username: string;
+            assigned_location?: string | null;
+            requested_at: string;
+            status: "pendiente" | "resuelta";
+          }): PasswordResetRequest => ({
+            id: String(request.id),
+            userId: String(request.user_id),
+            username: request.username,
+            site: request.assigned_location || undefined,
+            requestedAt: new Date(
+              request.requested_at.replace(" ", "T") + "-03:00",
+            ).toLocaleString("es-AR"),
+            status:
+              request.status === "pendiente" ? "Pendiente" : "Restablecida",
+          }),
+        ),
+      );
+    }
+  };
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE}/auth/me`, { credentials: "include" })
+      .then(async (response) => {
+        if (!active || !response.ok) return;
+        const data = await response.json();
+        applyAuthenticatedUser(data.user);
+      })
+      .catch(() => undefined)
+      .finally(() => active && setAuthLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [portal]);
+  useEffect(() => {
+    if (user?.role === "administracion") {
+      loadAdminSecurityData().catch(() =>
+        setMessage("No se pudieron actualizar usuarios y recuperaciones."),
+      );
+    }
+  }, [user?.id, user?.role]);
   const methods = METHODS[site],
     cats = ["Todos", ...Array.from(new Set(PRODUCTS.map((p) => p.category)))],
     [cat, setCat] = useState("Todos");
@@ -1157,126 +1280,177 @@ export default function Home() {
       withdrawals,
     cashRemaining = counted - (requiresEnvelope ? envelope : 0),
     cashVariance = counted - expected;
-  const enter = () => {
-    const next = managedUsers.find(
-      (profile) =>
-        profile.username.toLowerCase() === login.trim().toLowerCase() ||
-        profile.email?.toLowerCase() === login.trim().toLowerCase(),
-    );
-    if (!next || !next.active)
-      return setMessage("Este usuario está bloqueado o no existe.");
-    if (password !== next.password)
-      return setMessage("Contraseña incorrecta.");
-    if (portal === "admin" && next.role !== "administracion")
-      return setMessage("Este acceso es exclusivo para Administración.");
-    if (portal === "ventas" && next.role === "administracion")
-      return setMessage("Administración debe ingresar desde admin.lartisantaller.com.");
-    setUser(next);
-    setSite(next.location || "Recoleta");
-    setPayment(METHODS[next.location || "Recoleta"][0]);
-    setTab(next.role === "administracion" ? "Administración" : "Ventas");
-    if (next.role === "administracion")
-      setAdminReport(
-        next.reportPermissions.includes("Resumen")
-          ? "Resumen"
-          : next.reportPermissions[0] || "Resumen",
-      );
+  const logout = async () => {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    }).catch(() => undefined);
+    setUser(null);
+    setPassword("");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmNewPassword("");
     setMessage("");
   };
-  const createManagedUser = () => {
+  const changeOwnPassword = async () => {
+    if (newPassword !== confirmNewPassword) {
+      setMessage("Las nuevas contraseñas no coinciden.");
+      return;
+    }
+    if (newPassword.length < 12) {
+      setMessage("La nueva contraseña debe tener al menos 12 caracteres.");
+      return;
+    }
+    const response = await fetch(`${API_BASE}/auth/change-password`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setMessage(data.error || "No se pudo cambiar la contraseña.");
+      return;
+    }
+    setUser(null);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setMessage("Contraseña actualizada. Ingresá nuevamente.");
+  };
+  const enter = async () => {
+    if (!login.trim() || !password) {
+      setMessage("Ingresá tu usuario y contraseña.");
+      return;
+    }
+    setAuthLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: login.trim(), password }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setMessage(data.error || "No se pudo iniciar sesión.");
+        return;
+      }
+      if (!applyAuthenticatedUser(data.user)) {
+        await fetch(`${API_BASE}/auth/logout`, {
+          method: "POST",
+          credentials: "include",
+        });
+        return;
+      }
+      setPassword("");
+      if (data.user.role === "administracion") setAdminReport("Resumen");
+    } catch {
+      setMessage("No pudimos conectar con el acceso seguro. Intentá nuevamente.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+  const createManagedUser = async () => {
     const cleanName = newUserName.trim();
     if (!cleanName) return setMessage("Ingresá el nombre del nuevo usuario.");
     const cleanUsername = newUserUsername.trim().toLowerCase();
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(cleanUsername))
       return setMessage("Ingresá un usuario válido, por ejemplo nombre.apellido.");
-    const cleanEmail = newUserEmail.trim().toLowerCase();
-    if (
-      newUserRole !== "vendedora" &&
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)
-    )
-      return setMessage("Ingresá un correo laboral válido.");
-    if (newUserPassword.length < 10)
-      return setMessage("La contraseña temporal debe tener al menos 10 caracteres.");
+    if (newUserPassword.length < 12)
+      return setMessage("La contraseña temporal debe tener al menos 12 caracteres.");
     if (
       managedUsers.some(
         (profile) =>
           profile.name.toLowerCase() === cleanName.toLowerCase() ||
-          profile.username.toLowerCase() === cleanUsername ||
-          (cleanEmail && profile.email?.toLowerCase() === cleanEmail),
+          profile.username.toLowerCase() === cleanUsername,
       )
     )
       return setMessage("Ya existe un usuario con ese nombre.");
-    const created: ManagedUser = {
-      id: crypto.randomUUID(),
-      name: cleanName,
-      role: newUserRole,
-      location: newUserRole === "vendedora" ? newUserSite : undefined,
-      active: true,
-      username: cleanUsername,
-      email: cleanEmail || undefined,
-      password: newUserPassword,
-      mfaRequired:
-        newUserMfaRequired || newUserRole === "administracion",
-      reportPermissions: newUserRole === "administracion" ? ["Resumen"] : [],
-      actionPermissions: defaultActionPermissions(newUserRole),
-    };
-    setManagedUsers((profiles) => [...profiles, created]);
-    recordAudit(
-      "Usuario creado",
-      `${created.name} · ${created.role}${created.location ? ` · ${created.location}` : ""}`,
-    );
+    const response = await fetch(`${API_BASE}/admin/users`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: cleanUsername,
+        fullName: cleanName,
+        role: newUserRole,
+        assignedLocation: newUserRole === "vendedora" ? newUserSite : null,
+        accessAllLocations: newUserRole !== "vendedora",
+        temporaryPassword: newUserPassword,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setMessage(data.error || "No se pudo crear el usuario.");
+      return;
+    }
+    await loadAdminSecurityData();
     setNewUserName("");
     setNewUserUsername("");
     setNewUserEmail("");
     setNewUserPassword("");
     setNewUserMfaRequired(false);
-    setMessage(`Usuario ${created.name} creado y habilitado.`);
+    setMessage(`Usuario ${cleanName} creado y habilitado.`);
   };
-  const updateManagedUser = (id: string, changes: Partial<ManagedUser>) => {
+  const updateManagedUser = async (id: string, changes: Partial<ManagedUser>) => {
     setManagedUsers((profiles) =>
       profiles.map((profile) =>
         profile.id === id ? { ...profile, ...changes } : profile,
       ),
     );
+    const response = await fetch(`${API_BASE}/admin/users/${id}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        role: changes.role,
+        assignedLocation: changes.location,
+        accessAllLocations: changes.accessAllLocations,
+        active: changes.active,
+      }),
+    });
+    if (!response.ok) {
+      const data = await response.json();
+      setMessage(data.error || "No se pudo guardar el cambio del usuario.");
+      await loadAdminSecurityData();
+    }
   };
-  const requestPasswordReset = () => {
-    const profile = managedUsers.find(
-      (item) =>
-        item.username.toLowerCase() === login.trim().toLowerCase() ||
-        item.email?.toLowerCase() === login.trim().toLowerCase(),
-    );
-    if (!profile || !profile.active)
-      return setMessage("No encontramos un usuario habilitado con esos datos.");
-    if (resetRequests.some((request) => request.userId === profile.id && request.status === "Pendiente"))
-      return setMessage("Ya hay una solicitud de recuperación pendiente para este usuario.");
-    setResetRequests((items) => [
-      {
-        id: crypto.randomUUID(),
-        userId: profile.id,
-        username: profile.username,
-        site: profile.location,
-        requestedAt: new Date().toLocaleString("es-AR"),
-        status: "Pendiente",
-      },
-      ...items,
-    ]);
-    setMessage("Solicitud enviada a Administración. Te asignarán una contraseña temporal.");
+  const requestPasswordReset = async () => {
+    if (!login.trim()) return setMessage("Ingresá primero tu nombre de usuario.");
+    try {
+      const response = await fetch(`${API_BASE}/auth/request-reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: login.trim() }),
+      });
+      const data = await response.json();
+      setMessage(
+        data.message ||
+          "Solicitud enviada a Administración. Te asignarán una contraseña temporal.",
+      );
+    } catch {
+      setMessage("No se pudo enviar la solicitud. Intentá nuevamente.");
+    }
   };
-  const resetPassword = (request: PasswordResetRequest) => {
-    const temporaryPassword = `Lart${Math.random().toString(36).slice(2, 8)}!`;
-    setManagedUsers((items) =>
-      items.map((profile) =>
-        profile.id === request.userId
-          ? { ...profile, password: temporaryPassword }
-          : profile,
-      ),
-    );
-    setResetRequests((items) =>
-      items.map((item) =>
-        item.id === request.id ? { ...item, status: "Restablecida" } : item,
-      ),
-    );
-    recordAudit("Contraseña restablecida", `${request.username} · contraseña temporal generada`);
+  const resetPassword = async (request: PasswordResetRequest) => {
+    const temporaryPassword = `Lart@${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}9A`;
+    const response = await fetch(`${API_BASE}/admin/reset-password`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestId: Number(request.id),
+        temporaryPassword,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setMessage(data.error || "No se pudo generar la contraseña temporal.");
+      return;
+    }
+    await loadAdminSecurityData();
     setMessage(`Contraseña temporal para ${request.username}: ${temporaryPassword}`);
   };
   const increasedPrice = (productId: number) => {
@@ -1996,6 +2170,14 @@ export default function Home() {
     setPendingSync(0);
     setMessage("Operaciones de contingencia marcadas para sincronización segura.");
   };
+  if (authLoading && !user)
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f7f3eb] text-[#183a67]">
+        <p className="rounded-xl border bg-white px-5 py-4 font-bold shadow-sm">
+          Verificando acceso seguro…
+        </p>
+      </main>
+    );
   if (!user)
     return (
       <main className="grid min-h-screen place-items-center bg-[#f7f3eb] p-5 text-[#183a67]">
@@ -2019,7 +2201,7 @@ export default function Home() {
             onChange={(e) => setLogin(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && enter()}
             type="text"
-            placeholder={portal === "admin" ? "administracion o correo laboral" : "nombre.apellido"}
+            placeholder={portal === "admin" ? "administracion" : "nombre.apellido"}
             className="mt-1 w-full rounded-lg border p-3"
           />
           <label className="mt-4 block text-sm font-bold">Contraseña</label>
@@ -2042,15 +2224,51 @@ export default function Home() {
           </button>
           <button
             onClick={enter}
-            className="mt-5 w-full rounded-lg bg-[#183a67] py-3 font-bold text-white"
+            disabled={authLoading}
+            className="mt-5 w-full rounded-lg bg-[#183a67] py-3 font-bold text-white disabled:opacity-60"
           >
-            Ingresar
+            {authLoading ? "Verificando…" : "Ingresar"}
           </button>
           {message && (
             <p className="mt-3 rounded-lg bg-[#fff1ec] p-3 text-sm">
               {message}
             </p>
           )}
+        </section>
+      </main>
+    );
+  if (user.mustChangePassword)
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f7f3eb] p-5 text-[#183a67]">
+        <section className="w-full max-w-md rounded-2xl border border-[#d9d4c9] bg-[#fffdf8] p-7 shadow-lg">
+          <p className="font-serif text-3xl font-bold tracking-[.15em]">L&apos;ARTISAN</p>
+          <p className="mt-2 text-sm font-bold text-[#ec3a35]">SEGURIDAD</p>
+          <h1 className="mt-6 text-2xl font-bold">Creá tu contraseña personal</h1>
+          <p className="mt-2 text-sm text-slate-600">
+            La clave provisoria debe reemplazarse antes de utilizar el sistema.
+          </p>
+          <label className="mt-5 block text-sm font-bold">
+            Contraseña provisoria
+            <input value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} type="password" className="mt-1 w-full rounded-lg border p-3 font-normal" />
+          </label>
+          <label className="mt-4 block text-sm font-bold">
+            Nueva contraseña
+            <input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} type="password" className="mt-1 w-full rounded-lg border p-3 font-normal" />
+          </label>
+          <label className="mt-4 block text-sm font-bold">
+            Repetir nueva contraseña
+            <input value={confirmNewPassword} onChange={(event) => setConfirmNewPassword(event.target.value)} type="password" className="mt-1 w-full rounded-lg border p-3 font-normal" />
+          </label>
+          <p className="mt-3 text-xs text-slate-500">
+            Usá al menos 12 caracteres, mayúscula, minúscula, número y símbolo.
+          </p>
+          <button onClick={changeOwnPassword} className="mt-5 w-full rounded-lg bg-[#183a67] py-3 font-bold text-white">
+            Guardar nueva contraseña
+          </button>
+          <button onClick={logout} className="mt-3 w-full py-2 text-sm font-bold underline">
+            Volver al ingreso
+          </button>
+          {message && <p className="mt-3 rounded-lg bg-[#fff1ec] p-3 text-sm">{message}</p>}
         </section>
       </main>
     );
@@ -2100,7 +2318,7 @@ export default function Home() {
         </b>
         <span className="text-sm sm:text-right">
           {user.name} ·{" "}
-          <button onClick={() => setUser(null)} className="underline">
+          <button onClick={logout} className="underline">
             Salir
           </button>
         </span>
@@ -4427,11 +4645,11 @@ export default function Home() {
                 p="Creá accesos, asigná cargos y locales, bloqueá usuarios y definí qué reportes puede consultar cada administrativo."
               />
               <p className="mb-5 rounded border border-[#e7c26a] bg-[#fff5d8] p-4 text-sm">
-                Cada acceso será individual y se identificará por correo laboral. Administración, Betzi y Andrea quedan marcadas con doble factor obligatorio. La verificación real con Authenticator se activará junto con la autenticación segura y la base de datos; no se guardarán contraseñas reales en el navegador.
+                Cada acceso es individual y se identifica con nombre de usuario y contraseña. Las claves se guardan cifradas en el servidor y las solicitudes de recuperación llegan directamente a esta sección. El doble factor para Administración, Betzi y Andrea se activará en una etapa posterior.
               </p>
               <div className="rounded-2xl border bg-white p-5">
                 <h2 className="font-bold">Crear nuevo usuario</h2>
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.1fr_1fr_1.35fr_1fr_1fr_1.2fr_auto] xl:items-end">
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.1fr_1fr_1fr_1fr_1.2fr_auto] xl:items-end">
                   <label className="text-sm font-bold">
                     Nombre
                     <input
@@ -4447,16 +4665,6 @@ export default function Home() {
                       value={newUserUsername}
                       onChange={(e) => setNewUserUsername(e.target.value.toLowerCase().replace(/\s+/g, "."))}
                       placeholder="nombre.apellido"
-                      className="mt-1 block w-full rounded border p-2 font-normal"
-                    />
-                  </label>
-                  <label className="text-sm font-bold">
-                    Correo laboral {newUserRole === "vendedora" ? "(opcional)" : ""}
-                    <input
-                      value={newUserEmail}
-                      onChange={(e) => setNewUserEmail(e.target.value)}
-                      type="email"
-                      placeholder="nombre@lartisantaller.com"
                       className="mt-1 block w-full rounded border p-2 font-normal"
                     />
                   </label>
@@ -4529,7 +4737,7 @@ export default function Home() {
                   <thead className="bg-[#eef2f6]">
                     <tr>
                       <th className="p-3 text-left">Usuario</th>
-                      <th className="p-3 text-left">Correo laboral</th>
+                      <th className="p-3 text-left">Recuperación</th>
                       <th className="p-3 text-left">Cargo</th>
                       <th className="p-3 text-left">Local asignado</th>
                       <th className="p-3 text-center">Doble factor</th>
@@ -4549,19 +4757,7 @@ export default function Home() {
                             </span>
                           )}
                         </td>
-                        <td className="p-3">
-                          <input
-                            value={profile.email || ""}
-                            type="email"
-                            disabled={profile.primary}
-                            onChange={(e) =>
-                              updateManagedUser(profile.id, {
-                                email: e.target.value.trim().toLowerCase(),
-                              })
-                            }
-                            className="w-56 rounded border p-2 disabled:bg-slate-100"
-                          />
-                        </td>
+                        <td className="p-3 text-slate-600">Solicitud al administrador</td>
                         <td className="p-3">
                           <select
                             value={profile.role}
