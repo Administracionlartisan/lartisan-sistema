@@ -1030,7 +1030,7 @@ export default function Home() {
     })),
   );
   const roleTasks = [
-    ...(!cashIsOpen && user.role !== "administracion"
+    ...(!cashIsOpen && user?.role !== "administracion"
       ? [{ title: "Abrir caja", detail: `${site}: declarando el fondo inicial y responsable.`, action: "Caja" }]
       : []),
     ...savedOrders
@@ -1047,12 +1047,12 @@ export default function Home() {
           .filter((request) => request.status === "Pendiente" || request.status === "En preparación")
           .map((request) => ({ title: "Preparar pedido", detail: `${request.site} · ${request.status}.`, action: "Central de pedidos" }))
       : []),
-    ...(user.name === "Betzi"
+    ...(user?.name === "Betzi"
       ? stockAdjustments
           .filter((adjustment) => adjustment.status === "Pendiente")
           .map((adjustment) => ({ title: "Aprobar ajuste", detail: `${adjustment.site} · ajuste de inventario.`, action: "Central de pedidos" }))
       : []),
-    ...(user.role === "administracion"
+    ...(user?.role === "administracion"
       ? [{ title: "Revisar alertas operativas", detail: "Controlá cajas, stock, pedidos y comprobantes pendientes.", action: "Administración" }]
       : []),
   ];
