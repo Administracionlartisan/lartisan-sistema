@@ -41,7 +41,7 @@ type Sale = {
     "Factura B" | "Factura B electrónica" | "Factura A" | "Remito interno";
   customer: string;
   invitation: boolean;
-  invitedProductIds?: number[];
+  invitedQuantities?: Record<number, number>;
   channel: "Mostrador" | "Online";
   status: "activa" | "anulada";
 };
@@ -55,7 +55,7 @@ type SavedOrder = {
   payment: string;
   invoiceType: Sale["invoiceType"];
   invitation: boolean;
-  invitedProductIds?: number[];
+  invitedQuantities?: Record<number, number>;
   channel: "Mostrador" | "Online";
 };
 type CashAdjustment = {
@@ -795,7 +795,7 @@ export default function Home() {
     ),
     [invoiceType, setInvoiceType] = useState<Sale["invoiceType"]>("Factura B"),
     [customer, setCustomer] = useState("Consumidor final"),
-    [invitedProductIds, setInvitedProductIds] = useState<number[]>([]),
+    [invitedQuantities, setInvitedQuantities] = useState<Record<number, number>>({}),
     [message, setMessage] = useState(""),
     [fund, setFund] = useState(0),
     [expenses, setExpenses] = useState(0),
@@ -960,10 +960,13 @@ export default function Home() {
       ),
     [cart],
   );
-  const invitation = invitedProductIds.length > 0;
+  const invitation = Object.values(invitedQuantities).some((quantity) => quantity > 0);
   const invitationTotal = lines
-    .filter(({ p }) => invitedProductIds.includes(p.id))
-    .reduce((sum, { p, q }) => sum + p.price * q, 0);
+    .reduce(
+      (sum, { p, q }) =>
+        sum + p.price * Math.min(q, invitedQuantities[p.id] ?? 0),
+      0,
+    );
   const discountableTotal = total - invitationTotal;
   const discountAmount = Math.round((discountableTotal * discount) / 100);
   const net = discountableTotal - discountAmount;
@@ -1619,13 +1622,13 @@ export default function Home() {
       payment,
       invoiceType,
       invitation,
-      invitedProductIds,
+      invitedQuantities,
       channel: saleChannel,
     };
     setSavedOrders((items) => [order, ...items]);
     setCart([]);
     setDiscount(0);
-    setInvitedProductIds([]);
+    setInvitedQuantities({});
     setMessage("Comanda guardada. Podés continuar otra venta.");
   };
   const loadOrder = (order: SavedOrder) => {
@@ -1634,7 +1637,7 @@ export default function Home() {
     setDiscount(order.discount);
     setPayment(order.payment);
     setInvoiceType(order.invoiceType);
-    setInvitedProductIds(order.invitedProductIds ?? []);
+    setInvitedQuantities(order.invitedQuantities ?? {});
     setSaleChannel(order.channel);
     setSavedOrders((items) => items.filter((item) => item.id !== order.id));
     setMessage("Comanda recuperada para continuar el cobro.");
@@ -1782,7 +1785,7 @@ export default function Home() {
       invoiceType,
       customer,
       invitation,
-      invitedProductIds,
+      invitedQuantities,
       channel: saleChannel,
       status: "activa",
     };
@@ -1806,7 +1809,7 @@ export default function Home() {
     );
     setCart([]);
     setDiscount(0);
-    setInvitedProductIds([]);
+    setInvitedQuantities({});
     setCustomer("Consumidor final");
   };
   const cancelSale = (sale: Sale) => {
@@ -2338,17 +2341,42 @@ export default function Home() {
                             <label className="mt-1 flex items-center gap-1 text-xs font-medium text-slate-600">
                               <input
                                 type="checkbox"
-                                checked={invitedProductIds.includes(p.id)}
+                                checked={(invitedQuantities[p.id] ?? 0) > 0}
                                 onChange={(event) =>
-                                  setInvitedProductIds((ids) =>
+                                  setInvitedQuantities((quantities) =>
                                     event.target.checked
-                                      ? [...ids, p.id]
-                                      : ids.filter((id) => id !== p.id),
+                                      ? { ...quantities, [p.id]: 1 }
+                                      : Object.fromEntries(
+                                          Object.entries(quantities).filter(
+                                            ([id]) => Number(id) !== p.id,
+                                          ),
+                                        ),
                                   )
                                 }
                               />
-                              Invitación para este producto
+                              Invitación
                             </label>
+                            {(invitedQuantities[p.id] ?? 0) > 0 && (
+                              <label className="mt-1 flex items-center gap-2 text-xs text-slate-600">
+                                Unidades invitadas
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max={q}
+                                  value={invitedQuantities[p.id]}
+                                  onChange={(event) =>
+                                    setInvitedQuantities((quantities) => ({
+                                      ...quantities,
+                                      [p.id]: Math.max(
+                                        1,
+                                        Math.min(q, Number(event.target.value) || 1),
+                                      ),
+                                    }))
+                                  }
+                                  className="w-14 rounded border px-1 py-0.5"
+                                />
+                              </label>
+                            )}
                           </span>
                           <button
                             onClick={() => {
@@ -2356,10 +2384,20 @@ export default function Home() {
                                 const i = c.findIndex((x) => x.id === p.id);
                                 return c.filter((_, n) => n !== i);
                               });
-                              if (q === 1)
-                                setInvitedProductIds((ids) =>
-                                  ids.filter((id) => id !== p.id),
-                                );
+                              setInvitedQuantities((quantities) => {
+                                const remainingUnits = q - 1;
+                                const invitedUnits = quantities[p.id] ?? 0;
+                                if (remainingUnits === 0 || invitedUnits === 0)
+                                  return Object.fromEntries(
+                                    Object.entries(quantities).filter(
+                                      ([id]) => Number(id) !== p.id,
+                                    ),
+                                  );
+                                return {
+                                  ...quantities,
+                                  [p.id]: Math.min(invitedUnits, remainingUnits),
+                                };
+                              });
                             }}
                             className="text-sm underline"
                           >
