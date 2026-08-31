@@ -2068,6 +2068,7 @@ export default function Home() {
     ...baseTabs,
     ...(managesCentralOrders ? ["Central de pedidos"] : []),
     ...(user.name === "Betzi" ? ["Horarios"] : []),
+    ...(isAndrea ? ["Reportes"] : []),
   ];
   const availableAdminReports =
     user.role === "administracion"
@@ -2128,7 +2129,65 @@ export default function Home() {
           </nav>
         </aside>
         <section className="p-4 sm:p-5 md:p-8">
-          {tab === "Tareas" ? (
+          {tab === "Reportes" && isAndrea ? (
+            <>
+              <Heading
+                k="SUPERVISIÓN · TODOS LOS LOCALES"
+                h="Reportes de Andrea"
+                p="Seguimiento operativo de ventas, stock, pedidos y cajas por sucursal."
+              />
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border bg-white p-5">
+                  <p className="text-sm">Ventas de esta sesión</p>
+                  <b className="mt-2 block text-2xl">{money.format(sales.filter((sale) => sale.status === "activa").reduce((total, sale) => total + sale.net, 0))}</b>
+                </div>
+                <div className="rounded-2xl border bg-white p-5">
+                  <p className="text-sm">Stock bajo</p>
+                  <b className="mt-2 block text-2xl">{lowStockAlerts.length}</b>
+                </div>
+                <div className="rounded-2xl border bg-white p-5">
+                  <p className="text-sm">Pedidos pendientes</p>
+                  <b className="mt-2 block text-2xl">{stockRequests.filter((request) => request.status !== "Entregado").length}</b>
+                </div>
+                <div className="rounded-2xl border bg-white p-5">
+                  <p className="text-sm">Cajas abiertas</p>
+                  <b className="mt-2 block text-2xl">{SITES.filter((local) => cashOpenBySite[local]).length}</b>
+                </div>
+              </div>
+              <div className="mt-5 overflow-auto rounded-2xl border bg-white">
+                <table className="w-full min-w-[780px] text-sm">
+                  <thead className="bg-[#eef2f6]">
+                    <tr>
+                      <th className="p-3 text-left">Local</th>
+                      <th className="p-3 text-right">Ventas sesión</th>
+                      <th className="p-3 text-center">Stock bajo</th>
+                      <th className="p-3 text-center">Pedidos pendientes</th>
+                      <th className="p-3 text-center">Caja</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {SITES.map((local) => {
+                      const localSales = sales.filter((sale) => sale.site === local && sale.status === "activa");
+                      const localLowStock = lowStockAlerts.filter((alert) => alert.site === local).length;
+                      const localOrders = stockRequests.filter((request) => request.site === local && request.status !== "Entregado").length;
+                      return (
+                        <tr key={local} className="border-t">
+                          <td className="p-3 font-bold">{local}</td>
+                          <td className="p-3 text-right">{money.format(localSales.reduce((total, sale) => total + sale.net, 0))}</td>
+                          <td className="p-3 text-center">{localLowStock || "—"}</td>
+                          <td className="p-3 text-center">{localOrders || "—"}</td>
+                          <td className="p-3 text-center">{cashOpenBySite[local] ? "Abierta" : "Cerrada"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-4 rounded bg-[#eef2f6] p-4 text-sm">
+                Andrea puede operar ventas en cualquier sucursal desde el selector de sucursal. Estos reportes son de consulta y seguimiento; los permisos de Administración permanecen separados.
+              </p>
+            </>
+          ) : tab === "Tareas" ? (
             <>
               <Heading
                 k={user.role === "administracion" ? "ADMINISTRACIÓN" : `LOCAL · ${site.toUpperCase()}`}
