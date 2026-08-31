@@ -480,8 +480,8 @@ const USERS: Record<string, User> = {
   "Dante Mandelbaum": { name: "Dante Mandelbaum", role: "vendedora", location: "Recoleta" },
   "Yamila Palavecino": { name: "Yamila Palavecino", role: "vendedora", location: "Villa Mitre" },
   "Valentina Parra": { name: "Valentina Parra", role: "vendedora", location: "Villa Mitre" },
-  "Andrea Fernández": { name: "Andrea Fernández", role: "supervisora" },
-  Betzi: { name: "Betzi", role: "supervisora" },
+  "Andrea Fernandez": { name: "Andrea Fernandez", role: "supervisora" },
+  "Betzi Avila": { name: "Betzi Avila", role: "supervisora" },
   Administración: { name: "Administración", role: "administracion" },
 };
 const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
@@ -493,14 +493,14 @@ const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
     email:
       profile.role === "administracion" ||
       profile.name.startsWith("Andrea") ||
-      profile.name === "Betzi"
+      profile.name.startsWith("Betzi")
         ? workEmail(profile.name)
         : undefined,
     password: "Lartisan2026!",
     mfaRequired:
       profile.role === "administracion" ||
       profile.name.startsWith("Andrea") ||
-      profile.name === "Betzi",
+      profile.name.startsWith("Betzi"),
     reportPermissions:
       profile.role === "administracion"
         ? ADMIN_REPORTS.map((report) => report.id)
@@ -971,10 +971,11 @@ export default function Home() {
   const siteLimits = limitsBySite[site];
   const activeShift = activeShiftBySite[site];
   const isAndrea = user?.name.startsWith("Andrea") || false;
-  const canAdjustStock = isAndrea || user?.name === "Betzi";
+  const isBetzi = user?.name.startsWith("Betzi") || false;
+  const canAdjustStock = isAndrea || isBetzi;
   const canCountRealStock = isAndrea;
   const managesCentralOrders =
-    user?.name === "Betzi" ||
+    isBetzi ||
     isAndrea ||
     (user?.role === "vendedora" && user.location === "Villa Mitre");
   const can = (permission: string) =>
@@ -1037,7 +1038,7 @@ export default function Home() {
           .filter((request) => request.status === "Pendiente" || request.status === "En preparación")
           .map((request) => ({ title: "Preparar pedido", detail: `${request.site} · ${request.status}.`, action: "Central de pedidos" }))
       : []),
-    ...(user?.name === "Betzi"
+    ...(isBetzi
       ? stockAdjustments
           .filter((adjustment) => adjustment.status === "Pendiente")
           .map((adjustment) => ({ title: "Aprobar ajuste", detail: `${adjustment.site} · ajuste de inventario.`, action: "Central de pedidos" }))
@@ -1540,7 +1541,7 @@ export default function Home() {
     adjustment: StockAdjustment,
     approve: boolean,
   ) => {
-    if (user?.name !== "Betzi")
+    if (!isBetzi)
       return setMessage("Solo Betzi puede aprobar o rechazar ajustes de stock.");
     setStockAdjustments((items) =>
       items.map((item) =>
@@ -2067,7 +2068,7 @@ export default function Home() {
   const tabs = [
     ...baseTabs,
     ...(managesCentralOrders ? ["Central de pedidos"] : []),
-    ...(user.name === "Betzi" ? ["Horarios"] : []),
+    ...(isBetzi ? ["Horarios"] : []),
     ...(isAndrea ? ["Reportes"] : []),
   ];
   const availableAdminReports =
@@ -3437,7 +3438,7 @@ export default function Home() {
                             <td className="p-3">{adjustment.reason}</td>
                             <td className="p-3 text-center">
                               {adjustment.status === "Pendiente" ? (
-                                user.name === "Betzi" ? (
+                                isBetzi ? (
                                   <div className="flex justify-center gap-2">
                                     <button
                                       onClick={() =>
@@ -4557,7 +4558,7 @@ export default function Home() {
                             <input
                               type="checkbox"
                               checked={profile.mfaRequired}
-                              disabled={profile.primary || profile.name.startsWith("Andrea") || profile.name === "Betzi"}
+                              disabled={profile.primary || profile.name.startsWith("Andrea") || profile.name.startsWith("Betzi")}
                               onChange={(e) =>
                                 updateManagedUser(profile.id, {
                                   mfaRequired: e.target.checked,
@@ -4757,7 +4758,7 @@ export default function Home() {
                 ))}
               </div>
             </>
-          ) : tab === "Horarios" && user.name === "Betzi" ? (
+          ) : tab === "Horarios" && isBetzi ? (
             <>
               <Heading
                 k="BETZI · CONFIGURACIÓN DE PERSONAL"
