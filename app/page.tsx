@@ -1302,8 +1302,8 @@ export default function Home() {
       setMessage("Las nuevas contraseñas no coinciden.");
       return;
     }
-    if (newPassword.length < 12) {
-      setMessage("La nueva contraseña debe tener al menos 12 caracteres.");
+    if (newPassword.length < 8) {
+      setMessage("La nueva contraseña debe tener al menos 8 caracteres.");
       return;
     }
     const response = await fetch(`${API_BASE}/auth/change-password`, {
@@ -1363,8 +1363,8 @@ export default function Home() {
     const cleanUsername = newUserUsername.trim().toLowerCase();
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(cleanUsername))
       return setMessage("Ingresá un usuario válido, por ejemplo nombre.apellido.");
-    if (newUserPassword.length < 12)
-      return setMessage("La contraseña temporal debe tener al menos 12 caracteres.");
+    if (newUserPassword.length < 8)
+      return setMessage("La contraseña temporal debe tener al menos 8 caracteres.");
     if (
       managedUsers.some(
         (profile) =>
@@ -2303,7 +2303,7 @@ export default function Home() {
                 onChange={(e) => setRecoveryPassword(e.target.value)}
                 type="password"
                 autoComplete="new-password"
-                placeholder="Mínimo 12 caracteres"
+                placeholder="Mínimo 8 caracteres"
                 className="mt-1 w-full rounded-lg border p-3"
               />
               <label className="mt-4 block text-sm font-bold">Repetir contraseña</label>
@@ -2371,7 +2371,7 @@ export default function Home() {
             <input value={confirmNewPassword} onChange={(event) => setConfirmNewPassword(event.target.value)} type="password" className="mt-1 w-full rounded-lg border p-3 font-normal" />
           </label>
           <p className="mt-3 text-xs text-slate-500">
-            Usá al menos 12 caracteres, mayúscula, minúscula, número y símbolo.
+            Usá al menos 8 caracteres, mayúscula, minúscula, número y símbolo.
           </p>
           <button onClick={changeOwnPassword} className="mt-5 w-full rounded-lg bg-[#183a67] py-3 font-bold text-white">
             Guardar nueva contraseña

@@ -187,7 +187,7 @@ if ($method === 'POST' && $route === 'auth/confirm-reset-code') {
     if (!preg_match('/^\d{6}$/', $code) || !valid_password($newPassword)) {
         json_response([
             'ok' => false,
-            'error' => 'Revisá el código y usá una contraseña segura de al menos 12 caracteres.',
+            'error' => 'Revisá el código y usá una contraseña segura de al menos 8 caracteres.',
         ], 422);
     }
     $stmt = $pdo->prepare(

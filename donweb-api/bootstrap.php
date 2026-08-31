@@ -159,10 +159,9 @@ function clear_session(PDO $pdo, array $config): void
 
 function valid_password(string $password): bool
 {
-    return strlen($password) >= 12
+    return strlen($password) >= 8
         && preg_match('/[a-z]/', $password)
         && preg_match('/[A-Z]/', $password)
         && preg_match('/\d/', $password)
         && preg_match('/[^a-zA-Z0-9]/', $password);
 }
-
