@@ -835,6 +835,11 @@ export default function Home() {
     [currentPassword, setCurrentPassword] = useState(""),
     [newPassword, setNewPassword] = useState(""),
     [confirmNewPassword, setConfirmNewPassword] = useState(""),
+    [recoveryStage, setRecoveryStage] = useState<"idle" | "code">("idle"),
+    [recoveryCode, setRecoveryCode] = useState(""),
+    [recoveryPassword, setRecoveryPassword] = useState(""),
+    [recoveryPasswordConfirm, setRecoveryPasswordConfirm] = useState(""),
+    [recoverySending, setRecoverySending] = useState(false),
     [site, setSite] = useState("Recoleta"),
     [tab, setTab] = useState("Ventas"),
     [cart, setCart] = useState<Product[]>([]),
@@ -1419,6 +1424,7 @@ export default function Home() {
   };
   const requestPasswordReset = async () => {
     if (!login.trim()) return setMessage("Ingresá primero tu nombre de usuario.");
+    setRecoverySending(true);
     try {
       const response = await fetch(`${API_BASE}/auth/request-reset`, {
         method: "POST",
@@ -1426,12 +1432,59 @@ export default function Home() {
         body: JSON.stringify({ username: login.trim() }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        setMessage(data.error || "No se pudo iniciar la recuperación.");
+        return;
+      }
+      if (portal === "admin" && data.delivery === "email_code") {
+        setRecoveryStage("code");
+        setRecoveryCode("");
+        setRecoveryPassword("");
+        setRecoveryPasswordConfirm("");
+      }
       setMessage(
         data.message ||
           "Solicitud enviada a Administración. Te asignarán una contraseña temporal.",
       );
     } catch {
       setMessage("No se pudo enviar la solicitud. Intentá nuevamente.");
+    } finally {
+      setRecoverySending(false);
+    }
+  };
+  const confirmEmailRecovery = async () => {
+    if (!/^\d{6}$/.test(recoveryCode)) {
+      return setMessage("Ingresá el código de 6 dígitos recibido por correo.");
+    }
+    if (recoveryPassword !== recoveryPasswordConfirm) {
+      return setMessage("Las nuevas contraseñas no coinciden.");
+    }
+    setRecoverySending(true);
+    try {
+      const response = await fetch(`${API_BASE}/auth/confirm-reset-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: login.trim(),
+          code: recoveryCode,
+          newPassword: recoveryPassword,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setMessage(data.error || "No se pudo actualizar la contraseña.");
+        return;
+      }
+      setRecoveryStage("idle");
+      setRecoveryCode("");
+      setRecoveryPassword("");
+      setRecoveryPasswordConfirm("");
+      setPassword("");
+      setMessage(data.message || "Contraseña actualizada. Ya podés ingresar.");
+    } catch {
+      setMessage("No se pudo validar el código. Intentá nuevamente.");
+    } finally {
+      setRecoverySending(false);
     }
   };
   const resetPassword = async (request: PasswordResetRequest) => {
@@ -2218,10 +2271,68 @@ export default function Home() {
           </p>
           <button
             onClick={requestPasswordReset}
-            className="mt-4 text-sm font-bold underline"
+            disabled={recoverySending}
+            className="mt-4 text-sm font-bold underline disabled:opacity-60"
           >
-            Olvidé mi contraseña
+            {recoverySending && recoveryStage === "idle"
+              ? "Enviando…"
+              : portal === "admin"
+                ? "Enviar código de recuperación"
+                : "Olvidé mi contraseña"}
           </button>
+          {portal === "admin" && recoveryStage === "code" && (
+            <div className="mt-5 rounded-xl border border-[#d9d4c9] bg-white p-4">
+              <p className="text-sm font-bold">Recuperar acceso</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Revisá administracion@lartisantaller.com. El código vence en 15 minutos.
+              </p>
+              <label className="mt-4 block text-sm font-bold">Código de 6 dígitos</label>
+              <input
+                value={recoveryCode}
+                onChange={(e) =>
+                  setRecoveryCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                }
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="000000"
+                className="mt-1 w-full rounded-lg border p-3 text-center text-xl font-bold tracking-[.35em]"
+              />
+              <label className="mt-4 block text-sm font-bold">Nueva contraseña</label>
+              <input
+                value={recoveryPassword}
+                onChange={(e) => setRecoveryPassword(e.target.value)}
+                type="password"
+                autoComplete="new-password"
+                placeholder="Mínimo 12 caracteres"
+                className="mt-1 w-full rounded-lg border p-3"
+              />
+              <label className="mt-4 block text-sm font-bold">Repetir contraseña</label>
+              <input
+                value={recoveryPasswordConfirm}
+                onChange={(e) => setRecoveryPasswordConfirm(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && confirmEmailRecovery()}
+                type="password"
+                autoComplete="new-password"
+                className="mt-1 w-full rounded-lg border p-3"
+              />
+              <button
+                onClick={confirmEmailRecovery}
+                disabled={recoverySending}
+                className="mt-4 w-full rounded-lg bg-[#ec3a35] py-3 font-bold text-white disabled:opacity-60"
+              >
+                {recoverySending ? "Validando…" : "Cambiar contraseña"}
+              </button>
+              <button
+                onClick={() => {
+                  setRecoveryStage("idle");
+                  setMessage("");
+                }}
+                className="mt-3 w-full text-sm font-bold underline"
+              >
+                Cancelar
+              </button>
+            </div>
+          )}
           <button
             onClick={enter}
             disabled={authLoading}

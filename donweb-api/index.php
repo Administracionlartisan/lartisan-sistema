@@ -13,6 +13,20 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $route = trim((string) ($_GET['route'] ?? ''), '/');
 $pdo = db($config);
+$pdo->exec(
+    "CREATE TABLE IF NOT EXISTS password_recovery_codes (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id BIGINT UNSIGNED NOT NULL,
+        code_hash VARCHAR(255) NOT NULL,
+        attempts SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        expires_at DATETIME NOT NULL,
+        used_at DATETIME NULL,
+        requested_ip VARCHAR(45) NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_recovery_user_created (user_id, created_at),
+        INDEX idx_recovery_expiry (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+);
 
 if ($method === 'GET' && ($route === '' || $route === 'health')) {
     $pdo->query('SELECT 1');
@@ -85,10 +99,73 @@ if ($method === 'POST' && $route === 'auth/change-password') {
 if ($method === 'POST' && $route === 'auth/request-reset') {
     $body = request_body();
     $username = mb_strtolower(trim((string) ($body['username'] ?? '')), 'UTF-8');
-    $stmt = $pdo->prepare('SELECT id FROM users WHERE username = ? AND active = 1 LIMIT 1');
+    $stmt = $pdo->prepare('SELECT id, role FROM users WHERE username = ? AND active = 1 LIMIT 1');
     $stmt->execute([$username]);
-    $userId = $stmt->fetchColumn();
-    if ($userId) {
+    $resetUser = $stmt->fetch();
+
+    if ($resetUser && $resetUser['role'] === 'administracion') {
+        $userId = (int) $resetUser['id'];
+        $recent = $pdo->prepare(
+            'SELECT created_at FROM password_recovery_codes WHERE user_id = ? ORDER BY id DESC LIMIT 1'
+        );
+        $recent->execute([$userId]);
+        $lastCreated = $recent->fetchColumn();
+        if ($lastCreated && strtotime((string) $lastCreated) > time() - 60) {
+            json_response([
+                'ok' => false,
+                'error' => 'Esperá un minuto antes de solicitar otro código.',
+            ], 429);
+        }
+        $hourly = $pdo->prepare(
+            'SELECT COUNT(*) FROM password_recovery_codes
+             WHERE user_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
+        );
+        $hourly->execute([$userId]);
+        if ((int) $hourly->fetchColumn() >= 5) {
+            json_response([
+                'ok' => false,
+                'error' => 'Se alcanzó el límite de códigos. Intentá nuevamente dentro de una hora.',
+            ], 429);
+        }
+
+        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $expiresAt = date('Y-m-d H:i:s', time() + 15 * 60);
+        $pdo->prepare(
+            'INSERT INTO password_recovery_codes
+             (user_id, code_hash, expires_at, requested_ip) VALUES (?, ?, ?, ?)'
+        )->execute([$userId, password_hash($code, PASSWORD_DEFAULT), $expiresAt, client_ip()]);
+        $recoveryId = (int) $pdo->lastInsertId();
+        $destination = (string) ($config['admin_recovery_email'] ?? 'administracion@lartisantaller.com');
+        $from = (string) ($config['recovery_from_email'] ?? 'no-reply@lartisantaller.com');
+        $subject = "Codigo de recuperacion - L'ARTISAN";
+        $emailBody = "Se solicito recuperar el acceso de Administracion.\n\n"
+            . "Codigo: {$code}\n\n"
+            . "El codigo vence en 15 minutos y solo puede usarse una vez.\n"
+            . "Si no solicitaste este cambio, ignora este correo.";
+        $headers = [
+            'From: Sistema LARTISAN <' . $from . '>',
+            'Reply-To: ' . $destination,
+            'Content-Type: text/plain; charset=UTF-8',
+            'X-Mailer: PHP/' . PHP_VERSION,
+        ];
+        if (!mail($destination, $subject, $emailBody, implode("\r\n", $headers))) {
+            $pdo->prepare('DELETE FROM password_recovery_codes WHERE id = ?')->execute([$recoveryId]);
+            audit($pdo, $userId, 'password_recovery_email_failed');
+            json_response([
+                'ok' => false,
+                'error' => 'No pudimos enviar el código. Intentá nuevamente en unos minutos.',
+            ], 503);
+        }
+        audit($pdo, $userId, 'password_recovery_code_sent');
+        json_response([
+            'ok' => true,
+            'delivery' => 'email_code',
+            'message' => 'Enviamos un código de 6 dígitos al correo de Administración.',
+        ]);
+    }
+
+    if ($resetUser) {
+        $userId = (int) $resetUser['id'];
         $pending = $pdo->prepare(
             "SELECT id FROM password_reset_requests
              WHERE user_id = ? AND status = 'pendiente' AND requested_at > DATE_SUB(NOW(), INTERVAL 30 MINUTE)"
@@ -100,6 +177,58 @@ if ($method === 'POST' && $route === 'auth/request-reset') {
         }
     }
     json_response(['ok' => true, 'message' => 'Si el usuario existe, Administración recibirá la solicitud.']);
+}
+
+if ($method === 'POST' && $route === 'auth/confirm-reset-code') {
+    $body = request_body();
+    $username = mb_strtolower(trim((string) ($body['username'] ?? '')), 'UTF-8');
+    $code = trim((string) ($body['code'] ?? ''));
+    $newPassword = (string) ($body['newPassword'] ?? '');
+    if (!preg_match('/^\d{6}$/', $code) || !valid_password($newPassword)) {
+        json_response([
+            'ok' => false,
+            'error' => 'Revisá el código y usá una contraseña segura de al menos 12 caracteres.',
+        ], 422);
+    }
+    $stmt = $pdo->prepare(
+        "SELECT c.*, u.id AS account_id
+         FROM password_recovery_codes c
+         JOIN users u ON u.id = c.user_id
+         WHERE u.username = ? AND u.role = 'administracion' AND u.active = 1
+           AND c.used_at IS NULL AND c.expires_at > NOW() AND c.attempts < 5
+         ORDER BY c.id DESC LIMIT 1"
+    );
+    $stmt->execute([$username]);
+    $recovery = $stmt->fetch();
+    if (!$recovery || !password_verify($code, $recovery['code_hash'])) {
+        if ($recovery) {
+            $pdo->prepare('UPDATE password_recovery_codes SET attempts = attempts + 1 WHERE id = ?')
+                ->execute([$recovery['id']]);
+            audit($pdo, (int) $recovery['account_id'], 'password_recovery_code_failed');
+        } else {
+            audit($pdo, null, 'password_recovery_code_failed', $username);
+        }
+        json_response(['ok' => false, 'error' => 'El código es incorrecto o venció.'], 422);
+    }
+
+    $userId = (int) $recovery['account_id'];
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare(
+            'UPDATE users SET password_hash = ?, must_change_password = 0,
+             failed_attempts = 0, locked_until = NULL WHERE id = ?'
+        )->execute([password_hash($newPassword, PASSWORD_DEFAULT), $userId]);
+        $pdo->prepare('UPDATE password_recovery_codes SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL')
+            ->execute([$userId]);
+        $pdo->prepare('DELETE FROM user_sessions WHERE user_id = ?')->execute([$userId]);
+        audit($pdo, $userId, 'password_recovered_by_email');
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    clear_session($pdo, $config);
+    json_response(['ok' => true, 'message' => 'Contraseña actualizada. Ya podés ingresar.']);
 }
 
 if ($method === 'GET' && $route === 'admin/reset-requests') {

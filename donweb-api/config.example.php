@@ -13,5 +13,6 @@ return [
     ],
     'cookie_domain' => '.lartisantaller.com',
     'session_hours' => 12,
+    'admin_recovery_email' => 'administracion@lartisantaller.com',
+    'recovery_from_email' => 'no-reply@lartisantaller.com',
 ];
-
