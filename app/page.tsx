@@ -5244,13 +5244,26 @@ export default function Home() {
               />
               <div className="mb-5 flex flex-wrap gap-2">
                 {availableAdminReports.map((report) => (
-                  <button
-                    key={report.id}
-                    onClick={() => setAdminReport(report.id)}
-                    className={`rounded-full px-3 py-2 text-sm font-bold ${adminReport === report.id ? "bg-[#183a67] text-white" : "bg-white ring-1 ring-[#d9d4c9]"}`}
-                  >
-                    {report.title}
-                  </button>
+                  <span key={report.id} className="group relative">
+                    <button
+                      onClick={() => setAdminReport(report.id)}
+                      aria-describedby={`report-help-${report.id}`}
+                      title={report.detail}
+                      className={`rounded-full px-3 py-2 text-sm font-bold ${adminReport === report.id ? "bg-[#183a67] text-white" : "bg-white ring-1 ring-[#d9d4c9]"}`}
+                    >
+                      {report.title}
+                    </button>
+                    <span
+                      id={`report-help-${report.id}`}
+                      role="tooltip"
+                      className="pointer-events-none absolute left-0 top-full z-30 mt-2 hidden w-64 max-w-[calc(100vw-2rem)] rounded-lg bg-[#102c50] px-3 py-2 text-xs font-medium leading-relaxed text-white shadow-xl group-hover:block group-focus-within:block sm:left-1/2 sm:-translate-x-1/2"
+                    >
+                      <span className="block font-bold text-[#ffb3af]">
+                        ¿Qué encontrarás?
+                      </span>
+                      {report.detail}
+                    </span>
+                  </span>
                 ))}
               </div>
               <div className="rounded-2xl border bg-white p-5">
