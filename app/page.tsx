@@ -2660,6 +2660,7 @@ export default function Home() {
           "Límites",
           "Recetas y costos",
           "Legajos",
+          "MRP",
           "Protección de datos",
           "Integraciones",
         ]
@@ -2735,7 +2736,7 @@ export default function Home() {
                 onClick={() => setTab(t)}
                 className={`rounded p-2 text-left text-sm font-bold ${tab === t ? "bg-[#183a67] text-white" : "hover:bg-[#eef2f6]"}`}
               >
-                {t === "Recetas y costos" || t === "Legajos"
+                {t === "Recetas y costos" || t === "Legajos" || t === "MRP"
                   ? `${t} (Próximamente)`
                   : t}
               </button>
@@ -4528,6 +4529,22 @@ export default function Home() {
                     <p className="mt-2 text-sm text-slate-500">Pendiente de configuración.</p>
                   </div>
                 ))}
+              </div>
+            </>
+          ) : tab === "MRP" && user.role === "administracion" ? (
+            <>
+              <Heading
+                k="ADMINISTRACIÓN · PRODUCCIÓN"
+                h="MRP"
+                p="Planificación de requerimientos de materiales para producción y abastecimiento."
+              />
+              <div className="max-w-4xl rounded-2xl border border-[#e7c26a] bg-[#fff5d8] p-6">
+                <p className="font-bold">Próximamente</p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  Este módulo se utilizará más adelante para planificar qué materias
+                  primas comprar o producir según las recetas, el stock disponible,
+                  los pedidos de los locales y la proyección de ventas.
+                </p>
               </div>
             </>
           ) : tab === "Protección de datos" && user.role === "administracion" ? (
