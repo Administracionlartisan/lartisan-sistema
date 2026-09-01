@@ -949,6 +949,9 @@ export default function Home() {
     [newUserPassword, setNewUserPassword] = useState(""),
     [newUserMfaRequired, setNewUserMfaRequired] = useState(false),
     [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([]),
+    [generatedTemporaryPassword, setGeneratedTemporaryPassword] = useState<
+      { username: string; password: string } | null
+    >(null),
     [priceIncrease, setPriceIncrease] = useState(0),
     [priceRounding, setPriceRounding] = useState(100),
     [priceCategory, setPriceCategory] = useState("Todos"),
@@ -1766,6 +1769,10 @@ export default function Home() {
       return;
     }
     await loadAdminSecurityData();
+    setGeneratedTemporaryPassword({
+      username: request.username,
+      password: temporaryPassword,
+    });
     setMessage(`Contraseña temporal para ${request.username}: ${temporaryPassword}`);
   };
   const increasedPrice = (productId: number) => {
@@ -5284,6 +5291,41 @@ export default function Home() {
                     {resetRequests.filter((request) => request.status === "Pendiente").length} pendientes
                   </span>
                 </div>
+                {generatedTemporaryPassword && (
+                  <div className="mt-4 rounded-xl border-2 border-[#e7c26a] bg-[#fff5d8] p-4">
+                    <p className="text-sm font-bold text-[#8a5b00]">
+                      Contraseña provisoria generada
+                    </p>
+                    <p className="mt-2 text-sm">
+                      Usuario: <b>@{generatedTemporaryPassword.username}</b>
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <code className="rounded bg-white px-3 py-2 text-base font-bold text-[#183a67]">
+                        {generatedTemporaryPassword.password}
+                      </code>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard
+                            .writeText(generatedTemporaryPassword.password)
+                            .then(() => setMessage("Contraseña copiada al portapapeles."))
+                            .catch(() => setMessage("Copiá la contraseña manualmente."));
+                        }}
+                        className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white"
+                      >
+                        Copiar contraseña
+                      </button>
+                      <button
+                        onClick={() => setGeneratedTemporaryPassword(null)}
+                        className="text-sm font-bold underline"
+                      >
+                        Ocultar
+                      </button>
+                    </div>
+                    <p className="mt-3 text-xs text-slate-600">
+                      Enviála por un canal validado. Andrea deberá cambiarla en su primer ingreso.
+                    </p>
+                  </div>
+                )}
                 <div className="mt-4 divide-y">
                   {resetRequests.length ? resetRequests.map((request) => (
                     <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
