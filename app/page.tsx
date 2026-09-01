@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 type Product = {
@@ -194,6 +194,43 @@ type StockAdjustment = {
   requestedAt: string;
   requestedBy: string;
   status: "Pendiente" | "Aprobado" | "Rechazado";
+};
+type CashFields = {
+  fund: number;
+  expenses: number;
+  withdrawals: number;
+  counted: number;
+  envelope: number;
+  closed: boolean;
+};
+type OperationalSnapshot = {
+  stock?: Record<number, number>;
+  minimumStock?: Record<number, number>;
+  realStock?: Record<number, string>;
+  sales?: Sale[];
+  payments?: Payment[];
+  stockRequests?: StockRequest[];
+  savedOrders?: SavedOrder[];
+  cashAdjustments?: CashAdjustment[];
+  activeShift?: CashShift;
+  shiftLog?: CashShift[];
+  envelopeRecords?: EnvelopeRecord[];
+  stockMovements?: StockMovement[];
+  expensesLog?: Expense[];
+  returnsLog?: ReturnTransaction[];
+  incidents?: Incident[];
+  stockAdjustments?: StockAdjustment[];
+  audit?: AuditEvent[];
+  cash?: CashFields;
+  cashOpen?: boolean;
+};
+const EMPTY_CASH_FIELDS: CashFields = {
+  fund: 0,
+  expenses: 0,
+  withdrawals: 0,
+  counted: 0,
+  envelope: 0,
+  closed: false,
 };
 const SITES = ["Recoleta", "Villa Mitre", "Congreso", "Maure", "Novo Pacheco"];
 const ACTION_PERMISSIONS = [
@@ -887,16 +924,10 @@ export default function Home() {
     [customer, setCustomer] = useState("Consumidor final"),
     [invitedQuantities, setInvitedQuantities] = useState<Record<number, number>>({}),
     [message, setMessage] = useState(""),
-    [fund, setFund] = useState(0),
-    [expenses, setExpenses] = useState(0),
-    [withdrawals, setWithdrawals] = useState(0),
-    [counted, setCounted] = useState(0),
-    [envelope, setEnvelope] = useState(0),
     [cashAdjustmentKind, setCashAdjustmentKind] =
       useState<CashAdjustment["kind"]>("Ajuste de caja"),
     [cashAdjustmentAmount, setCashAdjustmentAmount] = useState(0),
     [cashAdjustmentDetail, setCashAdjustmentDetail] = useState(""),
-    [closed, setClosed] = useState(false),
     [cashOpenBySite, setCashOpenBySite] = useState<Record<string, boolean>>({}),
     [sales, setSales] = useState<Sale[]>([]),
     [audit, setAudit] = useState<AuditEvent[]>([]),
@@ -929,6 +960,13 @@ export default function Home() {
     [clock, setClock] = useState(""),
     [drive, setDrive] = useState("");
   const [stockRequests, setStockRequests] = useState<StockRequest[]>([]);
+  const [cashFieldsBySite, setCashFieldsBySite] = useState<
+    Record<string, CashFields>
+  >({});
+  const [operationalReady, setOperationalReady] = useState(false);
+  const [operationalVersion, setOperationalVersion] = useState(0);
+  const operationalEventRef = useRef<{ action: string; detail: string } | null>(null);
+  const lastPersistedSnapshot = useRef<Record<string, string>>({});
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
   const [activeShiftBySite, setActiveShiftBySite] = useState<
@@ -1029,6 +1067,27 @@ export default function Home() {
     { method: "Mercado Pago / QR", amount: 43000 },
     { method: "Transferencia", amount: 12000 },
   ]);
+  const cashFields = cashFieldsBySite[site] || EMPTY_CASH_FIELDS;
+  const updateCashField = <K extends keyof CashFields>(
+    field: K,
+    value: CashFields[K],
+  ) =>
+    setCashFieldsBySite((items) => ({
+      ...items,
+      [site]: { ...EMPTY_CASH_FIELDS, ...items[site], [field]: value },
+    }));
+  const fund = cashFields.fund;
+  const expenses = cashFields.expenses;
+  const withdrawals = cashFields.withdrawals;
+  const counted = cashFields.counted;
+  const envelope = cashFields.envelope;
+  const closed = cashFields.closed;
+  const setFund = (value: number) => updateCashField("fund", value);
+  const setExpenses = (value: number) => updateCashField("expenses", value);
+  const setWithdrawals = (value: number) => updateCashField("withdrawals", value);
+  const setCounted = (value: number) => updateCashField("counted", value);
+  const setEnvelope = (value: number) => updateCashField("envelope", value);
+  const setClosed = (value: boolean) => updateCashField("closed", value);
   const applyAuthenticatedUser = (profile: ApiUser) => {
     const next = managedUserFromApi(profile);
     if (portal === "admin" && next.role !== "administracion") {
@@ -1102,6 +1161,172 @@ export default function Home() {
       );
     }
   }, [user?.id, user?.role]);
+  const loadOperationalData = async () => {
+    const response = await fetch(`${API_BASE}/operations/states`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw new Error("No se pudieron cargar las operaciones.");
+    const data = (await response.json()) as {
+      states: Record<string, { state: OperationalSnapshot; revision: number }>;
+    };
+    const entries = Object.entries(data.states || {});
+    if (entries.length) {
+      const all = <K extends keyof OperationalSnapshot>(key: K) =>
+        entries.flatMap(([, entry]) =>
+          Array.isArray(entry.state[key]) ? (entry.state[key] as unknown[]) : [],
+        );
+      setStock((items) => ({
+        ...items,
+        ...Object.fromEntries(
+          entries.map(([local, entry]) => [local, entry.state.stock || items[local]]),
+        ),
+      }));
+      setMinimumStock((items) => ({
+        ...items,
+        ...Object.fromEntries(
+          entries.map(([local, entry]) => [
+            local,
+            entry.state.minimumStock || items[local],
+          ]),
+        ),
+      }));
+      setRealStock((items) => ({
+        ...items,
+        ...Object.fromEntries(
+          entries.map(([local, entry]) => [
+            local,
+            entry.state.realStock || items[local],
+          ]),
+        ),
+      }));
+      setSales(all("sales") as Sale[]);
+      setPayments(all("payments") as Payment[]);
+      setStockRequests(all("stockRequests") as StockRequest[]);
+      setSavedOrders(all("savedOrders") as SavedOrder[]);
+      setCashAdjustments(all("cashAdjustments") as CashAdjustment[]);
+      setShiftLog(all("shiftLog") as CashShift[]);
+      setEnvelopeRecords(all("envelopeRecords") as EnvelopeRecord[]);
+      setStockMovements(all("stockMovements") as StockMovement[]);
+      setExpensesLog(all("expensesLog") as Expense[]);
+      setReturnsLog(all("returnsLog") as ReturnTransaction[]);
+      setIncidents(all("incidents") as Incident[]);
+      setStockAdjustments(all("stockAdjustments") as StockAdjustment[]);
+      setAudit(all("audit") as AuditEvent[]);
+      setCashFieldsBySite(
+        Object.fromEntries(
+          entries.map(([local, entry]) => [
+            local,
+            { ...EMPTY_CASH_FIELDS, ...entry.state.cash },
+          ]),
+        ),
+      );
+      setCashOpenBySite(
+        Object.fromEntries(
+          entries.map(([local, entry]) => [local, Boolean(entry.state.cashOpen)]),
+        ),
+      );
+      setActiveShiftBySite(
+        Object.fromEntries(
+          entries.map(([local, entry]) => [local, entry.state.activeShift]),
+        ),
+      );
+      lastPersistedSnapshot.current = Object.fromEntries(
+        entries.map(([local, entry]) => [local, JSON.stringify(entry.state)]),
+      );
+    }
+    setOperationalReady(true);
+  };
+  useEffect(() => {
+    if (!user) return;
+    setOperationalReady(false);
+    loadOperationalData().catch(() =>
+      setMessage("No se pudieron recuperar las operaciones guardadas."),
+    );
+  }, [user?.id]);
+  const operationalSnapshot = (local: string): OperationalSnapshot => {
+    const localSales = sales.filter((item) => item.site === local);
+    const saleIds = new Set(localSales.map((item) => item.id));
+    const filterBySite = <T extends { site: string }>(items: T[]) =>
+      items.filter((item) => item.site === local);
+    return {
+      stock: stock[local] || {},
+      minimumStock: minimumStock[local] || {},
+      realStock: realStock[local] || {},
+      sales: localSales,
+      payments: payments.filter((item) => item.saleId && saleIds.has(item.saleId)),
+      stockRequests: filterBySite(stockRequests),
+      savedOrders: filterBySite(savedOrders),
+      cashAdjustments: filterBySite(cashAdjustments),
+      activeShift: activeShiftBySite[local],
+      shiftLog: filterBySite(shiftLog),
+      envelopeRecords: filterBySite(envelopeRecords),
+      stockMovements: filterBySite(stockMovements),
+      expensesLog: filterBySite(expensesLog),
+      returnsLog: filterBySite(returnsLog),
+      incidents: filterBySite(incidents),
+      stockAdjustments: filterBySite(stockAdjustments),
+      audit: filterBySite(audit),
+      cash: cashFieldsBySite[local] || EMPTY_CASH_FIELDS,
+      cashOpen: Boolean(cashOpenBySite[local]),
+    };
+  };
+  useEffect(() => {
+    if (!user || !operationalReady || operationalVersion === 0) return;
+    const snapshot = operationalSnapshot(site);
+    const serialized = JSON.stringify(snapshot);
+    if (lastPersistedSnapshot.current[site] === serialized) return;
+    const event = operationalEventRef.current || {
+      action: "Actualización operativa",
+      detail: "Cambios registrados en el sistema.",
+    };
+    const timer = window.setTimeout(() => {
+      fetch(`${API_BASE}/operations/states/${encodeURIComponent(site)}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          state: snapshot,
+          eventType: "operacion_registrada",
+          event: { ...event, recordedAt: new Date().toISOString() },
+        }),
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("No se pudo guardar");
+          lastPersistedSnapshot.current[site] = serialized;
+          setSyncStatus("Operación guardada en la base de datos.");
+        })
+        .catch(() =>
+          setMessage(
+            "No se pudo guardar esta operación. Verificá la conexión antes de continuar.",
+          ),
+        );
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [
+    operationalVersion,
+    operationalReady,
+    user?.id,
+    site,
+    stock,
+    minimumStock,
+    realStock,
+    sales,
+    payments,
+    stockRequests,
+    savedOrders,
+    cashAdjustments,
+    activeShiftBySite,
+    shiftLog,
+    envelopeRecords,
+    stockMovements,
+    expensesLog,
+    returnsLog,
+    incidents,
+    stockAdjustments,
+    audit,
+    cashFieldsBySite,
+    cashOpenBySite,
+  ]);
   const methods = METHODS[site],
     cats = ["Todos", ...Array.from(new Set(PRODUCTS.map((p) => p.category)))],
     [cat, setCat] = useState("Todos");
@@ -1591,7 +1816,8 @@ export default function Home() {
       `Aumento aplicado a ${affected.length} productos para los cinco locales.`,
     );
   };
-  const recordAudit = (action: string, detail: string) =>
+  const recordAudit = (action: string, detail: string) => {
+    operationalEventRef.current = { action, detail };
     setAudit((events) => [
       {
         id: crypto.randomUUID(),
@@ -1602,6 +1828,8 @@ export default function Home() {
       },
       ...events,
     ]);
+    setOperationalVersion((version) => version + 1);
+  };
   const submitStockRequest = () => {
     if (managesCentralOrders)
       return setMessage(
@@ -1893,6 +2121,7 @@ export default function Home() {
     setCart([]);
     setDiscount(0);
     setInvitedQuantities({});
+    recordAudit("Comanda guardada", `${site} · ${order.id.slice(0, 8)}`);
     setMessage("Comanda guardada. Podés continuar otra venta.");
   };
   const loadOrder = (order: SavedOrder) => {
@@ -1904,6 +2133,7 @@ export default function Home() {
     setInvitedQuantities(order.invitedQuantities ?? {});
     setSaleChannel(order.channel);
     setSavedOrders((items) => items.filter((item) => item.id !== order.id));
+    recordAudit("Comanda recuperada", `${site} · ${order.id.slice(0, 8)}`);
     setMessage("Comanda recuperada para continuar el cobro.");
   };
   const registerCashAdjustment = () => {

@@ -42,7 +42,7 @@ function configure_cors(array $config): void
         header('Access-Control-Allow-Origin: ' . $origin);
         header('Access-Control-Allow-Credentials: true');
         header('Access-Control-Allow-Headers: Content-Type, X-Requested-With');
-        header('Access-Control-Allow-Methods: GET, POST, PATCH, OPTIONS');
+        header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, OPTIONS');
         header('Vary: Origin');
     }
     header('X-Content-Type-Options: nosniff');
@@ -175,4 +175,45 @@ function valid_username(string $username): bool
         return false;
     }
     return str_ends_with(mb_strtolower($username, 'UTF-8'), '@lartisantaller.com');
+}
+
+function operational_sites(): array
+{
+    return ['Recoleta', 'Villa Mitre', 'Congreso', 'Maure', 'Novo Pacheco'];
+}
+
+function user_can_access_site(array $user, string $site): bool
+{
+    if (!in_array($site, operational_sites(), true)) {
+        return false;
+    }
+    return $user['role'] !== 'vendedora'
+        || (bool) $user['access_all_locations']
+        || $user['assigned_location'] === $site;
+}
+
+function ensure_operations_schema(PDO $pdo): void
+{
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS operation_site_states (
+            site VARCHAR(80) NOT NULL PRIMARY KEY,
+            state_json LONGTEXT NOT NULL,
+            revision INT UNSIGNED NOT NULL DEFAULT 1,
+            updated_by BIGINT UNSIGNED NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_operation_states_updated (updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS operation_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            site VARCHAR(80) NOT NULL,
+            user_id BIGINT UNSIGNED NULL,
+            event_type VARCHAR(80) NOT NULL,
+            event_json LONGTEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_operation_events_site_date (site, created_at),
+            INDEX idx_operation_events_user_date (user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
 }

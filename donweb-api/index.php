@@ -231,6 +231,75 @@ if ($method === 'POST' && $route === 'auth/confirm-reset-code') {
     json_response(['ok' => true, 'message' => 'Contraseña actualizada. Ya podés ingresar.']);
 }
 
+if ($method === 'GET' && $route === 'operations/states') {
+    $user = require_user($pdo);
+    ensure_operations_schema($pdo);
+    $allowedSites = array_values(array_filter(
+        operational_sites(),
+        static fn (string $site): bool => user_can_access_site($user, $site)
+    ));
+    if (!$allowedSites) {
+        json_response(['ok' => true, 'states' => []]);
+    }
+    $placeholders = implode(',', array_fill(0, count($allowedSites), '?'));
+    $stmt = $pdo->prepare(
+        "SELECT site, state_json, revision, updated_at FROM operation_site_states WHERE site IN ($placeholders)"
+    );
+    $stmt->execute($allowedSites);
+    $states = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $state = json_decode((string) $row['state_json'], true);
+        if (is_array($state)) {
+            $states[$row['site']] = [
+                'state' => $state,
+                'revision' => (int) $row['revision'],
+                'updatedAt' => $row['updated_at'],
+            ];
+        }
+    }
+    json_response(['ok' => true, 'states' => $states]);
+}
+
+if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $matches)) {
+    $user = require_user($pdo);
+    ensure_operations_schema($pdo);
+    $site = rawurldecode($matches[1]);
+    if (!user_can_access_site($user, $site)) {
+        json_response(['ok' => false, 'error' => 'No tenés acceso a este local'], 403);
+    }
+    $body = request_body();
+    $state = $body['state'] ?? null;
+    $eventType = trim((string) ($body['eventType'] ?? 'actualizacion_operativa'));
+    $event = $body['event'] ?? [];
+    if (!is_array($state) || !is_array($event) || $eventType === '' || strlen($eventType) > 80) {
+        json_response(['ok' => false, 'error' => 'Datos operativos inválidos'], 422);
+    }
+    $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $eventJson = json_encode($event, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($stateJson === false || $eventJson === false || strlen($stateJson) > 4_000_000) {
+        json_response(['ok' => false, 'error' => 'La operación supera el tamaño permitido'], 422);
+    }
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare(
+            "INSERT INTO operation_site_states (site, state_json, revision, updated_by)
+             VALUES (?, ?, 1, ?)
+             ON DUPLICATE KEY UPDATE state_json = VALUES(state_json), revision = revision + 1,
+                 updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP"
+        )->execute([$site, $stateJson, $user['id']]);
+        $pdo->prepare(
+            'INSERT INTO operation_events (site, user_id, event_type, event_json) VALUES (?, ?, ?, ?)'
+        )->execute([$site, $user['id'], $eventType, $eventJson]);
+        audit($pdo, (int) $user['id'], 'operational_' . substr($eventType, 0, 48), $site);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    $revision = (int) $pdo->query("SELECT revision FROM operation_site_states WHERE site = " . $pdo->quote($site))->fetchColumn();
+    json_response(['ok' => true, 'revision' => $revision]);
+}
+
 if ($method === 'GET' && $route === 'admin/reset-requests') {
     require_user($pdo, ['administracion']);
     $rows = $pdo->query(
