@@ -272,7 +272,7 @@ const managedUserFromApi = (profile: ApiUser): ManagedUser => {
         ? ADMIN_REPORTS.map((report) => report.id)
         : [],
     actionPermissions: defaultActionPermissions(profile.role),
-    primary: profile.username === "administracion",
+    primary: profile.username === "administracion@lartisantaller.com",
     mustChangePassword: Boolean(
       profile.mustChangePassword ?? profile.must_change_password,
     ),
@@ -298,22 +298,52 @@ const INITIAL_SCHEDULES: EmployeeSchedule[] = SITES.flatMap((site) => [
 ]);
 const GUIDE_UPDATES = [
   {
-    date: "Prueba actual",
-    title: "Apertura obligatoria de caja",
+    date: "Sistema nuevo",
+    title: "Ingreso personal y recuperación",
     detail:
-      "Antes de vender, entrá a Caja, cargá el fondo inicial y presioná Abrir caja.",
+      "Ingresá con tu usuario o correo y tu contraseña. En el primer acceso deberás crear una clave personal. No compartas la contraseña; si la olvidás, usá la recuperación desde la pantalla de ingreso.",
   },
   {
-    date: "Prueba actual",
+    date: "Sistema nuevo",
+    title: "Fichaje, turno y apertura de caja",
+    detail:
+      "Registrá tu fichaje y, antes de vender, entrá a Caja, declará el fondo inicial y abrí la caja con tu usuario. Si cambia la vendedora, cerrá el turno sin cerrar la caja del día.",
+  },
+  {
+    date: "Sistema nuevo",
+    title: "Mostrador, Online y comprobantes",
+    detail:
+      "Antes de cobrar, elegí la lista de precios correcta: Mostrador u Online. Luego seleccioná el medio de pago real y el tipo de comprobante correspondiente.",
+  },
+  {
+    date: "Sistema nuevo",
+    title: "Comandas e invitaciones",
+    detail:
+      "Podés mantener varias comandas abiertas. La invitación se asigna por producto y cantidad, descuenta stock igualmente y queda separada del descuento comercial.",
+  },
+  {
+    date: "Sistema nuevo",
+    title: "Pedidos y recepción de mercadería",
+    detail:
+      "Cuando el stock esté bajo, revisá el pedido sugerido y enviá la solicitud a Central. El stock aumenta recién cuando se confirma la mercadería efectivamente recibida.",
+  },
+  {
+    date: "Sistema nuevo",
     title: "Cierre con control de efectivo",
     detail:
-      "Al finalizar, revisá cada medio de pago, contá el efectivo y cargá el sobre cuando corresponda.",
+      "Antes de cerrar, cobrá todas las comandas. Revisá cada medio de pago, contá el efectivo, cargá el sobre cuando corresponda y explicá cualquier diferencia o ajuste.",
   },
   {
-    date: "Prueba actual",
-    title: "Stock y anulaciones",
+    date: "Sistema nuevo",
+    title: "Stock, anulaciones e incidencias",
     detail:
-      "Una venta descuenta stock. Si anulás una venta, el sistema devuelve su stock y registra la operación.",
+      "Cada venta descuenta stock. Una anulación devuelve las unidades y queda auditada. Registrá faltantes, productos dañados, devoluciones o problemas del local en Incidencias.",
+  },
+  {
+    date: "Sistema nuevo",
+    title: "Contingencia sin internet",
+    detail:
+      "Si se corta internet, usá Contingencia para guardar las operaciones pendientes. Al recuperar conexión, sincronizalas antes de cerrar la caja.",
   },
 ];
 const ADMIN_DEMO_ROWS = [
@@ -537,7 +567,10 @@ const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
     ...profile,
     id: profile.role === "administracion" ? "primary-admin" : `demo-${index}`,
     active: true,
-    username: usernameFromName(profile.name),
+    username:
+      profile.name === "Administración"
+        ? "administracion@lartisantaller.com"
+        : usernameFromName(profile.name),
     email:
       profile.role === "administracion" ||
       profile.name.startsWith("Andrea") ||
@@ -554,7 +587,7 @@ const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
         ? ADMIN_REPORTS.map((report) => report.id)
         : [],
     actionPermissions: defaultActionPermissions(profile.role),
-    primary: profile.role === "administracion",
+    primary: profile.name === "Administración",
   }),
 );
 const raw: [string, string, string, number][] = [
@@ -827,7 +860,9 @@ export default function Home() {
       INITIAL_MANAGED_USERS,
     ),
     [login, setLogin] = useState(
-      portal === "admin" ? "administracion" : usernameFromName("Stefany García"),
+      portal === "admin"
+        ? "administracion@lartisantaller.com"
+        : usernameFromName("Stefany García"),
     ),
     [password, setPassword] = useState(""),
     [user, setUser] = useState<ManagedUser | null>(null),
@@ -1361,8 +1396,10 @@ export default function Home() {
     const cleanName = newUserName.trim();
     if (!cleanName) return setMessage("Ingresá el nombre del nuevo usuario.");
     const cleanUsername = newUserUsername.trim().toLowerCase();
-    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(cleanUsername))
-      return setMessage("Ingresá un usuario válido, por ejemplo nombre.apellido.");
+    const validInternalUsername = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(cleanUsername);
+    const validWorkEmail = /^[a-z0-9._%+-]+@lartisantaller\.com$/.test(cleanUsername);
+    if (!validInternalUsername && !validWorkEmail)
+      return setMessage("Ingresá nombre.apellido o un correo @lartisantaller.com.");
     if (newUserPassword.length < 8)
       return setMessage("La contraseña temporal debe tener al menos 8 caracteres.");
     if (
@@ -2254,7 +2291,7 @@ export default function Home() {
             onChange={(e) => setLogin(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && enter()}
             type="text"
-            placeholder={portal === "admin" ? "administracion" : "nombre.apellido"}
+            placeholder={portal === "admin" ? "administracion@lartisantaller.com" : "nombre.apellido"}
             className="mt-1 w-full rounded-lg border p-3"
           />
           <label className="mt-4 block text-sm font-bold">Contraseña</label>
@@ -4158,17 +4195,20 @@ export default function Home() {
                 <div className="rounded-2xl border bg-white p-6">
                   <h2 className="font-bold">Uso diario</h2>
                   <ol className="mt-4 list-decimal space-y-3 pl-5 text-sm leading-6">
-                    <li>Abrí Caja y confirmá el fondo inicial.</li>
-                    <li>Registrá cada venta con su medio de pago real.</li>
-                    <li>Consultá Stock antes de ofrecer un producto.</li>
-                    <li>
-                      Al cierre, revisá los cobros, contá efectivo y completá el
-                      sobre si tu local lo utiliza.
-                    </li>
-                    <li>
-                      Confirmá el cierre solo cuando la diferencia sea cero.
-                    </li>
+                    <li>Ingresá con tu usuario personal y registrá el fichaje.</li>
+                    <li>Abrí Caja, declarando fondo inicial y responsable.</li>
+                    <li>Elegí Mostrador u Online antes de cargar productos.</li>
+                    <li>Guardá comandas si necesitás atender varias ventas.</li>
+                    <li>Aplicá descuentos o invitaciones por producto cuando corresponda.</li>
+                    <li>Cobrá con el medio real y seleccioná el comprobante correcto.</li>
+                    <li>Registrá egresos, devoluciones o incidencias durante el día.</li>
+                    <li>Revisá Stock y enviá pedidos sugeridos cuando haga falta.</li>
+                    <li>Cerrá o cobrá todas las comandas antes del cierre.</li>
+                    <li>Controlá medios de pago, efectivo, sobre y diferencias antes de confirmar.</li>
                   </ol>
+                  <p className="mt-5 rounded-lg bg-[#eef2f6] p-3 text-xs leading-5 text-slate-600">
+                    Nunca compartas tu contraseña. Si la olvidás, solicitá la recuperación desde la pantalla de ingreso.
+                  </p>
                 </div>
                 <div className="rounded-2xl border bg-white p-6">
                   <h2 className="font-bold">Novedades</h2>
@@ -4812,7 +4852,7 @@ export default function Home() {
                       value={newUserPassword}
                       onChange={(e) => setNewUserPassword(e.target.value)}
                       type="password"
-                      placeholder="Mínimo 10 caracteres"
+                      placeholder="Mínimo 8 caracteres"
                       className="mt-1 block w-full rounded border p-2 font-normal"
                     />
                   </label>
@@ -4863,7 +4903,11 @@ export default function Home() {
                       <tr key={profile.id} className="border-t">
                         <td className="p-3">
                           <b>{profile.name}</b>
-                          <span className="mt-1 block text-xs text-slate-500">@{profile.username}</span>
+                          <span className="mt-1 block text-xs text-slate-500">
+                            {profile.username.includes("@")
+                              ? profile.username
+                              : `@${profile.username}`}
+                          </span>
                           {profile.primary && (
                             <span className="ml-2 rounded bg-[#eef2f6] px-2 py-1 text-xs">
                               Cuenta principal

@@ -165,3 +165,14 @@ function valid_password(string $password): bool
         && preg_match('/\d/', $password)
         && preg_match('/[^a-zA-Z0-9]/', $password);
 }
+
+function valid_username(string $username): bool
+{
+    if (preg_match('/^[a-záéíóúüñ0-9]+(?:\.[a-záéíóúüñ0-9]+)+$/u', $username)) {
+        return true;
+    }
+    if (!filter_var($username, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+    return str_ends_with(mb_strtolower($username, 'UTF-8'), '@lartisantaller.com');
+}

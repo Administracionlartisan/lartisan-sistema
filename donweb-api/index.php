@@ -284,6 +284,9 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!$existing) {
         json_response(['ok' => false, 'error' => 'Usuario no encontrado'], 404);
     }
+    $username = array_key_exists('username', $body)
+        ? mb_strtolower(trim((string) $body['username']), 'UTF-8')
+        : $existing['username'];
     $role = (string) ($body['role'] ?? $existing['role']);
     $location = array_key_exists('assignedLocation', $body)
         ? (trim((string) $body['assignedLocation']) ?: null)
@@ -297,7 +300,11 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!in_array($role, ['vendedora', 'supervisora', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
     }
-    if ($existing['username'] === 'administracion' && ($role !== 'administracion' || !$active)) {
+    if (!valid_username($username)) {
+        json_response(['ok' => false, 'error' => 'Usuario o correo laboral inválido'], 422);
+    }
+    if (in_array($existing['username'], ['administracion', 'administracion@lartisantaller.com'], true)
+        && ($role !== 'administracion' || !$active)) {
         json_response(['ok' => false, 'error' => 'La cuenta principal no puede bloquearse ni cambiar de cargo'], 422);
     }
     if ($role !== 'vendedora') {
@@ -305,8 +312,8 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
         $allLocations = 1;
     }
     $pdo->prepare(
-        'UPDATE users SET role = ?, assigned_location = ?, access_all_locations = ?, active = ? WHERE id = ?'
-    )->execute([$role, $location, $allLocations, $active, $userId]);
+        'UPDATE users SET username = ?, role = ?, assigned_location = ?, access_all_locations = ?, active = ? WHERE id = ?'
+    )->execute([$username, $role, $location, $allLocations, $active, $userId]);
     audit($pdo, (int) $admin['id'], 'user_updated', 'user_id=' . $userId);
     json_response(['ok' => true]);
 }
@@ -329,7 +336,7 @@ if ($method === 'POST' && $route === 'admin/users') {
     $location = trim((string) ($body['assignedLocation'] ?? '')) ?: null;
     $allLocations = !empty($body['accessAllLocations']) ? 1 : 0;
     $temporaryPassword = (string) ($body['temporaryPassword'] ?? '');
-    if (!preg_match('/^[a-záéíóúüñ0-9]+(?:\.[a-záéíóúüñ0-9]+)+$/u', $username)
+    if (!valid_username($username)
         || $fullName === ''
         || !in_array($role, ['vendedora', 'supervisora', 'administracion'], true)
         || !valid_password($temporaryPassword)) {
