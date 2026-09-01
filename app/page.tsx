@@ -949,6 +949,9 @@ export default function Home() {
     [newUserPassword, setNewUserPassword] = useState(""),
     [newUserMfaRequired, setNewUserMfaRequired] = useState(false),
     [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([]),
+    [createdUserCredentials, setCreatedUserCredentials] = useState<
+      { name: string; username: string; password: string } | null
+    >(null),
     [generatedTemporaryPassword, setGeneratedTemporaryPassword] = useState<
       { username: string; password: string } | null
     >(null),
@@ -1657,6 +1660,11 @@ export default function Home() {
       return;
     }
     await loadAdminSecurityData();
+    setCreatedUserCredentials({
+      name: cleanName,
+      username: cleanUsername,
+      password: newUserPassword,
+    });
     setNewUserName("");
     setNewUserUsername("");
     setNewUserEmail("");
@@ -5126,6 +5134,32 @@ export default function Home() {
                     Crear usuario
                   </button>
                 </div>
+                {createdUserCredentials && (
+                  <div className="mt-4 rounded-xl border-2 border-[#e7c26a] bg-[#fff5d8] p-4">
+                    <p className="font-bold text-[#8a5b00]">Usuario creado: guardá estos datos antes de continuar</p>
+                    <p className="mt-2 text-sm"><b>{createdUserCredentials.name}</b> · Usuario: <code>@{createdUserCredentials.username}</code></p>
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <code className="rounded bg-white px-3 py-2 text-base font-bold text-[#183a67]">
+                        {createdUserCredentials.password}
+                      </code>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard
+                            .writeText(createdUserCredentials.password)
+                            .then(() => setMessage("Contraseña copiada al portapapeles."))
+                            .catch(() => setMessage("Copiá la contraseña manualmente."));
+                        }}
+                        className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white"
+                      >
+                        Copiar contraseña
+                      </button>
+                      <button onClick={() => setCreatedUserCredentials(null)} className="text-sm font-bold underline">
+                        Ocultar
+                      </button>
+                    </div>
+                    <p className="mt-3 text-xs text-slate-600">La persona deberá cambiar esta clave en su primer ingreso.</p>
+                  </div>
+                )}
                 {message && (
                   <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
                     {message}
