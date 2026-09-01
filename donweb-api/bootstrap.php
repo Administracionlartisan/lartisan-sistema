@@ -87,9 +87,30 @@ function public_user(array $user): array
         'fullName' => $user['full_name'],
         'role' => $user['role'],
         'assignedLocation' => $user['assigned_location'],
+        'assignedLocations' => assigned_locations($user),
         'accessAllLocations' => (bool) $user['access_all_locations'],
         'mustChangePassword' => (bool) $user['must_change_password'],
     ];
+}
+
+function ensure_user_locations_schema(PDO $pdo): void
+{
+    $column = $pdo->query("SHOW COLUMNS FROM users LIKE 'assigned_locations'")->fetch();
+    if (!$column) {
+        $pdo->exec('ALTER TABLE users ADD COLUMN assigned_locations TEXT NULL AFTER assigned_location');
+    }
+}
+
+function assigned_locations(array $user): array
+{
+    $raw = $user['assigned_locations'] ?? null;
+    $decoded = is_string($raw) ? json_decode($raw, true) : null;
+    $locations = is_array($decoded) ? $decoded : [];
+    $locations = array_values(array_filter($locations, static fn ($site): bool => is_string($site) && in_array($site, operational_sites(), true)));
+    if (!$locations && !empty($user['assigned_location']) && in_array($user['assigned_location'], operational_sites(), true)) {
+        $locations = [$user['assigned_location']];
+    }
+    return $locations;
 }
 
 function current_user(PDO $pdo): ?array
@@ -187,9 +208,8 @@ function user_can_access_site(array $user, string $site): bool
     if (!in_array($site, operational_sites(), true)) {
         return false;
     }
-    return $user['role'] !== 'vendedora'
-        || (bool) $user['access_all_locations']
-        || $user['assigned_location'] === $site;
+    return (bool) $user['access_all_locations']
+        || in_array($site, assigned_locations($user), true);
 }
 
 function ensure_operations_schema(PDO $pdo): void

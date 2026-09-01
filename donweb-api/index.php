@@ -13,6 +13,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $route = trim((string) ($_GET['route'] ?? ''), '/');
 $pdo = db($config);
+ensure_user_locations_schema($pdo);
 $pdo->exec(
     "CREATE TABLE IF NOT EXISTS password_recovery_codes (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -347,7 +348,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     $admin = require_user($pdo, ['administracion']);
     $userId = (int) $matches[1];
     $body = request_body();
-    $stmt = $pdo->prepare('SELECT username, role, assigned_location, access_all_locations, active FROM users WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT username, role, assigned_location, assigned_locations, access_all_locations, active FROM users WHERE id = ?');
     $stmt->execute([$userId]);
     $existing = $stmt->fetch();
     if (!$existing) {
@@ -363,6 +364,11 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     $allLocations = array_key_exists('accessAllLocations', $body)
         ? (!empty($body['accessAllLocations']) ? 1 : 0)
         : (int) $existing['access_all_locations'];
+    $locations = array_key_exists('assignedLocations', $body)
+        ? $body['assignedLocations']
+        : assigned_locations($existing);
+    if (!is_array($locations)) $locations = [];
+    $locations = array_values(array_unique(array_filter($locations, static fn ($site): bool => is_string($site) && in_array($site, operational_sites(), true))));
     $active = array_key_exists('active', $body)
         ? (!empty($body['active']) ? 1 : 0)
         : (int) $existing['active'];
@@ -376,13 +382,15 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
         && ($role !== 'administracion' || !$active)) {
         json_response(['ok' => false, 'error' => 'La cuenta principal no puede bloquearse ni cambiar de cargo'], 422);
     }
-    if ($role !== 'vendedora') {
-        $location = null;
-        $allLocations = 1;
+    if ($allLocations) {
+        $locations = operational_sites();
+    } elseif (!$locations) {
+        json_response(['ok' => false, 'error' => 'Seleccioná al menos un local o Todos los locales'], 422);
     }
+    $location = $locations[0] ?? $location;
     $pdo->prepare(
-        'UPDATE users SET username = ?, role = ?, assigned_location = ?, access_all_locations = ?, active = ? WHERE id = ?'
-    )->execute([$username, $role, $location, $allLocations, $active, $userId]);
+        'UPDATE users SET username = ?, role = ?, assigned_location = ?, assigned_locations = ?, access_all_locations = ?, active = ? WHERE id = ?'
+    )->execute([$username, $role, $location, json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations, $active, $userId]);
     audit($pdo, (int) $admin['id'], 'user_updated', 'user_id=' . $userId);
     json_response(['ok' => true]);
 }
@@ -390,7 +398,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
 if ($method === 'GET' && $route === 'admin/users') {
     require_user($pdo, ['administracion']);
     $rows = $pdo->query(
-        'SELECT id, username, full_name, role, assigned_location, access_all_locations, active, must_change_password, created_at
+        'SELECT id, username, full_name, role, assigned_location, assigned_locations, access_all_locations, active, must_change_password, created_at
          FROM users ORDER BY full_name'
     )->fetchAll();
     json_response(['ok' => true, 'users' => $rows]);
@@ -404,19 +412,23 @@ if ($method === 'POST' && $route === 'admin/users') {
     $role = (string) ($body['role'] ?? '');
     $location = trim((string) ($body['assignedLocation'] ?? '')) ?: null;
     $allLocations = !empty($body['accessAllLocations']) ? 1 : 0;
+    $locations = $body['assignedLocations'] ?? ($location ? [$location] : []);
+    if (!is_array($locations)) $locations = [];
+    $locations = array_values(array_unique(array_filter($locations, static fn ($site): bool => is_string($site) && in_array($site, operational_sites(), true))));
+    if ($allLocations) $locations = operational_sites();
     $temporaryPassword = (string) ($body['temporaryPassword'] ?? '');
     if (!valid_username($username)
         || $fullName === ''
         || !in_array($role, ['vendedora', 'supervisora', 'administracion'], true)
-        || !valid_password($temporaryPassword)) {
+        || !valid_password($temporaryPassword) || !$locations) {
         json_response(['ok' => false, 'error' => 'Los datos del usuario no son válidos'], 422);
     }
     $stmt = $pdo->prepare(
-        'INSERT INTO users (username, full_name, password_hash, role, assigned_location, access_all_locations)
-         VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO users (username, full_name, password_hash, role, assigned_location, assigned_locations, access_all_locations)
+         VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     try {
-        $stmt->execute([$username, $fullName, password_hash($temporaryPassword, PASSWORD_DEFAULT), $role, $location, $allLocations]);
+        $stmt->execute([$username, $fullName, password_hash($temporaryPassword, PASSWORD_DEFAULT), $role, $locations[0], json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations]);
     } catch (PDOException $error) {
         if ((string) $error->getCode() === '23000') {
             json_response(['ok' => false, 'error' => 'Ese nombre de usuario ya existe'], 409);

@@ -14,6 +14,7 @@ type User = {
   name: string;
   role: Role;
   location?: string;
+  locations?: string[];
   accessAllLocations?: boolean;
 };
 type ManagedUser = User & {
@@ -279,6 +280,8 @@ type ApiUser = {
   role: Role;
   assignedLocation?: string | null;
   assigned_location?: string | null;
+  assignedLocations?: string[];
+  assigned_locations?: string | null;
   accessAllLocations?: boolean;
   access_all_locations?: boolean | number;
   active?: boolean | number;
@@ -287,6 +290,17 @@ type ApiUser = {
 };
 const managedUserFromApi = (profile: ApiUser): ManagedUser => {
   const name = profile.fullName || profile.full_name || profile.username;
+  const parsedLocations =
+    typeof profile.assigned_locations === "string"
+      ? (() => {
+          try {
+            const parsed = JSON.parse(profile.assigned_locations);
+            return Array.isArray(parsed) ? parsed.filter((site): site is string => typeof site === "string") : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
   const accessAllLocations = Boolean(
     profile.accessAllLocations ?? profile.access_all_locations,
   );
@@ -298,6 +312,15 @@ const managedUserFromApi = (profile: ApiUser): ManagedUser => {
     role: profile.role,
     location:
       profile.assignedLocation || profile.assigned_location || undefined,
+    locations: Array.isArray(profile.assignedLocations)
+      ? profile.assignedLocations
+      : parsedLocations.length
+        ? parsedLocations
+      : profile.assigned_location
+        ? [profile.assigned_location]
+        : profile.assignedLocation
+          ? [profile.assignedLocation]
+          : [],
     accessAllLocations,
     active: profile.active === undefined ? true : Boolean(profile.active),
     mfaRequired:
@@ -944,6 +967,8 @@ export default function Home() {
     [newUserName, setNewUserName] = useState(""),
     [newUserRole, setNewUserRole] = useState<Role>("vendedora"),
     [newUserSite, setNewUserSite] = useState("Recoleta"),
+    [newUserSites, setNewUserSites] = useState<string[]>(["Recoleta"]),
+    [newUserAllLocations, setNewUserAllLocations] = useState(false),
     [newUserUsername, setNewUserUsername] = useState(""),
     [newUserEmail, setNewUserEmail] = useState(""),
     [newUserPassword, setNewUserPassword] = useState(""),
@@ -1105,8 +1130,9 @@ export default function Home() {
       return false;
     }
     setUser(next);
-    setSite(next.location || "Recoleta");
-    setPayment(METHODS[next.location || "Recoleta"][0]);
+    const initialSite = next.accessAllLocations ? "Recoleta" : next.locations?.[0] || next.location || "Recoleta";
+    setSite(initialSite);
+    setPayment(METHODS[initialSite][0]);
     setTab(next.role === "administracion" ? "Administración" : "Ventas");
     setMessage("");
     return true;
@@ -1649,8 +1675,9 @@ export default function Home() {
         username: cleanUsername,
         fullName: cleanName,
         role: newUserRole,
-        assignedLocation: newUserRole === "vendedora" ? newUserSite : null,
-        accessAllLocations: newUserRole !== "vendedora",
+        assignedLocation: newUserAllLocations ? null : newUserSites[0] || newUserSite,
+        assignedLocations: newUserAllLocations ? SITES : newUserSites,
+        accessAllLocations: newUserAllLocations,
         temporaryPassword: newUserPassword,
       }),
     });
@@ -1669,6 +1696,8 @@ export default function Home() {
     setNewUserUsername("");
     setNewUserEmail("");
     setNewUserPassword("");
+    setNewUserSites(["Recoleta"]);
+    setNewUserAllLocations(false);
     setNewUserMfaRequired(false);
     setMessage(`Usuario ${cleanName} creado y habilitado.`);
   };
@@ -1685,6 +1714,7 @@ export default function Home() {
       body: JSON.stringify({
         role: changes.role,
         assignedLocation: changes.location,
+        assignedLocations: changes.locations,
         accessAllLocations: changes.accessAllLocations,
         active: changes.active,
       }),
@@ -2724,7 +2754,7 @@ export default function Home() {
               <label className="text-xs font-bold text-slate-500">
                 SUCURSAL ACTIVA
               </label>
-              {user.role === "vendedora" && !user.accessAllLocations ? (
+              {user.role === "vendedora" && !user.accessAllLocations && (user.locations?.length || 1) === 1 ? (
                 <p className="mt-2 rounded bg-[#eef2f6] p-2 font-bold">
                   {site}
                 </p>
@@ -2737,7 +2767,7 @@ export default function Home() {
                   }}
                   className="mt-2 w-full rounded border p-2"
                 >
-                  {SITES.map((s) => (
+                  {(user.accessAllLocations ? SITES : user.locations?.length ? user.locations : SITES).map((s) => (
                     <option key={s}>{s}</option>
                   ))}
                 </select>
@@ -5095,19 +5125,37 @@ export default function Home() {
                       <option value="administracion">Administración</option>
                     </select>
                   </label>
-                  <label className="text-sm font-bold">
-                    Local
-                    <select
-                      value={newUserSite}
-                      onChange={(e) => setNewUserSite(e.target.value)}
-                      disabled={newUserRole !== "vendedora"}
-                      className="mt-1 block w-full rounded border p-2 font-normal disabled:bg-slate-100"
-                    >
-                      {SITES.map((local) => (
-                        <option key={local}>{local}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <div className="text-sm font-bold">
+                    Locales asignados
+                    <label className="mt-2 flex items-center gap-2 font-normal">
+                      <input
+                        type="checkbox"
+                        checked={newUserAllLocations}
+                        onChange={(e) => setNewUserAllLocations(e.target.checked)}
+                      />
+                      Todos los locales
+                    </label>
+                    {!newUserAllLocations && (
+                      <div className="mt-2 grid grid-cols-2 gap-1 rounded border p-2 text-xs font-normal">
+                        {SITES.map((local) => (
+                          <label key={local} className="flex items-center gap-1">
+                            <input
+                              type="checkbox"
+                              checked={newUserSites.includes(local)}
+                              onChange={(e) =>
+                                setNewUserSites((items) =>
+                                  e.target.checked
+                                    ? [...items, local]
+                                    : items.filter((item) => item !== local),
+                                )
+                              }
+                            />
+                            {local}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <label className="text-sm font-bold">
                     Contraseña temporal
                     <input
@@ -5212,9 +5260,11 @@ export default function Home() {
                               updateManagedUser(profile.id, {
                                 role,
                                 location:
-                                  role === "vendedora"
-                                    ? profile.location || "Recoleta"
-                                    : undefined,
+                                  profile.location || "Recoleta",
+                                locations:
+                                  profile.locations?.length
+                                    ? profile.locations
+                                    : [profile.location || "Recoleta"],
                                 reportPermissions:
                                   role === "administracion"
                                     ? profile.reportPermissions.length
@@ -5239,28 +5289,34 @@ export default function Home() {
                           </select>
                         </td>
                         <td className="p-3">
-                          {profile.role === "vendedora" ? (
-                            profile.accessAllLocations ? (
-                              <span className="font-bold text-[#183a67]">Todos los locales</span>
-                            ) : (
-                              <select
-                                value={profile.location || "Recoleta"}
-                                onChange={(e) =>
-                                  updateManagedUser(profile.id, {
-                                    location: e.target.value,
-                                  })
-                                }
-                                className="rounded border p-2"
-                              >
-                                {SITES.map((local) => (
-                                  <option key={local}>{local}</option>
-                                ))}
-                              </select>
-                            )
+                          <label className="mb-2 flex items-center gap-2 text-xs font-bold">
+                            <input
+                              type="checkbox"
+                              checked={profile.accessAllLocations}
+                              onChange={(e) =>
+                                updateManagedUser(profile.id, {
+                                  accessAllLocations: e.target.checked,
+                                  locations: e.target.checked ? SITES : profile.locations?.length ? profile.locations : [profile.location || "Recoleta"],
+                                })
+                              }
+                            />
+                            Todos
+                          </label>
+                          {profile.accessAllLocations ? (
+                            <span className="font-bold text-[#183a67]">Todos los locales</span>
                           ) : (
-                            <span className="text-slate-500">
-                              Todos los locales
-                            </span>
+                            <select
+                              multiple
+                              value={profile.locations?.length ? profile.locations : [profile.location || "Recoleta"]}
+                              onChange={(e) => {
+                                const locations = Array.from(e.target.selectedOptions, (option) => option.value);
+                                if (locations.length) updateManagedUser(profile.id, { locations, location: locations[0], accessAllLocations: false });
+                              }}
+                              className="min-w-36 rounded border p-2 text-sm"
+                              title="Mantené presionada Ctrl (o Cmd) para seleccionar varios locales."
+                            >
+                              {SITES.map((local) => <option key={local}>{local}</option>)}
+                            </select>
                           )}
                         </td>
                         <td className="p-3 text-center">
