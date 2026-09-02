@@ -1016,7 +1016,7 @@ export default function Home() {
   );
   const [connectionMode, setConnectionMode] = useState<"En línea" | "Contingencia">("En línea");
   const [pendingSync, setPendingSync] = useState(0);
-  const [backupFrequency, setBackupFrequency] = useState("Semanal");
+  const [backupFrequency, setBackupFrequency] = useState("Dos veces por semana · lunes y jueves 21:00");
   const [retentionYears, setRetentionYears] = useState(7);
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
@@ -1474,7 +1474,10 @@ export default function Home() {
           .map((adjustment) => ({ title: "Aprobar ajuste", detail: `${adjustment.site} · ajuste de inventario.`, action: "Central de pedidos" }))
       : []),
     ...(user?.role === "administracion"
-      ? [{ title: "Revisar alertas operativas", detail: "Controlá cajas, stock, pedidos y comprobantes pendientes.", action: "Administración" }]
+      ? [
+          { title: "Activar respaldos externos", detail: "Pendiente técnico: conectar Drive, proteger la credencial y programar copias los lunes y jueves a las 21:00.", action: "Protección de datos" },
+          { title: "Revisar alertas operativas", detail: "Controlá cajas, stock, pedidos y comprobantes pendientes.", action: "Administración" },
+        ]
       : []),
   ];
   const selectedRequest = stockRequests.find(
@@ -4628,6 +4631,7 @@ export default function Home() {
                   <label className="mt-4 block text-sm font-bold">
                     Frecuencia
                     <select value={backupFrequency} onChange={(event) => setBackupFrequency(event.target.value)} className="mt-1 block w-full rounded border p-2 font-normal">
+                      <option>Dos veces por semana · lunes y jueves 21:00</option>
                       <option>Semanal</option>
                       <option>Cada 15 días</option>
                       <option>Mensual</option>
