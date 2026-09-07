@@ -407,6 +407,20 @@ if ($method === 'GET' && $route === 'admin/users') {
     json_response(['ok' => true, 'users' => $rows]);
 }
 
+if ($method === 'GET' && $route === 'admin/health') {
+    require_user($pdo, ['administracion']);
+    $totalUsers = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+    $activeUsers = (int) $pdo->query('SELECT COUNT(*) FROM users WHERE active = 1')->fetchColumn();
+    $freeBytes = function_exists('disk_free_space') ? @disk_free_space(__DIR__) : false;
+    json_response([
+        'ok' => true,
+        'database' => 'Disponible',
+        'users' => ['total' => $totalUsers, 'active' => $activeUsers],
+        'space' => $freeBytes === false ? null : (int) $freeBytes,
+        'checked_at' => gmdate('c'),
+    ]);
+}
+
 if ($method === 'POST' && $route === 'admin/users') {
     $admin = require_user($pdo, ['administracion']);
     $body = request_body();

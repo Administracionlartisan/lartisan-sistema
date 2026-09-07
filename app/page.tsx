@@ -257,6 +257,10 @@ type OperationalSnapshot = {
 type SystemHealth = {
   api: "Verificando" | "Disponible" | "Sin respuesta";
   checkedAt: string;
+  database?: string;
+  activeUsers?: number;
+  totalUsers?: number;
+  freeSpaceMb?: number | null;
 };
 const EMPTY_CASH_FIELDS: CashFields = {
   fund: 0,
@@ -1060,6 +1064,7 @@ export default function Home() {
   const [retentionYears, setRetentionYears] = useState(7);
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
+  const [healthRefreshKey, setHealthRefreshKey] = useState(0);
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -1239,9 +1244,24 @@ export default function Home() {
     let active = true;
     const check = async () => {
       try {
-        const response = await fetch(`${API_BASE}/health`, { cache: "no-store" });
-        if (!response.ok) throw new Error("health");
-        if (active) setSystemHealth({ api: "Disponible", checkedAt: new Date().toLocaleString("es-AR") });
+        let response = await fetch(`${API_BASE}/admin/health`, { credentials: "include", cache: "no-store" });
+        let data: { database?: string; users?: { active?: number; total?: number }; space?: number };
+        if (response.ok) {
+          data = await response.json();
+        } else {
+          response = await fetch(`${API_BASE}/health`, { cache: "no-store" });
+          if (!response.ok) throw new Error("health");
+          await response.json();
+          data = { database: "Disponible", users: { active: managedUsers.filter((item) => item.active).length, total: managedUsers.length } };
+        }
+        if (active) setSystemHealth({
+          api: "Disponible",
+          database: data.database,
+          activeUsers: data.users?.active,
+          totalUsers: data.users?.total,
+          freeSpaceMb: typeof data.space === "number" ? Math.round(data.space / 1024 / 1024) : null,
+          checkedAt: new Date().toLocaleString("es-AR"),
+        });
       } catch {
         if (active) setSystemHealth({ api: "Sin respuesta", checkedAt: new Date().toLocaleString("es-AR") });
       }
@@ -1249,7 +1269,7 @@ export default function Home() {
     check();
     const timer = window.setInterval(check, 5 * 60 * 1000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [user?.id, user?.role]);
+  }, [user?.id, user?.role, healthRefreshKey, managedUsers]);
   const loadOperationalData = async () => {
     const response = await fetch(`${API_BASE}/operations/states`, {
       credentials: "include",
@@ -5015,17 +5035,25 @@ export default function Home() {
                 <div className="rounded-2xl border bg-white p-5 lg:col-span-2">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <b>Chequeo técnico automático</b>
-                    <span className={`rounded px-3 py-1 text-sm font-bold ${systemHealth.api === "Disponible" ? "bg-[#e7f4e8] text-emerald-800" : systemHealth.api === "Sin respuesta" ? "bg-red-100 text-red-700" : "bg-[#fff5d8] text-amber-800"}`}>
-                      API: {systemHealth.api}
-                    </span>
+                    <button onClick={() => setHealthRefreshKey((value) => value + 1)} className="rounded border px-3 py-1.5 text-sm font-bold">Revisar ahora</button>
                   </div>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Administración verifica la conexión cada cinco minutos. Si la API no responde, se informa aquí para evitar operar sin sincronización.
-                    {systemHealth.checkedAt ? ` Última verificación: ${systemHealth.checkedAt}.` : ""}
-                  </p>
-                  <p className="mt-3 rounded bg-[#eef2f6] p-3 text-sm">
-                    Las alertas por correo y la confirmación de respaldos externos se activarán al conectar Drive y el correo autorizado.
-                  </p>
+                  <p className="mt-2 text-sm text-slate-600">Verifica automáticamente cada cinco minutos y permite una revisión manual.</p>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {[
+                      ["API y base de datos", systemHealth.api === "Disponible" ? `Correcto · ${systemHealth.database || "Disponible"}` : systemHealth.api, systemHealth.api === "Disponible"],
+                      ["Usuarios", systemHealth.activeUsers === undefined ? "Verificando" : `${systemHealth.activeUsers} activos de ${systemHealth.totalUsers}`, systemHealth.activeUsers !== undefined],
+                      ["Espacio disponible", systemHealth.freeSpaceMb === undefined ? "Verificando" : systemHealth.freeSpaceMb === null ? "No informado por hosting" : `${systemHealth.freeSpaceMb.toLocaleString("es-AR")} MB libres`, systemHealth.freeSpaceMb !== undefined && systemHealth.freeSpaceMb !== null],
+                      ["Respaldo externo", "Pendiente de conectar Drive", false],
+                      ["Google Drive", "Sin configurar", false],
+                      ["Correo de alertas", "Sin configurar", false],
+                      ["ARCA", "Pendiente de integración", false],
+                    ].map(([label, status, ok]) => (
+                      <div key={String(label)} className={`rounded border p-3 text-sm ${ok ? "border-emerald-200 bg-[#e7f4e8]" : "border-[#e7c26a] bg-[#fff5d8]"}`}>
+                        <b>{label}</b><br /><span>{status}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {systemHealth.checkedAt && <p className="mt-3 text-xs text-slate-500">Última revisión: {systemHealth.checkedAt}.</p>}
                 </div>
               </div>
             </>
