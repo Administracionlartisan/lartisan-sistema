@@ -67,6 +67,7 @@ type CashAdjustment = {
   amount: number;
   detail: string;
   at: string;
+  atISO?: string;
   createdBy: string;
   impact?: "Ingreso" | "Egreso";
 };
@@ -82,6 +83,7 @@ type CashLedgerEntry = {
   reference?: string;
   detail: string;
   at: string;
+  atISO?: string;
   createdBy: string;
 };
 type CashShift = {
@@ -115,6 +117,7 @@ type StockMovement = {
   remito: string;
   detail: string;
   at: string;
+  atISO?: string;
   createdBy: string;
 };
 type EnvelopeRecord = {
@@ -1437,6 +1440,7 @@ export default function Home() {
       site,
       shiftId: activeShift?.id,
       at: new Date().toLocaleString("es-AR"),
+      atISO: new Date().toISOString(),
       createdBy: user?.name || "Sistema",
       ...entry,
     };
@@ -2237,6 +2241,7 @@ export default function Home() {
       amount: cashAdjustmentAmount,
       detail: cashAdjustmentDetail.trim(),
       at: new Date().toLocaleString("es-AR"),
+      atISO: new Date().toISOString(),
       createdBy: user.name,
       impact: cashAdjustmentKind === "Ajuste de caja" ? cashAdjustmentImpact : cashAdjustmentKind === "Retiro de caja" ? "Egreso" : "Ingreso",
     };
@@ -2269,6 +2274,7 @@ export default function Home() {
       remito: movementRemito.trim(),
       detail: movementDetail.trim(),
       at: new Date().toLocaleString("es-AR"),
+      atISO: new Date().toISOString(),
       createdBy: user.name,
     };
     setStock((items) => ({
@@ -2632,6 +2638,7 @@ export default function Home() {
         cashImpact: fund,
         detail: "Fondo inicial declarado",
         at: shift.openedAt,
+        atISO: new Date().toISOString(),
         createdBy: user.name,
       },
       ...items,

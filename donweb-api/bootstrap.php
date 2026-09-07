@@ -236,4 +236,212 @@ function ensure_operations_schema(PDO $pdo): void
             INDEX idx_operation_events_user_date (user_id, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+    ensure_normalized_operations_schema($pdo);
+}
+
+function ensure_normalized_operations_schema(PDO $pdo): void
+{
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS lartisan_sales (
+            id CHAR(36) NOT NULL PRIMARY KEY,
+            site VARCHAR(80) NOT NULL,
+            occurred_at DATETIME NULL,
+            gross_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+            discount_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+            net_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+            payment_method VARCHAR(120) NULL,
+            invoice_type VARCHAR(80) NULL,
+            customer_name VARCHAR(180) NULL,
+            channel VARCHAR(40) NULL,
+            status VARCHAR(30) NOT NULL DEFAULT 'activa',
+            invitation TINYINT(1) NOT NULL DEFAULT 0,
+            synced_by BIGINT UNSIGNED NULL,
+            synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_lartisan_sales_site_date (site, occurred_at),
+            INDEX idx_lartisan_sales_status (site, status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS lartisan_sale_items (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            sale_id CHAR(36) NOT NULL,
+            line_number SMALLINT UNSIGNED NOT NULL,
+            product_id INT UNSIGNED NOT NULL,
+            product_name VARCHAR(190) NOT NULL,
+            presentation VARCHAR(190) NULL,
+            quantity INT UNSIGNED NOT NULL,
+            invited_quantity INT UNSIGNED NOT NULL DEFAULT 0,
+            unit_price DECIMAL(14,2) NOT NULL DEFAULT 0,
+            UNIQUE KEY uq_lartisan_sale_item_line (sale_id, line_number),
+            INDEX idx_lartisan_sale_items_product (product_id),
+            CONSTRAINT fk_lartisan_sale_items_sale FOREIGN KEY (sale_id) REFERENCES lartisan_sales(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS lartisan_sale_payments (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            sale_id CHAR(36) NOT NULL,
+            payment_method VARCHAR(120) NOT NULL,
+            amount DECIMAL(14,2) NOT NULL,
+            corrected_at DATETIME NULL,
+            UNIQUE KEY uq_lartisan_sale_payment_method (sale_id, payment_method),
+            CONSTRAINT fk_lartisan_sale_payments_sale FOREIGN KEY (sale_id) REFERENCES lartisan_sales(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS lartisan_cash_sessions (
+            id CHAR(36) NOT NULL PRIMARY KEY,
+            site VARCHAR(80) NOT NULL,
+            opened_at DATETIME NULL,
+            opened_by VARCHAR(190) NULL,
+            initial_fund DECIMAL(14,2) NOT NULL DEFAULT 0,
+            closed_at DATETIME NULL,
+            closed_by VARCHAR(190) NULL,
+            synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_lartisan_cash_sessions_site_opened (site, opened_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS lartisan_cash_movements (
+            id CHAR(36) NOT NULL PRIMARY KEY,
+            site VARCHAR(80) NOT NULL,
+            session_id CHAR(36) NULL,
+            occurred_at DATETIME NULL,
+            kind VARCHAR(120) NOT NULL,
+            direction VARCHAR(20) NOT NULL,
+            amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+            cash_impact DECIMAL(14,2) NOT NULL DEFAULT 0,
+            payment_method VARCHAR(120) NULL,
+            reference_id CHAR(36) NULL,
+            detail VARCHAR(500) NULL,
+            created_by VARCHAR(190) NULL,
+            INDEX idx_lartisan_cash_movements_site_date (site, occurred_at),
+            INDEX idx_lartisan_cash_movements_session (session_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS lartisan_stock_movements (
+            id CHAR(36) NOT NULL PRIMARY KEY,
+            site VARCHAR(80) NOT NULL,
+            product_id INT UNSIGNED NOT NULL,
+            movement_type VARCHAR(40) NOT NULL,
+            quantity INT NOT NULL,
+            remito VARCHAR(180) NULL,
+            detail VARCHAR(500) NULL,
+            occurred_at DATETIME NULL,
+            created_by VARCHAR(190) NULL,
+            INDEX idx_lartisan_stock_movements_site_product_date (site, product_id, occurred_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+}
+
+function iso_datetime(?string $value): ?string
+{
+    if (!$value) return null;
+    try {
+        return (new DateTimeImmutable($value))->format('Y-m-d H:i:s');
+    } catch (Throwable $error) {
+        return null;
+    }
+}
+
+function sync_normalized_operations(PDO $pdo, string $site, array $state, int $userId): void
+{
+    $saleStatement = $pdo->prepare(
+        "INSERT INTO lartisan_sales
+        (id, site, occurred_at, gross_amount, discount_amount, net_amount, payment_method, invoice_type, customer_name, channel, status, invitation, synced_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE site=VALUES(site), occurred_at=VALUES(occurred_at), gross_amount=VALUES(gross_amount),
+        discount_amount=VALUES(discount_amount), net_amount=VALUES(net_amount), payment_method=VALUES(payment_method),
+        invoice_type=VALUES(invoice_type), customer_name=VALUES(customer_name), channel=VALUES(channel), status=VALUES(status),
+        invitation=VALUES(invitation), synced_by=VALUES(synced_by)"
+    );
+    $deleteItems = $pdo->prepare('DELETE FROM lartisan_sale_items WHERE sale_id = ?');
+    $insertItem = $pdo->prepare(
+        'INSERT INTO lartisan_sale_items (sale_id, line_number, product_id, product_name, presentation, quantity, invited_quantity, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $deletePayments = $pdo->prepare('DELETE FROM lartisan_sale_payments WHERE sale_id = ?');
+    $insertPayment = $pdo->prepare('INSERT INTO lartisan_sale_payments (sale_id, payment_method, amount) VALUES (?, ?, ?)');
+
+    foreach (($state['sales'] ?? []) as $sale) {
+        if (!is_array($sale) || empty($sale['id'])) continue;
+        $saleStatement->execute([
+            (string) $sale['id'], $site, iso_datetime($sale['createdAtISO'] ?? null), (float) ($sale['gross'] ?? 0),
+            (float) ($sale['discount'] ?? 0), (float) ($sale['net'] ?? 0), (string) ($sale['method'] ?? ''),
+            (string) ($sale['invoiceType'] ?? ''), (string) ($sale['customer'] ?? ''), (string) ($sale['channel'] ?? ''),
+            (string) ($sale['status'] ?? 'activa'), !empty($sale['invitation']) ? 1 : 0, $userId,
+        ]);
+        $deleteItems->execute([(string) $sale['id']]);
+        $lines = [];
+        foreach (($sale['items'] ?? []) as $item) {
+            if (!is_array($item) || !isset($item['id'])) continue;
+            $productId = (int) $item['id'];
+            if (!isset($lines[$productId])) $lines[$productId] = ['item' => $item, 'quantity' => 0];
+            $lines[$productId]['quantity']++;
+        }
+        $lineNumber = 1;
+        foreach ($lines as $productId => $line) {
+            $item = $line['item'];
+            $invited = min((int) $line['quantity'], (int) (($sale['invitedQuantities'] ?? [])[$productId] ?? 0));
+            $insertItem->execute([
+                (string) $sale['id'], $lineNumber++, $productId, (string) ($item['name'] ?? ''),
+                (string) ($item['detail'] ?? ''), (int) $line['quantity'], $invited, (float) ($item['price'] ?? 0),
+            ]);
+        }
+        $deletePayments->execute([(string) $sale['id']]);
+        foreach (($state['payments'] ?? []) as $payment) {
+            if (!is_array($payment) || ($payment['saleId'] ?? null) !== $sale['id']) continue;
+            $insertPayment->execute([(string) $sale['id'], (string) ($payment['method'] ?? ''), (float) ($payment['amount'] ?? 0)]);
+        }
+    }
+
+    $sessionStatement = $pdo->prepare(
+        "INSERT INTO lartisan_cash_sessions (id, site, opened_at, opened_by, initial_fund, closed_at, closed_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE opened_at=VALUES(opened_at), opened_by=VALUES(opened_by), initial_fund=VALUES(initial_fund),
+        closed_at=VALUES(closed_at), closed_by=VALUES(closed_by)"
+    );
+    $sessions = [];
+    foreach (($state['shiftLog'] ?? []) as $session) if (is_array($session) && !empty($session['id'])) $sessions[$session['id']] = $session;
+    if (!empty($state['activeShift']['id'])) $sessions[$state['activeShift']['id']] = $state['activeShift'];
+    foreach ($sessions as $session) {
+        $sessionStatement->execute([
+            (string) $session['id'], $site, iso_datetime($session['openedAt'] ?? null), (string) ($session['openedBy'] ?? ''),
+            (float) ($session['initialFund'] ?? 0), iso_datetime($session['closedAt'] ?? null), (string) ($session['closedBy'] ?? ''),
+        ]);
+    }
+
+    $cashStatement = $pdo->prepare(
+        "INSERT INTO lartisan_cash_movements
+        (id, site, session_id, occurred_at, kind, direction, amount, cash_impact, payment_method, reference_id, detail, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE session_id=VALUES(session_id), occurred_at=VALUES(occurred_at), kind=VALUES(kind),
+        direction=VALUES(direction), amount=VALUES(amount), cash_impact=VALUES(cash_impact), payment_method=VALUES(payment_method),
+        reference_id=VALUES(reference_id), detail=VALUES(detail), created_by=VALUES(created_by)"
+    );
+    foreach (($state['cashLedger'] ?? []) as $movement) {
+        if (!is_array($movement) || empty($movement['id'])) continue;
+        $cashStatement->execute([
+            (string) $movement['id'], $site, $movement['shiftId'] ?? null, iso_datetime($movement['atISO'] ?? null),
+            (string) ($movement['kind'] ?? ''), (string) ($movement['direction'] ?? 'Informativo'),
+            (float) ($movement['amount'] ?? 0), (float) ($movement['cashImpact'] ?? 0),
+            $movement['paymentMethod'] ?? null, $movement['reference'] ?? null, (string) ($movement['detail'] ?? ''),
+            (string) ($movement['createdBy'] ?? ''),
+        ]);
+    }
+
+    $stockStatement = $pdo->prepare(
+        "INSERT INTO lartisan_stock_movements (id, site, product_id, movement_type, quantity, remito, detail, occurred_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE movement_type=VALUES(movement_type), quantity=VALUES(quantity), remito=VALUES(remito),
+        detail=VALUES(detail), occurred_at=VALUES(occurred_at), created_by=VALUES(created_by)"
+    );
+    foreach (($state['stockMovements'] ?? []) as $movement) {
+        if (!is_array($movement) || empty($movement['id'])) continue;
+        $stockStatement->execute([
+            (string) $movement['id'], $site, (int) ($movement['productId'] ?? 0), (string) ($movement['kind'] ?? ''),
+            (int) ($movement['quantity'] ?? 0), (string) ($movement['remito'] ?? ''), (string) ($movement['detail'] ?? ''),
+            iso_datetime($movement['atISO'] ?? null), (string) ($movement['createdBy'] ?? ''),
+        ]);
+    }
 }

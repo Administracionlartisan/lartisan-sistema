@@ -291,6 +291,7 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
         $pdo->prepare(
             'INSERT INTO operation_events (site, user_id, event_type, event_json) VALUES (?, ?, ?, ?)'
         )->execute([$site, $user['id'], $eventType, $eventJson]);
+        sync_normalized_operations($pdo, $site, $state, (int) $user['id']);
         audit($pdo, (int) $user['id'], 'operational_' . substr($eventType, 0, 48), $site);
         $pdo->commit();
     } catch (Throwable $error) {
