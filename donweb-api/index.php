@@ -421,6 +421,40 @@ if ($method === 'GET' && $route === 'admin/health') {
     ]);
 }
 
+if ($method === 'GET' && $route === 'admin/backups/latest') {
+    require_user($pdo, ['administracion']);
+    $pdo->exec("CREATE TABLE IF NOT EXISTS backup_runs (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, started_at DATETIME NOT NULL, finished_at DATETIME NULL,
+        status VARCHAR(30) NOT NULL, filename VARCHAR(255) NOT NULL, size_bytes BIGINT UNSIGNED NULL,
+        sha256 CHAR(64) NULL, drive_file_id VARCHAR(255) NULL, error_message VARCHAR(1000) NULL,
+        INDEX idx_backup_runs_started (started_at), INDEX idx_backup_runs_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $latest = $pdo->query('SELECT started_at, finished_at, status, filename, size_bytes, error_message FROM backup_runs ORDER BY id DESC LIMIT 1')->fetch();
+    json_response(['ok' => true, 'backup' => $latest ?: null]);
+}
+
+if ($method === 'POST' && $route === 'admin/backups/run') {
+    $admin = require_user($pdo, ['administracion']);
+    $pdo->exec("CREATE TABLE IF NOT EXISTS backup_runs (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, started_at DATETIME NOT NULL, finished_at DATETIME NULL,
+        status VARCHAR(30) NOT NULL, filename VARCHAR(255) NOT NULL, size_bytes BIGINT UNSIGNED NULL,
+        sha256 CHAR(64) NULL, drive_file_id VARCHAR(255) NULL, error_message VARCHAR(1000) NULL,
+        INDEX idx_backup_runs_started (started_at), INDEX idx_backup_runs_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $last = $pdo->query("SELECT started_at FROM backup_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
+    if ($last) json_response(['ok' => false, 'error' => 'Ya hay un respaldo iniciado hace menos de cinco minutos.'], 429);
+    if (!function_exists('exec') || !defined('PHP_BINARY') || PHP_BINARY === '') {
+        json_response(['ok' => false, 'error' => 'El hosting no permite iniciar respaldos bajo demanda.'], 503);
+    }
+    $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/backup.php') . ' run 2>&1';
+    $output = [];
+    $exitCode = 1;
+    exec($command, $output, $exitCode);
+    audit($pdo, (int) $admin['id'], 'backup_before_update', 'resultado=' . $exitCode);
+    if ($exitCode !== 0) json_response(['ok' => false, 'error' => 'El respaldo previo no se pudo verificar. No publiques una actualización.', 'detail' => implode("\n", array_slice($output, -3))], 500);
+    json_response(['ok' => true, 'message' => 'Respaldo previo verificado y enviado a Drive.']);
+}
+
 if ($method === 'POST' && $route === 'admin/users') {
     $admin = require_user($pdo, ['administracion']);
     $body = request_body();

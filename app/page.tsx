@@ -1092,6 +1092,8 @@ export default function Home() {
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
+  const [preUpdateStatus, setPreUpdateStatus] = useState("Aún no se preparó una actualización.");
+  const [preUpdateReady, setPreUpdateReady] = useState(false);
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -2900,6 +2902,22 @@ export default function Home() {
     setCashLedger((items) => [{ id: crypto.randomUUID(), site: destinationSite, shiftId: activeShiftBySite[destinationSite]?.id, kind: "Transferencia recibida", direction: "Ingreso", amount: transfer.amount, cashImpact: transfer.amount, paymentMethod: "Efectivo", reference: transfer.id, detail: `${transfer.originSite} · ${transfer.reason}`, at: new Date().toLocaleString("es-AR"), atISO: new Date().toISOString(), createdBy: user.name }, ...items]);
     recordAudit("Transferencia de caja recibida", `${transfer.originSite} a ${transfer.destination} · ${money.format(transfer.amount)}`);
     setMessage("Transferencia confirmada y conciliada en el libro mayor.");
+  };
+  const prepareUpdate = async () => {
+    if (user?.role !== "administracion") return;
+    setPreUpdateReady(false);
+    setPreUpdateStatus("Generando respaldo previo y verificando el sistema…");
+    try {
+      const response = await fetch(`${API_BASE}/admin/backups/run`, { method: "POST", credentials: "include" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "No se pudo generar el respaldo previo.");
+      setHealthRefreshKey((value) => value + 1);
+      setPreUpdateReady(true);
+      setPreUpdateStatus("Respaldo previo verificado en Drive. La próxima publicación puede realizarse fuera del horario de ventas.");
+      recordAudit("Actualización preparada", "Respaldo previo verificado antes de publicar una versión.");
+    } catch (error) {
+      setPreUpdateStatus(error instanceof Error ? error.message : "No se pudo preparar la actualización.");
+    }
   };
   const syncContingency = () => {
     if (connectionMode === "Contingencia")
@@ -5196,6 +5214,13 @@ export default function Home() {
                 <div className="rounded-2xl border bg-white p-5"><b>3. Vuelta atrás</b><p className="mt-2 text-sm text-slate-600">Si una actualización falla, se restaura la versión anterior y el respaldo verificado. No se edita la producción directamente.</p></div>
               </div>
               <div className="mt-5 max-w-5xl rounded-2xl border border-[#e7c26a] bg-[#fff5d8] p-5 text-sm"><b>Estado operativo:</b> el procedimiento y los archivos de recuperación están preparados. La ejecución de una actualización queda limitada a Administración y debe realizarse fuera del horario de venta, luego de confirmar el respaldo.</div>
+              <div className={`mt-5 max-w-5xl rounded-2xl border p-5 ${preUpdateReady ? "border-emerald-200 bg-[#eef5ef]" : "border-[#d9d4c9] bg-white"}`}>
+                <b>Preparar próxima actualización</b>
+                <p className="mt-2 text-sm text-slate-600">Genera un respaldo puntual de MySQL, lo verifica y lo envía a Drive antes de publicar. Si el respaldo falla, la publicación debe detenerse.</p>
+                <button onClick={prepareUpdate} className="mt-4 rounded bg-[#183a67] px-4 py-2 font-bold text-white">Generar respaldo previo y validar</button>
+                <p className="mt-3 text-sm font-semibold">{preUpdateStatus}</p>
+                {preUpdateReady && <p className="mt-2 text-xs text-slate-600">Luego de publicar, usá “Revisar ahora” en Protección de datos. La reversión de una versión se ejecuta únicamente desde el historial protegido de publicación; nunca desde las cuentas de los locales.</p>}
+              </div>
             </>
           ) : tab === "Integraciones" && user.role === "administracion" ? (
             <>
