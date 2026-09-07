@@ -254,6 +254,10 @@ type OperationalSnapshot = {
   cash?: CashFields;
   cashOpen?: boolean;
 };
+type SystemHealth = {
+  api: "Verificando" | "Disponible" | "Sin respuesta";
+  checkedAt: string;
+};
 const EMPTY_CASH_FIELDS: CashFields = {
   fund: 0,
   expenses: 0,
@@ -969,6 +973,11 @@ export default function Home() {
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
     [payment, setPayment] = useState("Efectivo"),
+    [splitPayment, setSplitPayment] = useState(false),
+    [splitPayments, setSplitPayments] = useState<Payment[]>([
+      { method: "Efectivo", amount: 0 },
+      { method: "Transferencia", amount: 0 },
+    ]),
     [saleChannel, setSaleChannel] = useState<"Mostrador" | "Online">(
       "Mostrador",
     ),
@@ -1050,6 +1059,7 @@ export default function Home() {
   const [backupFrequency, setBackupFrequency] = useState("Dos veces por semana · lunes y jueves 21:00");
   const [retentionYears, setRetentionYears] = useState(7);
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
+  const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -1223,6 +1233,22 @@ export default function Home() {
         setMessage("No se pudieron actualizar usuarios y recuperaciones."),
       );
     }
+  }, [user?.id, user?.role]);
+  useEffect(() => {
+    if (user?.role !== "administracion") return;
+    let active = true;
+    const check = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/health`, { cache: "no-store" });
+        if (!response.ok) throw new Error("health");
+        if (active) setSystemHealth({ api: "Disponible", checkedAt: new Date().toLocaleString("es-AR") });
+      } catch {
+        if (active) setSystemHealth({ api: "Sin respuesta", checkedAt: new Date().toLocaleString("es-AR") });
+      }
+    };
+    check();
+    const timer = window.setInterval(check, 5 * 60 * 1000);
+    return () => { active = false; window.clearInterval(timer); };
   }, [user?.id, user?.role]);
   const loadOperationalData = async () => {
     const response = await fetch(`${API_BASE}/operations/states`, {
@@ -1424,6 +1450,7 @@ export default function Home() {
   const discountableTotal = total - invitationTotal;
   const discountAmount = Math.round((discountableTotal * discount) / 100);
   const net = discountableTotal - discountAmount;
+  const splitPaymentTotal = splitPayments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const totals = methods.map((method) => ({
     method,
     amount: payments
@@ -2406,6 +2433,11 @@ export default function Home() {
     if (!cashIsOpen)
       return setMessage("Primero tenés que abrir la caja de este local.");
     if (!cart.length) return setMessage("Agregá productos a la venta.");
+    const currentPayments = splitPayment
+      ? splitPayments.filter((item) => item.amount > 0)
+      : [{ method: payment, amount: net }];
+    if (!currentPayments.length || Math.round(currentPayments.reduce((sum, item) => sum + item.amount, 0)) !== net)
+      return setMessage("El total de los medios de pago debe coincidir con el total de la venta.");
     if (discount > siteLimits.maxDiscount)
       return setMessage(
         `El descuento supera el máximo autorizado de ${siteLimits.maxDiscount}% para ${site}.`,
@@ -2419,7 +2451,7 @@ export default function Home() {
       gross: total,
       discount: total - net,
       net,
-      method: payment,
+      method: splitPayment ? "Múltiple" : payment,
       invoiceType,
       customer,
       invitation,
@@ -2429,18 +2461,20 @@ export default function Home() {
     };
     setPayments((x) => [
       ...x,
-      { method: payment, amount: net, saleId: sale.id },
+      ...currentPayments.map((item) => ({ ...item, saleId: sale.id })),
     ]);
     setSales((x) => [sale, ...x]);
-    appendCashLedgerEntry({
-      kind: invitation ? "Invitación" : "Venta",
-      direction: payment === "Efectivo" ? "Ingreso" : "Informativo",
-      amount: net,
-      cashImpact: payment === "Efectivo" ? net : 0,
-      paymentMethod: payment,
-      reference: sale.id,
-      detail: `${invoiceType} · ${customer}`,
-    });
+    currentPayments.forEach((item) =>
+      appendCashLedgerEntry({
+        kind: invitation ? "Invitación" : "Venta",
+        direction: item.method === "Efectivo" ? "Ingreso" : "Informativo",
+        amount: item.amount,
+        cashImpact: item.method === "Efectivo" ? item.amount : 0,
+        paymentMethod: item.method,
+        reference: sale.id,
+        detail: `${invoiceType} · ${customer}`,
+      }),
+    );
     if (connectionMode === "Contingencia") setPendingSync((value) => value + 1);
     setStock((x) => {
       const a = { ...x[site] };
@@ -2462,34 +2496,39 @@ export default function Home() {
       }),
     );
     setMessage(
-      `${invitation ? "Invitación registrada" : "Venta registrada"}: ${money.format(net)} · ${invoiceType} · ${payment}.`,
+      `${invitation ? "Invitación registrada" : "Venta registrada"}: ${money.format(net)} · ${invoiceType} · ${splitPayment ? "cobro múltiple" : payment}.`,
     );
     recordAudit(
       "Venta registrada",
-      `${sale.id.slice(0, 8)} · ${money.format(net)} · ${payment}`,
+      `${sale.id.slice(0, 8)} · ${money.format(net)} · ${splitPayment ? "cobro múltiple" : payment}`,
     );
     setCart([]);
     setDiscount(0);
     setInvitedQuantities({});
+    setSplitPayment(false);
+    setSplitPayments([{ method: "Efectivo", amount: 0 }, { method: "Transferencia", amount: 0 }]);
     setCustomer("Consumidor final");
   };
   const cancelSale = (sale: Sale) => {
     if (!can("anular"))
       return setMessage("Tu usuario no tiene permiso para anular ventas.");
     if (sale.status === "anulada") return;
+    const salePayments = payments.filter((item) => item.saleId === sale.id);
     setSales((items) =>
       items.map((x) => (x.id === sale.id ? { ...x, status: "anulada" } : x)),
     );
     setPayments((items) => items.filter((x) => x.saleId !== sale.id));
-    appendCashLedgerEntry({
-      kind: "Anulación de venta",
-      direction: sale.method === "Efectivo" ? "Egreso" : "Informativo",
-      amount: sale.net,
-      cashImpact: sale.method === "Efectivo" ? -sale.net : 0,
-      paymentMethod: sale.method,
-      reference: sale.id,
-      detail: "Reversión de cobro por venta anulada",
-    });
+    salePayments.forEach((item) =>
+      appendCashLedgerEntry({
+        kind: "Anulación de venta",
+        direction: item.method === "Efectivo" ? "Egreso" : "Informativo",
+        amount: item.amount,
+        cashImpact: item.method === "Efectivo" ? -item.amount : 0,
+        paymentMethod: item.method,
+        reference: sale.id,
+        detail: "Reversión de cobro por venta anulada",
+      }),
+    );
     setStock((x) => {
       const next = { ...x[site] };
       sale.items.forEach((p) => (next[p.id] += 1));
@@ -3299,12 +3338,56 @@ export default function Home() {
                   <select
                     value={payment}
                     onChange={(e) => setPayment(e.target.value)}
+                    disabled={splitPayment}
                     className="mt-1 w-full rounded border p-2"
                   >
                     {methods.map((m) => (
                       <option key={m}>{m}</option>
                     ))}
                   </select>
+                  <label className="mt-3 flex items-center gap-2 text-sm font-bold">
+                    <input
+                      type="checkbox"
+                      checked={splitPayment}
+                      onChange={(event) => setSplitPayment(event.target.checked)}
+                    />
+                    Cobro con varios medios de pago
+                  </label>
+                  {splitPayment && (
+                    <div className="mt-2 rounded border bg-[#eef2f6] p-3">
+                      <p className="text-xs font-bold">Distribuí el total entre los medios usados.</p>
+                      {splitPayments.map((item, index) => (
+                        <div key={index} className="mt-2 grid grid-cols-[1fr_.7fr_auto] gap-2">
+                          <select
+                            value={item.method}
+                            onChange={(event) => setSplitPayments((items) => items.map((current, position) => position === index ? { ...current, method: event.target.value } : current))}
+                            className="rounded border p-2 text-sm"
+                          >
+                            {methods.map((method) => <option key={method}>{method}</option>)}
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            value={item.amount || ""}
+                            onChange={(event) => setSplitPayments((items) => items.map((current, position) => position === index ? { ...current, amount: Number(event.target.value) } : current))}
+                            placeholder="Importe"
+                            className="rounded border p-2 text-sm"
+                          />
+                          <button
+                            onClick={() => setSplitPayments((items) => items.length > 2 ? items.filter((_, position) => position !== index) : items)}
+                            className="text-xs underline"
+                          >Quitar</button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => setSplitPayments((items) => [...items, { method: methods[0], amount: 0 }])}
+                        className="mt-3 text-sm font-bold text-[#183a67] underline"
+                      >+ Agregar medio</button>
+                      <p className={`mt-2 text-xs font-bold ${Math.round(splitPaymentTotal) === net ? "text-emerald-700" : "text-red-600"}`}>
+                        Cargado {money.format(splitPaymentTotal)} · debe totalizar {money.format(net)}
+                      </p>
+                    </div>
+                  )}
                   <p className="mt-1 text-xs text-slate-500">
                     Tarifa aplicada: {isOnlineChannel ? "online" : "local"}.
                   </p>
@@ -4927,6 +5010,21 @@ export default function Home() {
                   </p>
                   <p className="mt-4 rounded bg-[#fff5d8] p-3 text-sm">
                     Pendiente técnico: conectar D1/base de datos, Drive y envío de correo. Esta pantalla ya deja definida la política operativa.
+                  </p>
+                </div>
+                <div className="rounded-2xl border bg-white p-5 lg:col-span-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <b>Chequeo técnico automático</b>
+                    <span className={`rounded px-3 py-1 text-sm font-bold ${systemHealth.api === "Disponible" ? "bg-[#e7f4e8] text-emerald-800" : systemHealth.api === "Sin respuesta" ? "bg-red-100 text-red-700" : "bg-[#fff5d8] text-amber-800"}`}>
+                      API: {systemHealth.api}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Administración verifica la conexión cada cinco minutos. Si la API no responde, se informa aquí para evitar operar sin sincronización.
+                    {systemHealth.checkedAt ? ` Última verificación: ${systemHealth.checkedAt}.` : ""}
+                  </p>
+                  <p className="mt-3 rounded bg-[#eef2f6] p-3 text-sm">
+                    Las alertas por correo y la confirmación de respaldos externos se activarán al conectar Drive y el correo autorizado.
                   </p>
                 </div>
               </div>
