@@ -68,6 +68,21 @@ type CashAdjustment = {
   detail: string;
   at: string;
   createdBy: string;
+  impact?: "Ingreso" | "Egreso";
+};
+type CashLedgerEntry = {
+  id: string;
+  site: string;
+  shiftId?: string;
+  kind: string;
+  direction: "Ingreso" | "Egreso" | "Informativo";
+  amount: number;
+  cashImpact: number;
+  paymentMethod?: string;
+  reference?: string;
+  detail: string;
+  at: string;
+  createdBy: string;
 };
 type CashShift = {
   id: string;
@@ -213,6 +228,7 @@ type OperationalSnapshot = {
   stockRequests?: StockRequest[];
   savedOrders?: SavedOrder[];
   cashAdjustments?: CashAdjustment[];
+  cashLedger?: CashLedgerEntry[];
   activeShift?: CashShift;
   shiftLog?: CashShift[];
   envelopeRecords?: EnvelopeRecord[];
@@ -949,6 +965,7 @@ export default function Home() {
     [message, setMessage] = useState(""),
     [cashAdjustmentKind, setCashAdjustmentKind] =
       useState<CashAdjustment["kind"]>("Ajuste de caja"),
+    [cashAdjustmentImpact, setCashAdjustmentImpact] = useState<"Ingreso" | "Egreso">("Ingreso"),
     [cashAdjustmentAmount, setCashAdjustmentAmount] = useState(0),
     [cashAdjustmentDetail, setCashAdjustmentDetail] = useState(""),
     [cashOpenBySite, setCashOpenBySite] = useState<Record<string, boolean>>({}),
@@ -1000,6 +1017,7 @@ export default function Home() {
   const lastPersistedSnapshot = useRef<Record<string, string>>({});
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
+  const [cashLedger, setCashLedger] = useState<CashLedgerEntry[]>([]);
   const [activeShiftBySite, setActiveShiftBySite] = useState<
     Record<string, CashShift | undefined>
   >({});
@@ -1236,6 +1254,7 @@ export default function Home() {
       setStockRequests(all("stockRequests") as StockRequest[]);
       setSavedOrders(all("savedOrders") as SavedOrder[]);
       setCashAdjustments(all("cashAdjustments") as CashAdjustment[]);
+      setCashLedger(all("cashLedger") as CashLedgerEntry[]);
       setShiftLog(all("shiftLog") as CashShift[]);
       setEnvelopeRecords(all("envelopeRecords") as EnvelopeRecord[]);
       setStockMovements(all("stockMovements") as StockMovement[]);
@@ -1289,6 +1308,7 @@ export default function Home() {
       stockRequests: filterBySite(stockRequests),
       savedOrders: filterBySite(savedOrders),
       cashAdjustments: filterBySite(cashAdjustments),
+      cashLedger: filterBySite(cashLedger),
       activeShift: activeShiftBySite[local],
       shiftLog: filterBySite(shiftLog),
       envelopeRecords: filterBySite(envelopeRecords),
@@ -1347,6 +1367,7 @@ export default function Home() {
     stockRequests,
     savedOrders,
     cashAdjustments,
+    cashLedger,
     activeShiftBySite,
     shiftLog,
     envelopeRecords,
@@ -1400,6 +1421,28 @@ export default function Home() {
   const cashIsOpen = Boolean(cashOpenBySite[site]);
   const siteLimits = limitsBySite[site];
   const activeShift = activeShiftBySite[site];
+  const currentCashLedger = cashLedger.filter(
+    (entry) => entry.site === site && entry.shiftId === activeShift?.id,
+  );
+  const siteCashLedger = cashLedger.filter((entry) => entry.site === site);
+  const ledgerCashBalance = currentCashLedger.reduce(
+    (total, entry) => total + entry.cashImpact,
+    0,
+  );
+  const appendCashLedgerEntry = (
+    entry: Omit<CashLedgerEntry, "id" | "site" | "shiftId" | "at" | "createdBy">,
+  ) => {
+    const ledgerEntry: CashLedgerEntry = {
+      id: crypto.randomUUID(),
+      site,
+      shiftId: activeShift?.id,
+      at: new Date().toLocaleString("es-AR"),
+      createdBy: user?.name || "Sistema",
+      ...entry,
+    };
+    setCashLedger((items) => [ledgerEntry, ...items]);
+    return ledgerEntry;
+  };
   const isAndrea = user?.name.startsWith("Andrea") || false;
   const isBetzi = user?.name.startsWith("Betzi") || false;
   const canAdjustStock = isAndrea || isBetzi;
@@ -2195,8 +2238,17 @@ export default function Home() {
       detail: cashAdjustmentDetail.trim(),
       at: new Date().toLocaleString("es-AR"),
       createdBy: user.name,
+      impact: cashAdjustmentKind === "Ajuste de caja" ? cashAdjustmentImpact : cashAdjustmentKind === "Retiro de caja" ? "Egreso" : "Ingreso",
     };
     setCashAdjustments((items) => [adjustment, ...items]);
+    const direction = adjustment.impact || "Ingreso";
+    appendCashLedgerEntry({
+      kind: adjustment.kind,
+      direction,
+      amount: adjustment.amount,
+      cashImpact: direction === "Ingreso" ? adjustment.amount : -adjustment.amount,
+      detail: adjustment.detail,
+    });
     setCashAdjustmentAmount(0);
     setCashAdjustmentDetail("");
     recordAudit(
@@ -2336,6 +2388,15 @@ export default function Home() {
       { method: payment, amount: net, saleId: sale.id },
     ]);
     setSales((x) => [sale, ...x]);
+    appendCashLedgerEntry({
+      kind: invitation ? "Invitación" : "Venta",
+      direction: payment === "Efectivo" ? "Ingreso" : "Informativo",
+      amount: net,
+      cashImpact: payment === "Efectivo" ? net : 0,
+      paymentMethod: payment,
+      reference: sale.id,
+      detail: `${invoiceType} · ${customer}`,
+    });
     if (connectionMode === "Contingencia") setPendingSync((value) => value + 1);
     setStock((x) => {
       const a = { ...x[site] };
@@ -2362,6 +2423,15 @@ export default function Home() {
       items.map((x) => (x.id === sale.id ? { ...x, status: "anulada" } : x)),
     );
     setPayments((items) => items.filter((x) => x.saleId !== sale.id));
+    appendCashLedgerEntry({
+      kind: "Anulación de venta",
+      direction: sale.method === "Efectivo" ? "Egreso" : "Informativo",
+      amount: sale.net,
+      cashImpact: sale.method === "Efectivo" ? -sale.net : 0,
+      paymentMethod: sale.method,
+      reference: sale.id,
+      detail: "Reversión de cobro por venta anulada",
+    });
     setStock((x) => {
       const next = { ...x[site] };
       sale.items.forEach((p) => (next[p.id] += 1));
@@ -2407,6 +2477,15 @@ export default function Home() {
     }
     if (returnKind === "Devolución") {
       setPayments((items) => items.filter((item) => item.saleId !== sale.id));
+      appendCashLedgerEntry({
+        kind: "Devolución",
+        direction: returnRefundMethod === "Efectivo" ? "Egreso" : "Informativo",
+        amount: sale.net,
+        cashImpact: returnRefundMethod === "Efectivo" ? -sale.net : 0,
+        paymentMethod: returnRefundMethod,
+        reference: sale.id,
+        detail: returnReason.trim(),
+      });
     }
     recordAudit(
       `${returnKind} registrada`,
@@ -2485,6 +2564,40 @@ export default function Home() {
         },
         ...items,
       ]);
+    if (expenses > 0) {
+      appendCashLedgerEntry({
+        kind: "Gastos declarados al cierre",
+        direction: "Egreso",
+        amount: expenses,
+        cashImpact: -expenses,
+        detail: "Total declarado durante el cierre de caja",
+      });
+    }
+    if (withdrawals > 0) {
+      appendCashLedgerEntry({
+        kind: "Retiros declarados al cierre",
+        direction: "Egreso",
+        amount: withdrawals,
+        cashImpact: -withdrawals,
+        detail: "Total declarado durante el cierre de caja",
+      });
+    }
+    if (requiresEnvelope && envelope > 0) {
+      appendCashLedgerEntry({
+        kind: "Sobre enviado a Caja Mayor",
+        direction: "Egreso",
+        amount: envelope,
+        cashImpact: -envelope,
+        detail: "Sobre de efectivo declarado en el cierre",
+      });
+    }
+    appendCashLedgerEntry({
+      kind: "Cierre de caja",
+      direction: "Informativo",
+      amount: counted,
+      cashImpact: 0,
+      detail: `Esperado ${money.format(expected)} · Diferencia ${money.format(cashVariance)}`,
+    });
     const test = SHEET_CONFIG[site]?.testUrl;
     setSyncStatus(
       test
@@ -2508,6 +2621,21 @@ export default function Home() {
     setCashOpenBySite((items) => ({ ...items, [site]: true }));
     setActiveShiftBySite((items) => ({ ...items, [site]: shift }));
     setShiftLog((items) => [shift, ...items]);
+    setCashLedger((items) => [
+      {
+        id: crypto.randomUUID(),
+        site,
+        shiftId: shift.id,
+        kind: "Apertura de caja",
+        direction: "Ingreso",
+        amount: fund,
+        cashImpact: fund,
+        detail: "Fondo inicial declarado",
+        at: shift.openedAt,
+        createdBy: user.name,
+      },
+      ...items,
+    ]);
     setClosed(false);
     recordAudit("Caja abierta", `Fondo inicial ${money.format(fund)}`);
     setMessage(`Caja abierta para ${site}. Ya se pueden registrar cobros.`);
@@ -3247,6 +3375,50 @@ export default function Home() {
                     Total{" "}
                     {money.format(totals.reduce((a, x) => a + x.amount, 0))}
                   </p>
+                  <div className="mt-6 border-t pt-4">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <b>Libro mayor de caja</b>
+                      {activeShift && (
+                        <span className="text-sm font-bold text-[#183a67]">
+                          Efectivo registrado: {money.format(ledgerCashBalance)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Cada apertura, venta, ajuste, retiro, sobre y cierre queda registrado por separado.
+                    </p>
+                    <div className="mt-3 max-h-80 overflow-auto rounded border">
+                      {siteCashLedger.length ? (
+                        <table className="w-full text-left text-xs">
+                          <thead className="sticky top-0 bg-[#eef2f6] text-[#183a67]">
+                            <tr>
+                              <th className="p-2">Hora</th>
+                              <th className="p-2">Movimiento</th>
+                              <th className="p-2">Medio</th>
+                              <th className="p-2 text-right">Importe</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {siteCashLedger.slice(0, 20).map((entry) => (
+                              <tr key={entry.id} className="border-t">
+                                <td className="p-2 align-top text-slate-500">{entry.at}</td>
+                                <td className="p-2 align-top">
+                                  <b>{entry.kind}</b>
+                                  <span className="block text-slate-500">{entry.detail}</span>
+                                </td>
+                                <td className="p-2 align-top">{entry.paymentMethod || "—"}</td>
+                                <td className={`p-2 text-right align-top font-bold ${entry.direction === "Egreso" ? "text-[#9c302a]" : entry.direction === "Ingreso" ? "text-green-700" : "text-slate-600"}`}>
+                                  {entry.direction === "Egreso" ? "−" : entry.direction === "Ingreso" ? "+" : ""}{money.format(entry.amount)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <p className="p-3 text-sm text-slate-500">El libro mayor comenzará al abrir la caja.</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 <div className="rounded-2xl border bg-white p-5">
                   <p
@@ -3365,6 +3537,17 @@ export default function Home() {
                       <option>Ajuste de caja</option>
                       <option>Retiro de caja</option>
                     </select>
+                    {cashAdjustmentKind === "Ajuste de caja" && (
+                      <select
+                        value={cashAdjustmentImpact}
+                        onChange={(event) => setCashAdjustmentImpact(event.target.value as "Ingreso" | "Egreso")}
+                        className="mt-2 w-full rounded border p-2"
+                        aria-label="Impacto del ajuste"
+                      >
+                        <option value="Ingreso">Ajuste que suma efectivo</option>
+                        <option value="Egreso">Ajuste que resta efectivo</option>
+                      </select>
+                    )}
                     <input
                       type="number"
                       min="0"
