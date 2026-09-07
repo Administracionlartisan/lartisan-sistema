@@ -201,8 +201,31 @@ type ReturnTransaction = {
   refundMethod: string;
   reason: string;
   restock: boolean;
+  creditNoteNumber: string;
+  lines: { productId: number; quantity: number }[];
   createdAt: string;
   createdBy: string;
+};
+type CashTransfer = {
+  id: string;
+  originSite: string;
+  destination: string;
+  amount: number;
+  reason: string;
+  status: "Pendiente de recepción" | "Recibida" | "Anulada";
+  createdAt: string;
+  createdBy: string;
+  receivedAt?: string;
+  receivedBy?: string;
+};
+type AttendanceRecord = {
+  id: string;
+  userName: string;
+  site: string;
+  kind: "Entrada" | "Salida";
+  at: string;
+  atISO: string;
+  lateMinutes?: number;
 };
 type Incident = {
   id: string;
@@ -248,6 +271,8 @@ type OperationalSnapshot = {
   stockMovements?: StockMovement[];
   expensesLog?: Expense[];
   returnsLog?: ReturnTransaction[];
+  cashTransfers?: CashTransfer[];
+  attendanceRecords?: AttendanceRecord[];
   incidents?: Incident[];
   stockAdjustments?: StockAdjustment[];
   audit?: AuditEvent[];
@@ -278,6 +303,7 @@ const ACTION_PERMISSIONS = [
   { id: "pedidos", label: "Crear y recibir pedidos" },
   { id: "incidencias", label: "Registrar incidencias" },
   { id: "stock", label: "Ajustar / aprobar stock" },
+  { id: "transferirCaja", label: "Transferir efectivo entre cajas" },
   { id: "exportar", label: "Exportar informes" },
 ];
 const defaultActionPermissions = (role: Role) =>
@@ -291,9 +317,10 @@ const defaultActionPermissions = (role: Role) =>
           "pedidos",
           "incidencias",
           "stock",
+          "transferirCaja",
           "exportar",
         ]
-      : ["cobrar", "egresos", "pedidos", "incidencias"];
+      : ["cobrar", "egresos", "pedidos", "incidencias", "transferirCaja"];
 const workEmail = (name: string) =>
   `${name
     .normalize("NFD")
@@ -1083,11 +1110,17 @@ export default function Home() {
   );
   const [expensesLog, setExpensesLog] = useState<Expense[]>([]);
   const [returnsLog, setReturnsLog] = useState<ReturnTransaction[]>([]);
+  const [cashTransfers, setCashTransfers] = useState<CashTransfer[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [returnSaleId, setReturnSaleId] = useState("");
   const [returnKind, setReturnKind] = useState<ReturnTransaction["kind"]>("Devolución");
   const [returnReason, setReturnReason] = useState("");
   const [returnRefundMethod, setReturnRefundMethod] = useState("Efectivo");
   const [returnRestock, setReturnRestock] = useState(true);
+  const [returnQuantities, setReturnQuantities] = useState<Record<number, number>>({});
+  const [transferDestination, setTransferDestination] = useState("Caja Mayor");
+  const [transferAmount, setTransferAmount] = useState(0);
+  const [transferReason, setTransferReason] = useState("");
   const [expenseCategory, setExpenseCategory] = useState("Insumos");
   const [expenseAmount, setExpenseAmount] = useState(0);
   const [expenseDetail, setExpenseDetail] = useState("");
@@ -1319,6 +1352,8 @@ export default function Home() {
       setStockMovements(all("stockMovements") as StockMovement[]);
       setExpensesLog(all("expensesLog") as Expense[]);
       setReturnsLog(all("returnsLog") as ReturnTransaction[]);
+      setCashTransfers(all("cashTransfers") as CashTransfer[]);
+      setAttendanceRecords(all("attendanceRecords") as AttendanceRecord[]);
       setIncidents(all("incidents") as Incident[]);
       setStockAdjustments(all("stockAdjustments") as StockAdjustment[]);
       setAudit(all("audit") as AuditEvent[]);
@@ -1374,6 +1409,8 @@ export default function Home() {
       stockMovements: filterBySite(stockMovements),
       expensesLog: filterBySite(expensesLog),
       returnsLog: filterBySite(returnsLog),
+      cashTransfers: cashTransfers.filter((item) => item.originSite === local),
+      attendanceRecords: filterBySite(attendanceRecords),
       incidents: filterBySite(incidents),
       stockAdjustments: filterBySite(stockAdjustments),
       audit: filterBySite(audit),
@@ -1433,6 +1470,8 @@ export default function Home() {
     stockMovements,
     expensesLog,
     returnsLog,
+    cashTransfers,
+    attendanceRecords,
     incidents,
     stockAdjustments,
     audit,
@@ -2582,17 +2621,41 @@ export default function Home() {
     const sale = sales.find((item) => item.id === returnSaleId && item.site === site);
     if (!sale) return setMessage("Elegí una venta activa del local.");
     if (!returnReason.trim()) return setMessage("Indicá el motivo de la devolución o cambio.");
-    if (returnsLog.some((transaction) => transaction.saleId === sale.id))
-      return setMessage("Esta venta ya tiene una devolución o cambio registrado.");
+    const soldQuantities = sale.items.reduce<Record<number, number>>((result, product) => {
+      result[product.id] = (result[product.id] || 0) + 1;
+      return result;
+    }, {});
+    const alreadyReturned = returnsLog
+      .filter((transaction) => transaction.saleId === sale.id)
+      .reduce<Record<number, number>>((result, transaction) => {
+        transaction.lines.forEach((line) => {
+          result[line.productId] = (result[line.productId] || 0) + line.quantity;
+        });
+        return result;
+      }, {});
+    const selectedLines = Object.entries(returnQuantities)
+      .map(([productId, quantity]) => ({ productId: Number(productId), quantity: Number(quantity) || 0 }))
+      .filter((line) => line.quantity > 0);
+    if (!selectedLines.length) return setMessage("Seleccioná al menos un producto y cantidad para devolver o cambiar.");
+    if (selectedLines.some((line) => line.quantity > (soldQuantities[line.productId] || 0) - (alreadyReturned[line.productId] || 0)))
+      return setMessage("Una de las cantidades supera lo que queda disponible de la venta.");
+    const originalGross = sale.items.reduce((total, product) => total + product.price, 0);
+    const selectedGross = selectedLines.reduce((total, line) => {
+      const product = sale.items.find((item) => item.id === line.productId);
+      return total + (product?.price || 0) * line.quantity;
+    }, 0);
+    const amount = Math.round(sale.net * (selectedGross / Math.max(originalGross, 1)));
     const transaction: ReturnTransaction = {
       id: crypto.randomUUID(),
       saleId: sale.id,
       site,
       kind: returnKind,
-      amount: sale.net,
+      amount,
       refundMethod: returnRefundMethod,
       reason: returnReason.trim(),
       restock: returnRestock,
+      creditNoteNumber: `NC-INT-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(returnsLog.length + 1).padStart(4, "0")}`,
+      lines: selectedLines,
       createdAt: new Date().toLocaleString("es-AR"),
       createdBy: user.name,
     };
@@ -2600,20 +2663,16 @@ export default function Home() {
     if (returnRestock) {
       setStock((items) => {
         const next = { ...items[site] };
-        sale.items.forEach((product) => {
-          next[product.id] = (next[product.id] || 0) + 1;
+        selectedLines.forEach((line) => {
+          next[line.productId] = (next[line.productId] || 0) + line.quantity;
         });
         return { ...items, [site]: next };
       });
-      const quantities = sale.items.reduce<Record<number, number>>((result, product) => {
-        result[product.id] = (result[product.id] || 0) + 1;
-        return result;
-      }, {});
-      Object.entries(quantities).forEach(([productId, quantity]) =>
+      selectedLines.forEach((line) =>
         recordStockMovement({
-          productId: Number(productId),
+          productId: line.productId,
           kind: "Devolución",
-          quantity,
+          quantity: line.quantity,
           remito: "",
           detail: `Reposición por ${returnKind.toLowerCase()} ${sale.id.slice(0, 8)}`,
           reference: sale.id,
@@ -2621,12 +2680,11 @@ export default function Home() {
       );
     }
     if (returnKind === "Devolución") {
-      setPayments((items) => items.filter((item) => item.saleId !== sale.id));
       appendCashLedgerEntry({
         kind: "Devolución",
         direction: returnRefundMethod === "Efectivo" ? "Egreso" : "Informativo",
-        amount: sale.net,
-        cashImpact: returnRefundMethod === "Efectivo" ? -sale.net : 0,
+        amount,
+        cashImpact: returnRefundMethod === "Efectivo" ? -amount : 0,
         paymentMethod: returnRefundMethod,
         reference: sale.id,
         detail: returnReason.trim(),
@@ -2634,13 +2692,14 @@ export default function Home() {
     }
     recordAudit(
       `${returnKind} registrada`,
-      `${sale.id.slice(0, 8)} · ${money.format(sale.net)} · ${returnRefundMethod}`,
+      `${transaction.creditNoteNumber} · ${sale.id.slice(0, 8)} · ${money.format(amount)} · ${returnRefundMethod}`,
     );
     setReturnSaleId("");
     setReturnReason("");
+    setReturnQuantities({});
     setReturnRestock(true);
     setMessage(
-      `${returnKind} registrada${returnRestock ? "; se repuso el stock" : ""}.`,
+      `${returnKind} registrada como ${transaction.creditNoteNumber}${returnRestock ? "; se repuso el stock" : ""}.`,
     );
   };
   const changeSalePayment = (sale: Sale, method: string) => {
@@ -2803,6 +2862,44 @@ export default function Home() {
       `${site} · ${activeShift.openedBy} a ${user.name} · caja continúa abierta`,
     );
     setMessage("Turno cerrado y auditado. La caja permanece abierta para el siguiente turno.");
+  };
+  const markAttendance = (kind: AttendanceRecord["kind"]) => {
+    const today = new Date().toLocaleDateString("en-CA");
+    const todayRecords = attendanceRecords.filter((item) => item.userName === user.name && item.site === site && item.atISO.slice(0, 10) === today);
+    const last = todayRecords[0];
+    if (kind === "Entrada" && last?.kind === "Entrada") return setMessage("Ya tenés una entrada abierta. Registrá la salida antes de volver a fichar.");
+    if (kind === "Salida" && last?.kind !== "Entrada") return setMessage("Primero debe registrarse una entrada.");
+    const now = new Date();
+    const schedule = schedules.find((item) => item.employee.toLowerCase() === user.name.toLowerCase() && item.site === site);
+    const expectedMinutes = schedule ? Number(schedule.startsAt.slice(0, 2)) * 60 + Number(schedule.startsAt.slice(3, 5)) + schedule.toleranceMinutes : 0;
+    const actualMinutes = now.getHours() * 60 + now.getMinutes();
+    const record: AttendanceRecord = { id: crypto.randomUUID(), userName: user.name, site, kind, at: now.toLocaleString("es-AR"), atISO: now.toISOString(), lateMinutes: kind === "Entrada" && schedule ? Math.max(0, actualMinutes - expectedMinutes) : undefined };
+    setAttendanceRecords((items) => [record, ...items]);
+    recordAudit(`Fichaje de ${kind.toLowerCase()}`, `${user.name} · ${site}${record.lateMinutes ? ` · tardanza ${record.lateMinutes} min` : ""}`);
+    setClock(`${kind} registrada a las ${now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
+  };
+  const createCashTransfer = () => {
+    if (!can("transferirCaja")) return setMessage("Tu usuario no tiene permiso para transferir efectivo.");
+    if (!cashIsOpen) return setMessage("Abrí la caja antes de transferir efectivo.");
+    if (transferDestination === site) return setMessage("Elegí un destino distinto al local de origen.");
+    if (!transferAmount || transferAmount <= 0) return setMessage("Indicá un importe válido.");
+    if (transferAmount > ledgerCashBalance) return setMessage("El importe supera el efectivo registrado en la caja actual.");
+    const transfer: CashTransfer = { id: crypto.randomUUID(), originSite: site, destination: transferDestination, amount: transferAmount, reason: transferReason.trim() || "Transferencia entre cajas", status: "Pendiente de recepción", createdAt: new Date().toLocaleString("es-AR"), createdBy: user.name };
+    setCashTransfers((items) => [transfer, ...items]);
+    appendCashLedgerEntry({ kind: "Transferencia enviada", direction: "Egreso", amount: transfer.amount, cashImpact: -transfer.amount, paymentMethod: "Efectivo", reference: transfer.id, detail: `${transfer.destination} · ${transfer.reason}` });
+    recordAudit("Transferencia de caja creada", `${site} a ${transfer.destination} · ${money.format(transfer.amount)} · ${transfer.reason}`);
+    setTransferAmount(0); setTransferReason("");
+    setMessage(`Transferencia creada. ${transfer.destination} deberá confirmar la recepción.`);
+  };
+  const receiveCashTransfer = (transfer: CashTransfer) => {
+    const canReceive = user.role === "administracion" || managesCentralOrders || transfer.destination === site;
+    if (!canReceive) return setMessage("Solo el destino o Central puede confirmar esta transferencia.");
+    if (transfer.status !== "Pendiente de recepción") return;
+    setCashTransfers((items) => items.map((item) => item.id === transfer.id ? { ...item, status: "Recibida", receivedAt: new Date().toLocaleString("es-AR"), receivedBy: user.name } : item));
+    const destinationSite = transfer.destination === "Caja Mayor" ? "Villa Mitre" : transfer.destination;
+    setCashLedger((items) => [{ id: crypto.randomUUID(), site: destinationSite, shiftId: activeShiftBySite[destinationSite]?.id, kind: "Transferencia recibida", direction: "Ingreso", amount: transfer.amount, cashImpact: transfer.amount, paymentMethod: "Efectivo", reference: transfer.id, detail: `${transfer.originSite} · ${transfer.reason}`, at: new Date().toLocaleString("es-AR"), atISO: new Date().toISOString(), createdBy: user.name }, ...items]);
+    recordAudit("Transferencia de caja recibida", `${transfer.originSite} a ${transfer.destination} · ${money.format(transfer.amount)}`);
+    setMessage("Transferencia confirmada y conciliada en el libro mayor.");
   };
   const syncContingency = () => {
     if (connectionMode === "Contingencia")
@@ -2984,6 +3081,7 @@ export default function Home() {
           "Legajos",
           "MRP",
           "Protección de datos",
+          "Actualizaciones",
           "Integraciones",
         ]
       : [
@@ -3609,6 +3707,25 @@ export default function Home() {
                       )}
                     </div>
                   </div>
+                  <div className="mt-6 border-t pt-4">
+                    <b>Transferencia formal entre cajas</b>
+                    <p className="mt-1 text-xs text-slate-500">El origen registra el egreso ahora; el destino debe confirmar la recepción para completar la conciliación.</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      <select value={transferDestination} onChange={(event) => setTransferDestination(event.target.value)} className="rounded border p-2 text-sm">
+                        <option>Caja Mayor</option>
+                        {SITES.filter((local) => local !== site).map((local) => <option key={local}>{local}</option>)}
+                      </select>
+                      <input type="number" min="0" value={transferAmount || ""} onChange={(event) => setTransferAmount(Number(event.target.value))} placeholder="Importe" className="rounded border p-2 text-sm" />
+                      <button onClick={createCashTransfer} disabled={!cashIsOpen || !can("transferirCaja")} className="rounded border border-[#183a67] px-3 py-2 text-sm font-bold disabled:opacity-40">Enviar efectivo</button>
+                    </div>
+                    <input value={transferReason} onChange={(event) => setTransferReason(event.target.value)} placeholder="Motivo o referencia" className="mt-2 w-full rounded border p-2 text-sm" />
+                    {cashTransfers.filter((transfer) => transfer.originSite === site || transfer.destination === site || (transfer.destination === "Caja Mayor" && managesCentralOrders)).slice(0, 5).map((transfer) => (
+                      <div key={transfer.id} className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded bg-[#eef2f6] p-2 text-xs">
+                        <span><b>{transfer.originSite} → {transfer.destination}</b> · {money.format(transfer.amount)} · {transfer.status}</span>
+                        {transfer.status === "Pendiente de recepción" && (user.role === "administracion" || managesCentralOrders || transfer.destination === site) && <button onClick={() => receiveCashTransfer(transfer)} className="font-bold underline">Confirmar recepción</button>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 <div className="rounded-2xl border bg-white p-5">
                   <p
@@ -4072,28 +4189,16 @@ export default function Home() {
               />
               <div className="grid max-w-3xl gap-5 md:grid-cols-2">
                 <div className="rounded-2xl border bg-white p-6">
-                  <input
-                    type="password"
-                    placeholder="Contraseña personal"
-                    className="w-full rounded border p-3"
-                  />
+                  <p className="rounded bg-[#eef2f6] p-3 text-sm">Fichás con tu sesión personal: <b>{user.name}</b>. El registro queda asociado al local seleccionado.</p>
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     <button
-                      onClick={() =>
-                        setClock(
-                          `Entrada registrada a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}`,
-                        )
-                      }
+                      onClick={() => markAttendance("Entrada")}
                       className="rounded bg-[#183a67] py-3 font-bold text-white"
                     >
                       Marcar entrada
                     </button>
                     <button
-                      onClick={() =>
-                        setClock(
-                          `Salida registrada a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}`,
-                        )
-                      }
+                      onClick={() => markAttendance("Salida")}
                       className="rounded border py-3 font-bold"
                     >
                       Marcar salida
@@ -4107,14 +4212,12 @@ export default function Home() {
                 </div>
                 <div className="rounded-2xl border bg-white p-6">
                   <b>Estado actual</b>
-                  <p className="mt-4">
-                    Vendedora 1 ·{" "}
-                    <span className="font-bold text-green-700">En turno</span>
-                  </p>
-                  <p className="mt-3">
-                    Vendedora 2 ·{" "}
-                    <span className="font-bold text-green-700">En turno</span>
-                  </p>
+                  {attendanceRecords.filter((record) => record.site === site).slice(0, 5).map((record) => (
+                    <p className="mt-3" key={record.id}>
+                      <b>{record.userName}</b> · <span className={record.kind === "Entrada" ? "font-bold text-green-700" : "font-bold text-slate-600"}>{record.kind}</span><span className="block text-xs text-slate-500">{record.at}{record.lateMinutes ? ` · tardanza ${record.lateMinutes} min` : ""}</span>
+                    </p>
+                  ))}
+                  {!attendanceRecords.some((record) => record.site === site) && <p className="mt-4 text-sm text-slate-500">Aún no hay fichajes registrados para este local.</p>}
                   <p className="mt-5 text-sm text-slate-500">
                     Administración podrá consultar asistencia e historial por
                     persona.
@@ -4584,13 +4687,16 @@ export default function Home() {
                     Venta original
                     <select
                       value={returnSaleId}
-                      onChange={(event) => setReturnSaleId(event.target.value)}
+                      onChange={(event) => {
+                        setReturnSaleId(event.target.value);
+                        setReturnQuantities({});
+                      }}
                       className="mt-1 w-full rounded border p-2 font-normal"
                     >
                       <option value="">Seleccionar venta</option>
                       {sales
                         .filter(
-                          (sale) => sale.site === site && sale.status === "activa" && !returnsLog.some((transaction) => transaction.saleId === sale.id),
+                          (sale) => sale.site === site && sale.status === "activa",
                         )
                         .map((sale) => (
                           <option key={sale.id} value={sale.id}>
@@ -4599,6 +4705,29 @@ export default function Home() {
                         ))}
                     </select>
                   </label>
+                  {returnSaleId && (() => {
+                    const sale = sales.find((item) => item.id === returnSaleId);
+                    if (!sale) return null;
+                    const sold = sale.items.reduce<Record<number, number>>((all, item) => ({ ...all, [item.id]: (all[item.id] || 0) + 1 }), {});
+                    const returned = returnsLog.filter((item) => item.saleId === sale.id).reduce<Record<number, number>>((all, item) => {
+                      item.lines.forEach((line) => { all[line.productId] = (all[line.productId] || 0) + line.quantity; });
+                      return all;
+                    }, {});
+                    return <div className="mt-3 rounded border bg-[#eef2f6] p-3 text-sm">
+                      <b>Productos a devolver / cambiar</b>
+                      <p className="mt-1 text-xs text-slate-600">Elegí cantidades. Se admite una devolución parcial y se calcula el importe proporcional.</p>
+                      <div className="mt-2 space-y-2">
+                        {Object.entries(sold).map(([productId, soldQuantity]) => {
+                          const product = PRODUCTS.find((item) => item.id === Number(productId));
+                          const available = soldQuantity - (returned[Number(productId)] || 0);
+                          return <label key={productId} className="flex items-center justify-between gap-3 rounded bg-white p-2">
+                            <span><b>{product?.name || "Producto"}</b><span className="block text-xs text-slate-500">Disponible: {available}</span></span>
+                            <input type="number" min="0" max={available} value={returnQuantities[Number(productId)] || ""} placeholder="0" onChange={(event) => setReturnQuantities((items) => ({ ...items, [Number(productId)]: Math.max(0, Math.min(available, Number(event.target.value) || 0)) }))} className="w-20 rounded border p-1 text-center" />
+                          </label>;
+                        })}
+                      </div>
+                    </div>;
+                  })()}
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <label className="text-sm font-bold">
                       Operación
@@ -4644,7 +4773,7 @@ export default function Home() {
                     disabled={!can("anular")}
                     className="mt-4 w-full rounded bg-[#ec3a35] py-3 font-bold text-white disabled:opacity-40"
                   >
-                    Registrar operación
+                    Emitir nota interna y registrar
                   </button>
                 </div>
                 <div className="rounded-2xl border bg-white p-5">
@@ -4654,12 +4783,12 @@ export default function Home() {
                       siteReturns.map((transaction) => (
                         <div key={transaction.id} className="py-3 text-sm">
                           <div className="flex justify-between gap-3">
-                            <b>{transaction.kind}</b>
+                            <b>{transaction.kind} · {transaction.creditNoteNumber}</b>
                             <b>{money.format(transaction.amount)}</b>
                           </div>
                           <p className="mt-1">{transaction.reason}</p>
                           <p className="mt-1 text-xs text-slate-500">
-                            {transaction.createdAt} · {transaction.createdBy} · {transaction.refundMethod} · {transaction.restock ? "Stock repuesto" : "Sin reingreso a stock"}
+                            {transaction.createdAt} · {transaction.createdBy} · {transaction.refundMethod} · {transaction.restock ? "Stock repuesto" : "Sin reingreso a stock"} · {transaction.lines.map((line) => `${PRODUCTS.find((item) => item.id === line.productId)?.name || "Producto"} × ${line.quantity}`).join(", ")}
                           </p>
                         </div>
                       ))
@@ -4671,6 +4800,7 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+              <p className="mt-4 max-w-5xl rounded border border-[#e7c26a] bg-[#fff5d8] p-3 text-xs text-slate-700">La nota de crédito emitida aquí es interna y deja trazabilidad comercial y de stock. El comprobante fiscal ARCA/AFIP se incorporará cuando se active el circuito fiscal.</p>
             </>
           ) : tab === "Egresos" ? (
             <>
@@ -5056,6 +5186,16 @@ export default function Home() {
                   {systemHealth.checkedAt && <p className="mt-3 text-xs text-slate-500">Última revisión: {systemHealth.checkedAt}.</p>}
                 </div>
               </div>
+            </>
+          ) : tab === "Actualizaciones" && user.role === "administracion" ? (
+            <>
+              <Heading k="ADMINISTRACIÓN · OPERACIÓN" h="Actualizaciones seguras" p="Cada versión se valida y se respalda antes de reemplazar la anterior." />
+              <div className="grid max-w-5xl gap-5 md:grid-cols-3">
+                <div className="rounded-2xl border bg-white p-5"><b>1. Copia previa</b><p className="mt-2 text-sm text-slate-600">Antes de subir una versión se genera y verifica un respaldo de la base de datos y de los archivos publicados.</p></div>
+                <div className="rounded-2xl border bg-white p-5"><b>2. Validación</b><p className="mt-2 text-sm text-slate-600">Se revisan salud del sistema, acceso, ventas, caja y sincronización antes de habilitar la nueva versión.</p></div>
+                <div className="rounded-2xl border bg-white p-5"><b>3. Vuelta atrás</b><p className="mt-2 text-sm text-slate-600">Si una actualización falla, se restaura la versión anterior y el respaldo verificado. No se edita la producción directamente.</p></div>
+              </div>
+              <div className="mt-5 max-w-5xl rounded-2xl border border-[#e7c26a] bg-[#fff5d8] p-5 text-sm"><b>Estado operativo:</b> el procedimiento y los archivos de recuperación están preparados. La ejecución de una actualización queda limitada a Administración y debe realizarse fuera del horario de venta, luego de confirmar el respaldo.</div>
             </>
           ) : tab === "Integraciones" && user.role === "administracion" ? (
             <>
@@ -7223,7 +7363,8 @@ export default function Home() {
                     </div>
                   )}
                   {adminReport === "Personal" && (
-                    <div className="mt-5 grid gap-4 md:grid-cols-3">
+                    <div className="mt-5">
+                    <div className="grid gap-4 md:grid-cols-3">
                       <div className="rounded bg-[#eef2f6] p-4">
                         <b>Asistencia</b>
                         <p className="mt-2 text-sm">
@@ -7242,6 +7383,13 @@ export default function Home() {
                           Días sin fichaje y excepciones justificadas.
                         </p>
                       </div>
+                    </div>
+                    <div className="mt-4 overflow-auto rounded border">
+                      <table className="w-full min-w-[650px] text-sm">
+                        <thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Persona</th><th className="p-3 text-left">Local</th><th className="p-3 text-left">Movimiento</th><th className="p-3 text-left">Fecha y hora</th><th className="p-3 text-right">Tardanza</th></tr></thead>
+                        <tbody>{attendanceRecords.length ? attendanceRecords.filter((record) => reportSite === "Todos los locales" || record.site === reportSite).slice(0, 30).map((record) => <tr key={record.id} className="border-t"><td className="p-3 font-bold">{record.userName}</td><td className="p-3">{record.site}</td><td className="p-3">{record.kind}</td><td className="p-3">{record.at}</td><td className="p-3 text-right">{record.lateMinutes ? `${record.lateMinutes} min` : "—"}</td></tr>) : <tr><td colSpan={5} className="p-4 text-slate-500">Todavía no hay fichajes registrados.</td></tr>}</tbody>
+                      </table>
+                    </div>
                     </div>
                   )}
                   {adminReport === "Clientes" && (
