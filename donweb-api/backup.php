@@ -2,12 +2,26 @@
 
 declare(strict_types=1);
 
-if (PHP_SAPI !== 'cli') {
-    http_response_code(404);
-    exit;
+require __DIR__ . '/bootstrap.php';
+
+$privateBackupConfigPath = dirname(__DIR__, 2) . '/lartisan-backup-config.php';
+if (is_file($privateBackupConfigPath)) {
+    $privateBackupConfig = require $privateBackupConfigPath;
+    if (!is_array($privateBackupConfig)) {
+        throw new RuntimeException('La configuracion privada de respaldos no es valida.');
+    }
+    $config['backup'] = array_replace_recursive($config['backup'] ?? [], $privateBackupConfig);
 }
 
-require __DIR__ . '/bootstrap.php';
+if (PHP_SAPI !== 'cli') {
+    $providedKey = (string) ($_SERVER['HTTP_X_BACKUP_KEY'] ?? '');
+    $expectedKey = (string) ($config['backup']['trigger_key'] ?? '');
+    if ($expectedKey === '' || !hash_equals($expectedKey, $providedKey)) {
+        http_response_code(404);
+        exit;
+    }
+    header('Content-Type: text/plain; charset=UTF-8');
+}
 
 date_default_timezone_set('America/Argentina/Buenos_Aires');
 $pdo = db($config);
@@ -48,12 +62,15 @@ try {
         "UPDATE backup_runs SET finished_at = NOW(), status = 'verified', size_bytes = ?, sha256 = ?, drive_file_id = ? WHERE id = ?"
     )->execute([filesize($path), $hash, $driveFileId, $runId]);
     remove_old_backups($backupDirectory, (int) ($config['backup']['local_retention_days'] ?? 30));
-    fwrite(STDOUT, "Respaldo verificado y enviado a Drive: $filename\n");
+    $message = "Respaldo verificado y enviado a Drive: $filename\n";
+    if (PHP_SAPI === 'cli') fwrite(STDOUT, $message); else echo $message;
 } catch (Throwable $error) {
     $pdo->prepare(
         "UPDATE backup_runs SET finished_at = NOW(), status = 'failed', error_message = ? WHERE id = ?"
     )->execute([substr($error->getMessage(), 0, 1000), $runId]);
-    fwrite(STDERR, 'Falló el respaldo: ' . $error->getMessage() . "\n");
+    $message = 'Falló el respaldo: ' . $error->getMessage() . "\n";
+    if (PHP_SAPI === 'cli') fwrite(STDERR, $message); else echo $message;
+    if (PHP_SAPI !== 'cli') http_response_code(500);
     exit(1);
 }
 
@@ -106,7 +123,7 @@ function verify_backup(string $path): void
     $tail = '';
     while (!gzeof($gzip)) $tail = substr($tail . (string) gzread($gzip, 8192), -256);
     gzclose($gzip);
-    if (!str_contains($tail, 'LARTISAN_BACKUP_COMPLETE')) throw new RuntimeException('El respaldo está incompleto.');
+    if (strpos($tail, 'LARTISAN_BACKUP_COMPLETE') === false) throw new RuntimeException('El respaldo está incompleto.');
 }
 
 function upload_to_drive(array $config, string $path): string
