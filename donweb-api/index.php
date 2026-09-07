@@ -14,6 +14,8 @@ $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $route = trim((string) ($_GET['route'] ?? ''), '/');
 $pdo = db($config);
 ensure_user_locations_schema($pdo);
+// Mantiene listas las tablas operativas aun antes de la primera venta.
+ensure_operations_schema($pdo);
 $pdo->exec(
     "CREATE TABLE IF NOT EXISTS password_recovery_codes (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
