@@ -14,4 +14,5 @@ Servicio PHP independiente para autenticación, sesiones, solicitudes de recuper
 - `backup.php verify` valida la copia más reciente sin modificar la base de datos.
 - Las copias locales se guardan fuera de `public_html` y se eliminan según `local_retention_days`.
 - Programación requerida en DonWeb: lunes y jueves a las 21:00 (`0 21 * * 1,4`).
-- Las credenciales de Drive deben existir únicamente en `config.local.php`, nunca en el repositorio.
+- En DonWeb, las credenciales y la clave del disparador se guardan en `/lartisan-backup-config.php`, fuera de `public_html`, con permisos `600`; nunca se incorporan al repositorio.
+- La tarea de Ferozo invoca `backup.php` por HTTPS con la clave en el encabezado `X-Backup-Key`; cualquier acceso normal sin esa clave responde `404`.
