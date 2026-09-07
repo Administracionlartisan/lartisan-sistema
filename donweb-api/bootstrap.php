@@ -327,12 +327,23 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             movement_type VARCHAR(40) NOT NULL,
             quantity INT NOT NULL,
             remito VARCHAR(180) NULL,
+            source_reference CHAR(36) NULL,
             detail VARCHAR(500) NULL,
             occurred_at DATETIME NULL,
             created_by VARCHAR(190) NULL,
             INDEX idx_lartisan_stock_movements_site_product_date (site, product_id, occurred_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+    ensure_column($pdo, 'lartisan_stock_movements', 'source_reference', 'CHAR(36) NULL AFTER remito');
+}
+
+function ensure_column(PDO $pdo, string $table, string $column, string $definition): void
+{
+    $statement = $pdo->prepare("SHOW COLUMNS FROM `$table` LIKE ?");
+    $statement->execute([$column]);
+    if (!$statement->fetch()) {
+        $pdo->exec("ALTER TABLE `$table` ADD COLUMN `$column` $definition");
+    }
 }
 
 function iso_datetime(?string $value): ?string
@@ -431,17 +442,17 @@ function sync_normalized_operations(PDO $pdo, string $site, array $state, int $u
     }
 
     $stockStatement = $pdo->prepare(
-        "INSERT INTO lartisan_stock_movements (id, site, product_id, movement_type, quantity, remito, detail, occurred_at, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO lartisan_stock_movements (id, site, product_id, movement_type, quantity, remito, source_reference, detail, occurred_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE movement_type=VALUES(movement_type), quantity=VALUES(quantity), remito=VALUES(remito),
-        detail=VALUES(detail), occurred_at=VALUES(occurred_at), created_by=VALUES(created_by)"
+        source_reference=VALUES(source_reference), detail=VALUES(detail), occurred_at=VALUES(occurred_at), created_by=VALUES(created_by)"
     );
     foreach (($state['stockMovements'] ?? []) as $movement) {
         if (!is_array($movement) || empty($movement['id'])) continue;
         $stockStatement->execute([
             (string) $movement['id'], $site, (int) ($movement['productId'] ?? 0), (string) ($movement['kind'] ?? ''),
-            (int) ($movement['quantity'] ?? 0), (string) ($movement['remito'] ?? ''), (string) ($movement['detail'] ?? ''),
-            iso_datetime($movement['atISO'] ?? null), (string) ($movement['createdBy'] ?? ''),
+            (int) ($movement['quantity'] ?? 0), (string) ($movement['remito'] ?? ''), $movement['reference'] ?? null,
+            (string) ($movement['detail'] ?? ''), iso_datetime($movement['atISO'] ?? null), (string) ($movement['createdBy'] ?? ''),
         ]);
     }
 }

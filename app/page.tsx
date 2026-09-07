@@ -112,10 +112,20 @@ type StockMovement = {
   id: string;
   site: string;
   productId: number;
-  kind: "Ingreso" | "Egreso";
+  kind:
+    | "Ingreso por remito"
+    | "Recepción de pedido"
+    | "Venta"
+    | "Anulación"
+    | "Devolución"
+    | "Ajuste de inventario"
+    | "Merma"
+    | "Ingreso manual"
+    | "Egreso manual";
   quantity: number;
   remito: string;
   detail: string;
+  reference?: string;
   at: string;
   atISO?: string;
   createdBy: string;
@@ -1045,7 +1055,7 @@ export default function Home() {
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [movementProductId, setMovementProductId] = useState(PRODUCTS[0].id);
   const [movementKind, setMovementKind] =
-    useState<StockMovement["kind"]>("Ingreso");
+    useState<StockMovement["kind"]>("Ingreso por remito");
   const [movementQuantity, setMovementQuantity] = useState(0);
   const [movementRemito, setMovementRemito] = useState("");
   const [movementDetail, setMovementDetail] = useState("");
@@ -1446,6 +1456,20 @@ export default function Home() {
     };
     setCashLedger((items) => [ledgerEntry, ...items]);
     return ledgerEntry;
+  };
+  const recordStockMovement = (
+    movement: Omit<StockMovement, "id" | "site" | "at" | "atISO" | "createdBy"> & { site?: string },
+  ) => {
+    const entry: StockMovement = {
+      id: crypto.randomUUID(),
+      site: movement.site || site,
+      at: new Date().toLocaleString("es-AR"),
+      atISO: new Date().toISOString(),
+      createdBy: user?.name || "Sistema",
+      ...movement,
+    };
+    setStockMovements((items) => [entry, ...items]);
+    return entry;
   };
   const isAndrea = user?.name.startsWith("Andrea") || false;
   const isBetzi = user?.name.startsWith("Betzi") || false;
@@ -2055,11 +2079,13 @@ export default function Home() {
           id: crypto.randomUUID(),
           site: request.site,
           productId: line.productId,
-          kind: "Ingreso" as const,
+          kind: "Recepción de pedido" as const,
           quantity: line.preparedQuantity ?? line.quantity,
           remito: `Pedido ${request.id.slice(0, 8)}`,
           detail: "Recepción confirmada por el local",
+          reference: request.id,
           at: new Date().toLocaleString("es-AR"),
+          atISO: new Date().toISOString(),
           createdBy: user.name,
         })),
       ...items,
@@ -2156,6 +2182,16 @@ export default function Home() {
           [adjustment.productId]: adjustment.counted,
         },
       }));
+    if (approve)
+      recordStockMovement({
+        site: adjustment.site,
+        productId: adjustment.productId,
+        kind: "Ajuste de inventario",
+        quantity: adjustment.counted - adjustment.theoretical,
+        remito: "",
+        detail: adjustment.reason,
+        reference: adjustment.id,
+      });
     recordAudit(
       approve ? "Ajuste de stock aprobado" : "Ajuste de stock rechazado",
       `${adjustment.site} · ${adjustment.id.slice(0, 8)}`,
@@ -2284,7 +2320,9 @@ export default function Home() {
         [movementProductId]: Math.max(
           0,
           items[site][movementProductId] +
-            (movementKind === "Ingreso" ? movementQuantity : -movementQuantity),
+            (["Ingreso por remito", "Recepción de pedido", "Ingreso manual"].includes(movementKind)
+              ? movementQuantity
+              : -movementQuantity),
         ),
       },
     }));
@@ -2409,6 +2447,20 @@ export default function Home() {
       cart.forEach((p) => (a[p.id] = Math.max(0, a[p.id] - 1)));
       return { ...x, [site]: a };
     });
+    const quantities = cart.reduce<Record<number, number>>((result, product) => {
+      result[product.id] = (result[product.id] || 0) + 1;
+      return result;
+    }, {});
+    Object.entries(quantities).forEach(([productId, quantity]) =>
+      recordStockMovement({
+        productId: Number(productId),
+        kind: "Venta",
+        quantity: -quantity,
+        remito: "",
+        detail: `Salida por venta ${sale.id.slice(0, 8)}`,
+        reference: sale.id,
+      }),
+    );
     setMessage(
       `${invitation ? "Invitación registrada" : "Venta registrada"}: ${money.format(net)} · ${invoiceType} · ${payment}.`,
     );
@@ -2443,6 +2495,20 @@ export default function Home() {
       sale.items.forEach((p) => (next[p.id] += 1));
       return { ...x, [site]: next };
     });
+    const quantities = sale.items.reduce<Record<number, number>>((result, product) => {
+      result[product.id] = (result[product.id] || 0) + 1;
+      return result;
+    }, {});
+    Object.entries(quantities).forEach(([productId, quantity]) =>
+      recordStockMovement({
+        productId: Number(productId),
+        kind: "Anulación",
+        quantity,
+        remito: "",
+        detail: `Reposición por anulación ${sale.id.slice(0, 8)}`,
+        reference: sale.id,
+      }),
+    );
     recordAudit(
       "Venta anulada",
       `${sale.id.slice(0, 8)} · ${money.format(sale.net)} · ${sale.method}`,
@@ -2480,6 +2546,20 @@ export default function Home() {
         });
         return { ...items, [site]: next };
       });
+      const quantities = sale.items.reduce<Record<number, number>>((result, product) => {
+        result[product.id] = (result[product.id] || 0) + 1;
+        return result;
+      }, {});
+      Object.entries(quantities).forEach(([productId, quantity]) =>
+        recordStockMovement({
+          productId: Number(productId),
+          kind: "Devolución",
+          quantity,
+          remito: "",
+          detail: `Reposición por ${returnKind.toLowerCase()} ${sale.id.slice(0, 8)}`,
+          reference: sale.id,
+        }),
+      );
     }
     if (returnKind === "Devolución") {
       setPayments((items) => items.filter((item) => item.saleId !== sale.id));
@@ -3816,8 +3896,10 @@ export default function Home() {
                         }
                         className="mt-1 block w-full rounded border p-2 font-normal"
                       >
-                        <option>Ingreso</option>
-                        <option>Egreso</option>
+                        <option>Ingreso por remito</option>
+                        <option>Ingreso manual</option>
+                        <option>Egreso manual</option>
+                        <option>Merma</option>
                       </select>
                     </label>
                     <label className="text-sm font-bold">
