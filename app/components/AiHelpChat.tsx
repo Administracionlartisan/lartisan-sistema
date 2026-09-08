@@ -2,6 +2,7 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AssistantRole, fallbackAnswers, matchAssistantTopic, topicsForRole } from "../data/assistantKnowledge";
+import { DiagnosticContext, formatDiagnostic, runOperationDiagnostics } from "../data/operationDiagnostics";
 
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string; unknown?: boolean };
 const API_BASE = "https://www.lartisantaller.com/sistema-api";
@@ -17,9 +18,11 @@ const suggestions: Record<AssistantRole, string[]> = {
 };
 
 export default function AiHelpChat({
-  role, site, section, userName, onSupportCreated,
+  role, site, section, userName, diagnosticContext, onSupportCreated,
 }: {
-  role: AssistantRole; site: string; section: string; userName: string; onSupportCreated?: () => void;
+  role: AssistantRole; site: string; section: string; userName: string;
+  diagnosticContext: Omit<DiagnosticContext, "browserOnline">;
+  onSupportCreated?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [showCatalog, setShowCatalog] = useState(false);
@@ -69,6 +72,16 @@ export default function AiHelpChat({
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(question); }
   };
+  const diagnose = () => {
+    const findings = runOperationDiagnostics({ ...diagnosticContext, browserOnline: navigator.onLine });
+    setShowCatalog(false);
+    setNotice("");
+    setMessages((items) => [
+      ...items,
+      { id: crypto.randomUUID(), role: "user", content: "Revisá qué puede estar fallando en esta pantalla." },
+      { id: crypto.randomUUID(), role: "assistant", content: formatDiagnostic(findings, diagnosticContext.section, diagnosticContext.site) },
+    ]);
+  };
   const lastQuestion = [...messages].reverse().find((message) => message.role === "user");
   const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant" && message.id !== "welcome");
 
@@ -98,10 +111,13 @@ export default function AiHelpChat({
             <div><b>Ayuda L’ARTISAN</b><p className="text-xs text-white/75">Guía gratuita · {roleNames[role]} · solo consulta</p></div>
             <button onClick={() => setOpen(false)} aria-label="Cerrar ayuda" className="rounded px-3 py-2 text-xl leading-none hover:bg-white/10">×</button>
           </header>
-          <div className="border-b bg-white px-4 py-2">
+          <div className="flex flex-wrap gap-x-4 gap-y-2 border-b bg-white px-4 py-2">
+            <button type="button" onClick={diagnose} className="rounded-full bg-[#eef3f8] px-3 py-2 text-xs font-black text-[#183a67] hover:bg-[#dfe9f3]">
+              Revisar qué está fallando
+            </button>
             <button type="button" onClick={() => setShowCatalog((value) => !value)}
-              className="text-xs font-bold text-[#183a67] underline" aria-expanded={showCatalog}>
-              {showCatalog ? "Ocultar preguntas" : `Ver las ${availableTopics.length} preguntas disponibles para mi rol`}
+              className="px-1 py-2 text-xs font-bold text-[#183a67] underline" aria-expanded={showCatalog}>
+              {showCatalog ? "Ocultar preguntas" : `Ver ${availableTopics.length} preguntas`}
             </button>
           </div>
           {showCatalog ? (

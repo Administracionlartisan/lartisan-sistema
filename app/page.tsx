@@ -8137,6 +8137,35 @@ export default function Home() {
         site={user.role === "administracion" ? "" : site}
         section={tab}
         userName={user.name}
+        diagnosticContext={{
+          site,
+          section: tab,
+          connectionMode,
+          pendingSync,
+          canSell: can("cobrar"),
+          cashOpen: cashIsOpen,
+          hasActiveShift: Boolean(activeShift),
+          cartItems: cart.length,
+          customer,
+          discount,
+          maxDiscount: siteLimits.maxDiscount,
+          splitPayment,
+          splitPaymentTotal,
+          saleNet: net,
+          countedCash: counted,
+          envelopeCash: envelope,
+          expectedCash: expected,
+          cashVariance,
+          maxCashVariance: siteLimits.maxCashDifference,
+          lowStockCount: lowStockProducts.length,
+          insufficientStockProducts: lines
+            .filter(({ p, q }) => q > (stock[site][p.id] || 0))
+            .map(({ p }) => p.name),
+          invalidInvitationProducts: lines
+            .filter(({ p, q }) => (invitedQuantities[p.id] || 0) > q)
+            .map(({ p }) => p.name),
+          recentMessage: message,
+        }}
         onSupportCreated={user.role === "administracion" ? () => void loadAdminSecurityData() : undefined}
       />
       <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-40 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
