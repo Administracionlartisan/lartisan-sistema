@@ -21,7 +21,12 @@ export const assistantTopics: AssistantTopic[] = [
     "Abrí el selector superior y elegí la sucursal correcta antes de vender. Si no aparece, Administración debe agregarla a tus locales asignados.",
     "Confirmá siempre el local activo antes de abrir caja o registrar una venta para no cargarla en otra sucursal."
   ]},
-  { id:"open-cash", category:"Caja", question:"¿Cómo hago la apertura de caja?", keywords:["abrir caja","apertura caja","fondo inicial","arqueo inicial"], roles:ALL, answers:[
+  { id:"cash-overview", category:"Caja", question:"¿Cómo funciona la caja?", keywords:["como hago caja","cómo hago caja","usar caja","como uso caja","cómo uso caja","funciona caja","manejar caja"], roles:ALL, answers:[
+    "El circuito es: elegí el local correcto, entrá en Caja, registrá el fondo inicial y abrila. Después podés cobrar ventas y cargar movimientos. Al terminar, hacé el cierre de turno o el cierre diario y contá el efectivo real.",
+    "Para trabajar con Caja primero abrila con el dinero inicial. Durante el turno, las ventas en efectivo y los movimientos quedan registrados. Al finalizar, contá el efectivo, informá el sobre si corresponde y confirmá el cierre.",
+    "Caja se usa en tres pasos: apertura con fondo inicial, operación de ventas y movimientos, y cierre con arqueo. Revisá siempre que el local activo y la responsable sean correctos antes de confirmar."
+  ]},
+  { id:"open-cash", category:"Caja", question:"¿Cómo hago la apertura de caja?", keywords:["abrir caja","abro caja","como abro caja","cómo abro caja","como abrir la caja","apertura caja","fondo inicial","arqueo inicial"], roles:ALL, answers:[
     "Entrá en Caja, elegí “Abrir caja”, declarás el fondo inicial contado y confirmás. Queda asociado a tu usuario, local y horario.",
     "Para comenzar el turno registrá la apertura con el efectivo inicial real. Revisá local y responsable antes de confirmar.",
     "La caja se inicia desde Apertura: cargá cuánto dinero físico recibís como fondo. Ese importe será la base del cierre."
@@ -45,6 +50,11 @@ export const assistantTopics: AssistantTopic[] = [
     "Elegí el local, verificá que la caja esté abierta, agregá productos y cantidades, seleccioná el medio de pago y confirmá el total.",
     "En Ventas seleccioná productos, controlá cantidades, descuento, cobro y cliente. Al confirmar se registra y descuenta el stock.",
     "Armá la venta desde el catálogo, elegí cómo se cobra y comprobá el resumen. La confirmación impacta en venta, caja y existencias."
+  ]},
+  { id:"cannot-charge", category:"Ventas", question:"¿Por qué no puedo cobrar una venta?", keywords:["no puedo cobrar","no me deja cobrar","no puedo hacer el cobro","boton cobrar bloqueado","botón cobrar bloqueado","abrir caja para cobrar","problema al cobrar","error al cobrar"], roles:ALL, answers:[
+    "Primero revisá si la caja del local está abierta: cuando está cerrada, el botón dice “Abrí caja para cobrar”. Si ya está abierta, agregá al menos un producto y confirmá que el medio de pago complete exactamente el total.",
+    "El cobro puede bloquearse por cuatro motivos: caja cerrada, venta sin productos, pago dividido que no suma el total o falta de permiso para cobrar. Revisá el mensaje que aparece en pantalla; indica cuál de esos puntos corregir.",
+    "Verificá el local activo y abrí su caja. Luego controlá que haya productos en la venta, que el descuento no supere el límite y que los medios de pago coincidan con el total. Si sigue bloqueado, usá “Revisar qué está fallando”."
   ]},
   { id:"invitation", category:"Ventas", question:"¿Cómo envío solo una unidad de invitación?", keywords:["invitacion producto","invitación","producto gratis","una unidad gratis","precio cero"], roles:ALL, answers:[
     "En el producto indicá cuántas unidades serán invitación. Si cargaste 5 raviolones y marcás 1, se cobran 4 y las 5 salen del stock.",
