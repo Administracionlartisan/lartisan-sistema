@@ -46,7 +46,7 @@ function pnl_oauth_client(array $config): array
     $drive = $config['backup']['drive'] ?? [];
     $clientId = (string) ($drive['client_id'] ?? '');
     $clientSecret = (string) ($drive['client_secret'] ?? '');
-    $redirect = (string) ($config['pnl_sync']['redirect_uri'] ?? '');
+    $redirect = (string) ($config['pnl_sync']['redirect_uri'] ?? 'https://www.lartisantaller.com/sistema-api/admin/pnl/google-callback');
     if ($clientId === '' || $clientSecret === '' || $redirect === '') {
         throw new RuntimeException('La conexión de Google no está configurada todavía.');
     }
@@ -123,8 +123,8 @@ function pnl_access_token(array $config): string
 
 function pnl_fetch_sheet_values(array $config): array
 {
-    $sheetId = (string) ($config['pnl_sync']['spreadsheet_id'] ?? '');
-    $range = (string) ($config['pnl_sync']['range'] ?? '');
+    $sheetId = (string) ($config['pnl_sync']['spreadsheet_id'] ?? '1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA');
+    $range = (string) ($config['pnl_sync']['range'] ?? "'P&L Consolidado 2026 COPIA'!A1:AN220");
     if ($sheetId === '' || $range === '') throw new RuntimeException('Falta identificar la hoja del P&L.');
     $accessToken = pnl_access_token($config);
     $url = 'https://sheets.googleapis.com/v4/spreadsheets/' . rawurlencode($sheetId) . '/values/' . rawurlencode($range) . '?majorDimension=ROWS';

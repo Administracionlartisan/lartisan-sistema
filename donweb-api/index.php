@@ -84,8 +84,8 @@ if ($method === 'POST' && $route === 'admin/pnl/sync') {
     ensure_pnl_sync_schema($pdo);
     $last = $pdo->query("SELECT started_at FROM pnl_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
     if ($last) json_response(['ok' => false, 'error' => 'Esperá un minuto antes de volver a sincronizar.'], 429);
-    $sheetId = (string) ($config['pnl_sync']['spreadsheet_id'] ?? '');
-    $range = (string) ($config['pnl_sync']['range'] ?? '');
+    $sheetId = (string) ($config['pnl_sync']['spreadsheet_id'] ?? '1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA');
+    $range = (string) ($config['pnl_sync']['range'] ?? "'P&L Consolidado 2026 COPIA'!A1:AN220");
     $pdo->prepare("INSERT INTO pnl_sync_runs (status, source_spreadsheet_id, source_range, triggered_by, started_at) VALUES ('running', ?, ?, ?, NOW())")
         ->execute([$sheetId, $range, $admin['id']]);
     $runId = (int) $pdo->lastInsertId();
