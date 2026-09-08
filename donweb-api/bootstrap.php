@@ -14,6 +14,17 @@ if (!is_file($configPath)) {
 
 $config = require $configPath;
 
+// Las credenciales de Google se mantienen fuera de public_html.  El archivo
+// privado ya se usa para los respaldos y puede contener la conexión de solo
+// lectura para los informes, sin exponer secretos desde la API.
+$privateIntegrationPath = dirname(__DIR__, 2) . '/lartisan-backup-config.php';
+if (is_file($privateIntegrationPath)) {
+    $privateIntegrationConfig = require $privateIntegrationPath;
+    if (is_array($privateIntegrationConfig)) {
+        $config['backup'] = array_replace_recursive($config['backup'] ?? [], $privateIntegrationConfig);
+    }
+}
+
 function json_response(array $payload, int $status = 200): never
 {
     http_response_code($status);

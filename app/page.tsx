@@ -1137,6 +1137,9 @@ export default function Home() {
     [adminReport, setAdminReport] = useState("Resumen"),
     [plSection, setPlSection] = useState("ingresos"),
     [plPerspective, setPlPerspective] = useState<"financial" | "economic">("financial"),
+    [pnlConnection, setPnlConnection] = useState<{ connected: boolean; rows: string[][]; updatedAt: string | null }>({ connected: false, rows: [], updatedAt: null }),
+    [pnlSyncing, setPnlSyncing] = useState(false),
+    [pnlSyncMessage, setPnlSyncMessage] = useState(""),
     [hourInterval, setHourInterval] = useState(1),
     [newUserName, setNewUserName] = useState(""),
     [newUserRole, setNewUserRole] = useState<Role>("vendedora"),
@@ -1407,6 +1410,48 @@ export default function Home() {
     const timer = window.setInterval(check, 5 * 60 * 1000);
     return () => { active = false; window.clearInterval(timer); };
   }, [user?.id, user?.role, healthRefreshKey, managedUsers]);
+  useEffect(() => {
+    if (user?.role !== "administracion") return;
+    let active = true;
+    fetch(`${API_BASE}/admin/pnl/latest`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!active) return;
+        setPnlConnection({
+          connected: Boolean(data.connected),
+          rows: Array.isArray(data.snapshot?.rows) ? data.snapshot.rows : [],
+          updatedAt: data.snapshot?.updatedAt || null,
+        });
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [user?.id, user?.role]);
+  const connectPnlGoogle = async () => {
+    setPnlSyncMessage("");
+    const response = await fetch(`${API_BASE}/admin/pnl/authorization-url`, { credentials: "include" });
+    const data = await response.json();
+    if (!response.ok || !data.authorizationUrl) {
+      setPnlSyncMessage("No se pudo iniciar la autorización con Google.");
+      return;
+    }
+    window.location.assign(data.authorizationUrl);
+  };
+  const syncPnlFromGoogle = async () => {
+    setPnlSyncing(true);
+    setPnlSyncMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/pnl/sync`, { method: "POST", credentials: "include" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "No se pudo actualizar el P&L.");
+      setPnlConnection({ connected: true, rows: data.snapshot.rows || [], updatedAt: data.snapshot.updatedAt || new Date().toISOString() });
+      setPnlSyncMessage(`P&L actualizado desde Drive: ${data.snapshot.rowsImported} filas verificadas.`);
+    } catch (error) {
+      setPnlSyncMessage(error instanceof Error ? error.message : "No se pudo actualizar el P&L.");
+    } finally {
+      setPnlSyncing(false);
+    }
+  };
   const loadOperationalData = async () => {
     const response = await fetch(`${API_BASE}/operations/states`, {
       credentials: "include",
@@ -6633,19 +6678,22 @@ export default function Home() {
                   {adminReport === "PLConsolidado" && (
                     <div className="mt-5">
                       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[#eef2f6] p-4 text-sm">
-                        <span>
-                          <b>Histórico inicial:</b> P&L Consolidado 2026 de Drive.
-                          Los nuevos datos se irán calculando desde L&apos;ARTISAN.
-                        </span>
-                        <a
-                          href="https://docs.google.com/spreadsheets/d/1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA/edit?gid=730661199#gid=730661199"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded border border-[#183a67] bg-white px-3 py-2 font-bold"
-                        >
-                          Ver fuente en Drive
-                        </a>
+                        <div>
+                          <b>{pnlConnection.connected ? "Fuente conectada:" : "Histórico inicial:"}</b>{" "}
+                          P&amp;L Consolidado 2026 de Drive. {pnlConnection.updatedAt ? `Última lectura: ${new Date(pnlConnection.updatedAt.replace(" ", "T")).toLocaleString("es-AR")}.` : "Aún no se realizó una lectura automática."}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {pnlConnection.connected ? (
+                            <button onClick={syncPnlFromGoogle} disabled={pnlSyncing} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white disabled:opacity-60">
+                              {pnlSyncing ? "Actualizando…" : "Actualizar desde Drive"}
+                            </button>
+                          ) : (
+                            <button onClick={connectPnlGoogle} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Conectar lectura de Drive</button>
+                          )}
+                          <a href="https://docs.google.com/spreadsheets/d/1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA/edit?gid=730661199#gid=730661199" target="_blank" rel="noreferrer" className="rounded border border-[#183a67] bg-white px-3 py-2 font-bold">Ver fuente en Drive</a>
+                        </div>
                       </div>
+                      {pnlSyncMessage && <p className={`mt-3 rounded p-3 text-sm ${pnlSyncMessage.startsWith("P&L actualizado") ? "bg-[#eef5ef] text-green-800" : "bg-[#fff1ec] text-red-800"}`}>{pnlSyncMessage}</p>}
                       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <div className="rounded bg-[#183a67] p-4 text-white">
                           <p className="text-sm">Facturación bruta · Junio</p>
@@ -6778,6 +6826,19 @@ export default function Home() {
                           </div>
                         </div>
                       </div>
+                      {pnlConnection.rows.length > 0 && (
+                        <div className="mt-5 rounded border bg-white p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div><b>Lectura completa recibida desde Drive</b><p className="mt-1 text-sm text-slate-600">Copia de consulta para contrastar todos los datos importados. La planilla original no se modifica.</p></div>
+                            <span className="rounded bg-[#eef2f6] px-3 py-2 text-sm font-bold">{pnlConnection.rows.length} filas</span>
+                          </div>
+                          <div className="mt-4 max-h-[520px] overflow-auto rounded border">
+                            <table className="w-full min-w-[1200px] text-xs">
+                              <tbody>{pnlConnection.rows.map((row, rowIndex) => <tr key={`pnl-live-${rowIndex}`} className="border-t odd:bg-[#fbfaf7]">{Array.from({ length: Math.max(1, ...pnlConnection.rows.map((item) => item.length)) }).map((_, columnIndex) => <td key={`${rowIndex}-${columnIndex}`} className={`whitespace-nowrap p-2 ${columnIndex === 0 ? "sticky left-0 bg-inherit font-bold" : "text-right"}`}>{row[columnIndex] || ""}</td>)}</tr>)}</tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
                       <div className="mt-5 grid gap-4 lg:grid-cols-2">
                         <div className="rounded border p-4">
                           <b>Proyección del mes · Septiembre 2026</b>

@@ -24,4 +24,9 @@ return [
             'folder_id' => 'CONFIGURAR_EN_EL_SERVIDOR',
         ],
     ],
+    'pnl_sync' => [
+        'spreadsheet_id' => '1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA',
+        'range' => "'P&L Consolidado 2026 COPIA'!A1:AN220",
+        'redirect_uri' => 'https://www.lartisantaller.com/sistema-api/admin/pnl/google-callback',
+    ],
 ];

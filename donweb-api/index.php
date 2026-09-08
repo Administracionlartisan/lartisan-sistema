@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
+require __DIR__ . '/pnl_sync.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -30,6 +31,79 @@ $pdo->exec(
         INDEX idx_recovery_expiry (expires_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 );
+
+if ($method === 'GET' && $route === 'admin/pnl/google-callback') {
+    $state = (string) ($_GET['state'] ?? '');
+    $code = (string) ($_GET['code'] ?? '');
+    $stateHash = hash('sha256', $state);
+    ensure_pnl_sync_schema($pdo);
+    $lookup = $pdo->prepare('SELECT user_id FROM pnl_oauth_states WHERE state_hash = ? AND expires_at > NOW() LIMIT 1');
+    $lookup->execute([$stateHash]);
+    $userId = $lookup->fetchColumn();
+    $pdo->prepare('DELETE FROM pnl_oauth_states WHERE state_hash = ?')->execute([$stateHash]);
+    $success = false;
+    $message = 'No se pudo validar la autorización de Google.';
+    try {
+        if (!$userId || $code === '') throw new RuntimeException($message);
+        pnl_exchange_authorization_code($config, $code);
+        audit($pdo, (int) $userId, 'pnl_google_connected', 'lectura_solo');
+        $success = true;
+        $message = 'Google quedó conectado con permiso de solo lectura. Ya podés volver a Administración y actualizar el P&L.';
+    } catch (Throwable $error) {
+        $message = 'No se pudo conectar Google: ' . htmlspecialchars($error->getMessage(), ENT_QUOTES, 'UTF-8');
+    }
+    http_response_code($success ? 200 : 400);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><title>L’ARTISAN · P&L</title><body style="font-family:Arial,sans-serif;padding:40px;color:#183a67"><h1>' . ($success ? 'Conexión lista' : 'No se pudo completar') . '</h1><p>' . $message . '</p><p><a href="https://admin.lartisantaller.com/">Volver a Administración</a></p></body></html>';
+    exit;
+}
+
+if ($method === 'GET' && $route === 'admin/pnl/authorization-url') {
+    $admin = require_user($pdo, ['administracion']);
+    json_response(['ok' => true, 'authorizationUrl' => pnl_authorization_url($pdo, $config, (int) $admin['id'])]);
+}
+
+if ($method === 'GET' && $route === 'admin/pnl/latest') {
+    require_user($pdo, ['administracion']);
+    ensure_pnl_sync_schema($pdo);
+    $latest = $pdo->query("SELECT rows_imported, payload_json, started_at, finished_at FROM pnl_sync_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetch();
+    $connected = is_file(pnl_private_token_path());
+    json_response([
+        'ok' => true,
+        'connected' => $connected,
+        'snapshot' => $latest ? [
+            'rows' => json_decode((string) $latest['payload_json'], true) ?: [],
+            'rowsImported' => (int) $latest['rows_imported'],
+            'updatedAt' => $latest['finished_at'] ?: $latest['started_at'],
+        ] : null,
+    ]);
+}
+
+if ($method === 'POST' && $route === 'admin/pnl/sync') {
+    $admin = require_user($pdo, ['administracion']);
+    ensure_pnl_sync_schema($pdo);
+    $last = $pdo->query("SELECT started_at FROM pnl_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
+    if ($last) json_response(['ok' => false, 'error' => 'Esperá un minuto antes de volver a sincronizar.'], 429);
+    $sheetId = (string) ($config['pnl_sync']['spreadsheet_id'] ?? '');
+    $range = (string) ($config['pnl_sync']['range'] ?? '');
+    $pdo->prepare("INSERT INTO pnl_sync_runs (status, source_spreadsheet_id, source_range, triggered_by, started_at) VALUES ('running', ?, ?, ?, NOW())")
+        ->execute([$sheetId, $range, $admin['id']]);
+    $runId = (int) $pdo->lastInsertId();
+    try {
+        $rows = pnl_fetch_sheet_values($config);
+        $payload = json_encode($rows, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($payload === false) throw new RuntimeException('No se pudo guardar la copia de lectura del P&L.');
+        $pdo->prepare("UPDATE pnl_sync_runs SET status = 'verified', rows_imported = ?, payload_json = ?, payload_hash = ?, finished_at = NOW() WHERE id = ?")
+            ->execute([count($rows), $payload, hash('sha256', $payload), $runId]);
+        audit($pdo, (int) $admin['id'], 'pnl_synced_from_google', 'filas=' . count($rows));
+        json_response(['ok' => true, 'snapshot' => ['rows' => $rows, 'rowsImported' => count($rows), 'updatedAt' => date('Y-m-d H:i:s')]]);
+    } catch (Throwable $error) {
+        $pdo->prepare("UPDATE pnl_sync_runs SET status = 'failed', error_message = ?, finished_at = NOW() WHERE id = ?")
+            ->execute([substr($error->getMessage(), 0, 1000), $runId]);
+        audit($pdo, (int) $admin['id'], 'pnl_sync_failed');
+        json_response(['ok' => false, 'error' => 'No se pudo actualizar el P&L. Se conserva la última versión válida.'], 502);
+    }
+}
 
 if ($method === 'GET' && ($route === '' || $route === 'health')) {
     $pdo->query('SELECT 1');
