@@ -520,6 +520,12 @@ const ADMIN_REPORTS = [
       "Tablero breve con facturación, proyección, metas y alertas críticas.",
   },
   {
+    id: "PLConsolidado",
+    title: "P&L consolidado",
+    detail:
+      "Resultado financiero y económico mensual, márgenes, caja, deuda e inventario consolidado.",
+  },
+  {
     id: "Resumen",
     title: "Resumen ejecutivo",
     detail: "Ventas, tickets, cierres y alertas por local.",
@@ -672,6 +678,17 @@ const SOLD_COLLECTED_REFERENCE = [
   ["julio 2026", "Cobrado", 4966885, 4285087, 5619751],
   ["agosto 2026", "Vendido", 29206980, 24382090, 23992415],
   ["agosto 2026", "Cobrado", 4551142, 4594701, 5526605],
+] as const;
+const PL_CONSOLIDATED_REFERENCE = [
+  { month: "Enero", revenue: 83583181, change: null },
+  { month: "Febrero", revenue: 89617087, change: 7.2 },
+  { month: "Marzo", revenue: 131273947, change: 46.5 },
+  { month: "Abril", revenue: 132570997, change: 1.0 },
+  { month: "Mayo", revenue: 145056522, change: 9.4 },
+  { month: "Junio", revenue: 156446368, change: 7.9 },
+  { month: "Julio", revenue: 154247712, change: -1.4 },
+  { month: "Agosto", revenue: 162555242, change: 5.4 },
+  { month: "Septiembre", revenue: 31624548, change: null },
 ] as const;
 const USERS: Record<string, User> = {
   "Stefany García": { name: "Stefany García", role: "vendedora", location: "Congreso" },
@@ -6523,6 +6540,96 @@ export default function Home() {
                                 Sin alertas operativas en esta sesión.
                               </p>
                             )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {adminReport === "PLConsolidado" && (
+                    <div className="mt-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[#eef2f6] p-4 text-sm">
+                        <span>
+                          <b>Histórico inicial:</b> P&L Consolidado 2026 de Drive.
+                          Los nuevos datos se irán calculando desde L&apos;ARTISAN.
+                        </span>
+                        <a
+                          href="https://docs.google.com/spreadsheets/d/1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA/edit?gid=730661199#gid=730661199"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded border border-[#183a67] bg-white px-3 py-2 font-bold"
+                        >
+                          Ver fuente en Drive
+                        </a>
+                      </div>
+                      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded bg-[#183a67] p-4 text-white">
+                          <p className="text-sm">Facturación bruta · Junio</p>
+                          <b className="mt-2 block text-2xl">{money.format(156446368)}</b>
+                        </div>
+                        <div className="rounded bg-[#eef5ef] p-4">
+                          <p className="text-sm">Caja real de cierre</p>
+                          <b className="mt-2 block text-2xl">{money.format(9865000)}</b>
+                        </div>
+                        <div className="rounded bg-[#fff5d8] p-4">
+                          <p className="text-sm">Deuda al cierre</p>
+                          <b className="mt-2 block text-2xl">{money.format(96742833)}</b>
+                        </div>
+                        <div className="rounded bg-[#eef2f6] p-4">
+                          <p className="text-sm">Stock valorizado</p>
+                          <b className="mt-2 block text-2xl">{money.format(41057572)}</b>
+                        </div>
+                      </div>
+                      <div className="mt-5 grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
+                        <div className="overflow-auto rounded border">
+                          <table className="w-full min-w-[560px] text-sm">
+                            <thead className="bg-[#183a67] text-white">
+                              <tr>
+                                <th className="p-3 text-left">Mes 2026</th>
+                                <th className="p-3 text-right">Facturación bruta</th>
+                                <th className="p-3 text-right">Variación mensual</th>
+                                <th className="p-3 text-center">Estado</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {PL_CONSOLIDATED_REFERENCE.map((row) => (
+                                <tr key={row.month} className="border-t">
+                                  <td className="p-3 font-bold">{row.month}</td>
+                                  <td className="p-3 text-right">{money.format(row.revenue)}</td>
+                                  <td className={`p-3 text-right font-bold ${row.change === null ? "text-slate-500" : row.change >= 0 ? "text-green-700" : "text-red-700"}`}>
+                                    {row.change === null ? "En curso" : `${row.change > 0 ? "+" : ""}${row.change.toFixed(1)}%`}
+                                  </td>
+                                  <td className="p-3 text-center text-xs font-bold">
+                                    {row.month === "Septiembre" ? "PARCIAL" : "CERRADO"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="space-y-4">
+                          <div className="rounded border p-4">
+                            <b>Lectura gerencial</b>
+                            <p className="mt-2 text-sm text-slate-600">
+                              Este reporte reúne venta, resultado, caja, deuda e
+                              inventario en una sola vista para decidir el cierre del mes.
+                            </p>
+                          </div>
+                          <div className="rounded bg-[#fff5d8] p-4 text-sm">
+                            <b>Próximo paso de integración</b>
+                            <p className="mt-2">
+                              Al confirmar la estructura final de P&amp;L, los datos de
+                              ventas, cobros, cajas y stock pasarán a actualizar esta
+                              vista automáticamente; gastos y cuentas por pagar quedan
+                              para la segunda etapa.
+                            </p>
+                          </div>
+                          <div className="rounded bg-[#fff1ec] p-4 text-sm">
+                            <b>Control previo</b>
+                            <p className="mt-2">
+                              Antes de automatizar márgenes y resultados, revisaremos
+                              las fórmulas históricas para evitar trasladar porcentajes
+                              o conciliaciones inconsistentes.
+                            </p>
                           </div>
                         </div>
                       </div>
