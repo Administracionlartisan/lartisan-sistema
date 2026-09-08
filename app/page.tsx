@@ -1100,6 +1100,7 @@ export default function Home() {
         : usernameFromName("Stefany García"),
     ),
     [password, setPassword] = useState(""),
+    [showPassword, setShowPassword] = useState(false),
     [user, setUser] = useState<ManagedUser | null>(null),
     [authLoading, setAuthLoading] = useState(true),
     [currentPassword, setCurrentPassword] = useState(""),
@@ -3162,14 +3163,25 @@ export default function Home() {
             className="mt-1 w-full rounded-lg border p-3"
           />
           <label className="mt-4 block text-sm font-bold">Contraseña</label>
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && enter()}
-            type="password"
-            placeholder="Tu contraseña"
-            className="mt-1 w-full rounded-lg border p-3"
-          />
+          <div className="relative mt-1">
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && enter()}
+              type={showPassword ? "text" : "password"}
+              placeholder="Tu contraseña"
+              className="w-full rounded-lg border py-3 pl-3 pr-24"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((visible) => !visible)}
+              aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              aria-pressed={showPassword}
+              className="absolute inset-y-0 right-3 my-auto h-fit rounded px-2 py-1 text-sm font-bold text-[#183a67] underline decoration-transparent underline-offset-2 hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+            >
+              {showPassword ? "Ocultar" : "Mostrar"}
+            </button>
+          </div>
           <p className="mt-3 text-xs text-slate-500">
             Administración, Betzi y Andrea tendrán doble factor al activar la autenticación segura.
           </p>
