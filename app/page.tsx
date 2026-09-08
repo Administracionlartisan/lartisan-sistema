@@ -1427,11 +1427,21 @@ export default function Home() {
     };
   }, [portal]);
   useEffect(() => {
-    if (user?.role === "administracion") {
-      loadAdminSecurityData().catch(() =>
-        setMessage("No se pudieron actualizar usuarios y recuperaciones."),
-      );
-    }
+    if (user?.role !== "administracion") return;
+    let active = true;
+    const refreshAdminTasks = () =>
+      loadAdminSecurityData().catch(() => {
+        if (active) setMessage("No se pudieron actualizar usuarios, recuperaciones y consultas.");
+      });
+    void refreshAdminTasks();
+    const timer = window.setInterval(refreshAdminTasks, 30_000);
+    const refreshOnFocus = () => void refreshAdminTasks();
+    window.addEventListener("focus", refreshOnFocus);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
   }, [user?.id, user?.role]);
   useEffect(() => {
     if (user?.role !== "administracion") return;
@@ -3311,6 +3321,10 @@ export default function Home() {
     ...(isBetzi ? ["Horarios"] : []),
     ...(isAndrea ? ["Reportes"] : []),
   ];
+  const adminTaskAlertCount = user.role === "administracion"
+    ? aiSupportRequests.filter((request) => request.status === "pendiente").length +
+      resetRequests.filter((request) => request.status === "Pendiente").length
+    : 0;
   const availableAdminReports =
     user.role === "administracion"
       ? ADMIN_REPORTS.filter((report) =>
@@ -3371,9 +3385,22 @@ export default function Home() {
                 title={t === "Ventas" ? "Registrar productos, cobros y comandas." : t === "Caja" ? "Abrir, controlar y cerrar la caja." : t === "Stock" ? "Consultar existencias y mínimos." : t === "Tareas" ? "Ver acciones pendientes." : `Abrir ${t}.`}
                 className={`rounded p-2 text-left text-sm font-bold transition ${tab === t ? "bg-[#183a67] text-white" : "hover:bg-[#eef2f6]"}`}
               >
-                {t === "Recetas y costos" || t === "Legajos" || t === "MRP"
-                  ? `${t} (Próximamente)`
-                  : t}
+                <span className="flex items-center justify-between gap-2">
+                  <span>
+                    {t === "Recetas y costos" || t === "Legajos" || t === "MRP"
+                      ? `${t} (Próximamente)`
+                      : t}
+                  </span>
+                  {t === "Tareas" && adminTaskAlertCount > 0 && (
+                    <span
+                      className="inline-flex min-w-6 items-center justify-center rounded-full bg-[#ec3a35] px-2 py-1 text-xs font-black leading-none text-white shadow-sm"
+                      aria-label={`${adminTaskAlertCount} tareas pendientes`}
+                      title={`${adminTaskAlertCount} tareas nuevas para revisar`}
+                    >
+                      {adminTaskAlertCount > 99 ? "99+" : adminTaskAlertCount}
+                    </span>
+                  )}
+                </span>
               </button>
             ))}
           </nav>
