@@ -6684,6 +6684,11 @@ export default function Home() {
                             </button>
                           ))}
                         </div>
+                        <p className="mt-3 text-xs text-slate-600">
+                          <span className="mr-3 inline-flex items-center gap-1"><b className="text-green-700">▲ Verde</b> aumentó frente al mes anterior</span>
+                          <span className="mr-3 inline-flex items-center gap-1"><b className="text-red-700">▼ Rojo</b> bajó frente al mes anterior</span>
+                          <span>La marca indica variación; no define por sí sola si el resultado es bueno o malo.</span>
+                        </p>
                         <div className="mt-4 overflow-auto rounded border">
                           <table className="w-full min-w-[1050px] text-sm">
                             <thead className="bg-[#183a67] text-white">
@@ -6699,8 +6704,15 @@ export default function Home() {
                                   <tr key={row.label} className="border-t odd:bg-[#fbfaf7]">
                                     <td className="sticky left-0 bg-inherit p-3 font-bold">{row.label}</td>
                                     {values.map((value, index) => {
+                                      const previousValue = index > 0 ? values[index - 1] : null;
+                                      const increased = previousValue !== null && value > previousValue;
+                                      const decreased = previousValue !== null && value < previousValue;
                                       const shown = row.format === "percent" ? `${value.toFixed(1)}%` : row.format === "times" ? `${value.toFixed(2)}x` : row.format === "days" ? `${value.toFixed(1)} días` : money.format(value);
-                                      return <td key={`${row.label}-${index}`} className={`p-3 text-right ${typeof value === "number" && value < 0 ? "text-red-700" : ""}`}>{shown}</td>;
+                                      return <td key={`${row.label}-${index}`} className={`p-3 text-right ${typeof value === "number" && value < 0 ? "text-red-700" : ""}`}>
+                                        <span className={increased ? "font-bold text-green-700" : decreased ? "font-bold text-red-700" : ""}>
+                                          {increased ? "▲ " : decreased ? "▼ " : ""}{shown}
+                                        </span>
+                                      </td>;
                                     })}
                                   </tr>
                                 );
