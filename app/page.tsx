@@ -690,6 +690,89 @@ const PL_CONSOLIDATED_REFERENCE = [
   { month: "Agosto", revenue: 162555242, change: 5.4 },
   { month: "Septiembre", revenue: 31624548, change: null },
 ] as const;
+const PL_MONTHS = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre"] as const;
+type PLRow = {
+  label: string;
+  financial: number[];
+  economic?: number[];
+  format?: "money" | "percent" | "times" | "days";
+};
+const PL_SECTIONS: Record<string, { title: string; rows: PLRow[] }> = {
+  ingresos: {
+    title: "Ingresos y canales de cobro",
+    rows: [
+      { label: "Facturación bruta", financial: [83583181,89617087,131273947,132570997,145056522,156446368,154247712,162555242,31624548] },
+      { label: "Franquicia", financial: [17678580,17397080,30162911,31812397,41314654,41371893,45367316,32510173,6293457] },
+      { label: "Restaurantes", financial: [14877872,13406930,18936557,16125664,10962189,11442470,22110890,19600208,2000944] },
+      { label: "Almacenes", financial: [8941183,6325035,9958035,7992902,9083108,15703183,15226462,14576616,4854424] },
+      { label: "Efectivo", financial: [8516648,8157910,11561654,13480610,13929884,15679075,14871723,17616083,3600672] },
+      { label: "Banco", financial: [19071523,23501887,33377359,36715094,35019453,32778986,21874975,30087719,24395091] },
+      { label: "Mercado Pago", financial: [9646835,12370348,15462935,17009228,16540059,16843415,22703531,34646834,31182150] },
+      { label: "Rappi", financial: [2264839,2434702,3043378,3846995,3193225,3444851,1685000,1778425,2598700], economic: [2264839,2434702,3043378,3347716,3193225,3444851,1778425,2598700,945269] },
+      { label: "Pedidos Ya", financial: [1003050,1078279,1347849,3668860,3999057,3077081,7888335,7747012,2780880] },
+      { label: "Ingresos netos", financial: [82000530,84672171,123850677,130651751,134041629,140340954,151728233,158563070,82665629], economic: [82000530,84672171,123850677,130651751,134041629,140340954,151728233,158563070,71198464] },
+      { label: "Total ingresos", financial: [83772635,86599835,131338509,142922659,143585567,150205953,157508558,181918154,108061949] },
+    ],
+  },
+  egresos: {
+    title: "Egresos fijos, variables y retiros",
+    rows: [
+      { label: "Egresos fijos", financial: [50051252,47224385,62890775,65459631,68239684,86644715,76354956,101097699,19678159], economic: [44058817,60244348,57838679,81693743,80987604,65910681,75748084,46472691,18886298] },
+      { label: "Retiros socio · Adolfo", financial: [752838,1482726,2100000,2520000,2730000,2730000,2730000,3003000,0] },
+      { label: "Retiros socio · Cata", financial: [322645,635454,920454,1080000,1170000,1170000,1170000,1287000,0] },
+      { label: "Equipamiento", financial: [775692,1237960,3264561,7275085,929300,1214443,5541492,16220550,2990497], economic: [454266,906846,3317879,8997075,565926,887112,6409783,16952998,2479833] },
+      { label: "Personal", financial: [26639104,25575610,29588720,26971407,36609065,50509713,38362678,40704388,15462949], economic: [26045010,26156767,30811960,33163165,50913525,37893490,39651052,6101013,15462949] },
+      { label: "Publicidad", financial: [768000,922000,753000,753000,1522528,428290,2274800,2356552,0] },
+      { label: "Impuestos", financial: [7784586,5197148,14659098,16873512,14337331,18089954,15971990,24004035,20933], economic: [8691443,16840008,9922427,24374120,12673769,12241449,10877227,12258910,20933] },
+      { label: "Alquileres", financial: [3546504,3936383,4019002,4074002,4074002,4171007,4562547,4562547,730000] },
+      { label: "Logística", financial: [1850094,1671353,1246645,1306638,1238252,1366273,1275522,2649058,175128], economic: [2002931,838988,1139186,1233239,1238252,1286273,1541378,2423202,175128] },
+      { label: "Servicios", financial: [7611789,6565752,6339296,4605987,5629207,6965035,4465927,6310569,298652], economic: [2243179,8525176,4854771,5499143,6099602,5103060,4595297,2466469,17455] },
+      { label: "Egresos variables", financial: [31793719,31887618,53845548,67919090,65480883,57780913,57798518,55424135,23391354], economic: [33653019,31178145,58853518,76389407,52744458,63989794,54799600,48426456,4507017] },
+      { label: "Cocina", financial: [24492395,25205928,40904544,43099298,49096755,46955222,47946644,43223985,20399801], economic: [26328282,23976943,42558432,49534057,41674657,53149357,43405069,41173640,3791909] },
+      { label: "Descartables", financial: [1403856,2951980,5172856,7647366,9999354,5555148,6015026,7495445,2601285], economic: [3881451,3240207,7284192,10115232,4829302,6024618,8371303,3117018,324839] },
+      { label: "Limpieza", financial: [213382,0,766505,372948,1154461,318662,934558,847154,0], economic: [270700,189910,600844,865031,594909,664679,1002772,478246,0] },
+      { label: "Tercerizados", financial: [95745,732915,365904,417377,765265,2241657,1901909,0,0], economic: [223929,783281,0,1267298,0,2521457,1120075,0,0] },
+      { label: "Reparaciones", financial: [1403340,946795,1139700,2912112,1108406,1304182,600381,2014639,0], economic: [343657,737805,2914012,1137800,1108406,1204182,700381,2014639,0] },
+      { label: "Total egresos", financial: [81844970,79112003,116736323,133378720,133720567,144425628,134153474,156521834,43069514], economic: [77711836,91422493,116692197,158083150,133732061,129900474,130547684,94899147,23393315] },
+    ],
+  },
+  resultados: {
+    title: "Resultados, caja y punto de equilibrio",
+    rows: [
+      { label: "Resultado económico antes de retiros", financial: [0,0,0,0,0,0,0,0,0], economic: [5364178,-2704478,-113671743,7719971,8019971,8019971,8019971,8409971,4119971] },
+      { label: "Retiros de socios", financial: [1075483,2118180,3020454,3600000,3900000,3900000,3900000,4290000,0] },
+      { label: "Resultado económico después de retiros", financial: [0,0,0,0,0,0,0,0,0], economic: [4288695,-4822658,-116692197,4119971,4119971,4119971,4119971,4119971,4119971] },
+      { label: "Flujo financiero neto", financial: [155560,5560168,4783076,-2726970,321061,-4084674,17574759,2041236,39596115] },
+      { label: "Caja inicial", financial: [1772104,1927664,7487832,12270908,9543938,9865000,5780325,23355084,25396320] },
+      { label: "Caja final teórica", financial: [1927664,7487832,12270908,9543938,9865000,5780325,23355084,25396320,64992435] },
+      { label: "Costo de mercadería vendida", financial: [0,0,0,0,0,0,0,0,0], economic: [-23943784,40208183,45665953,26901412,42896641,58181505,48364326,40428185,2957777] },
+      { label: "Margen bruto", financial: [0,0,0,0,0,0,0,0,0], economic: [105944314,44463988,78184724,103750339,91144988,82159449,103363906,118134885,68240687] },
+      { label: "Margen de contribución", financial: [0,0,0,0,0,0,0,0,0], economic: [48347511,53494025,64997159,54262344,81297171,76351160,96928633,110136614,66691447] },
+      { label: "Punto de equilibrio mensual", financial: [0,0,0,0,0,0,0,0,0], economic: [72902535,92004084,104454939,188032502,127100954,113981740,112468137,60730185,20162637] },
+      { label: "Cobertura de punto de equilibrio", financial: [0,0,0,0,0,0,0,0,0], economic: [112.5,92,118.6,69.5,105.5,123.1,134.9,261.1,353.1], format: "percent" },
+    ],
+  },
+  indicadores: {
+    title: "Rentabilidad, deuda e inventario",
+    rows: [
+      { label: "Margen bruto", financial: [0,0,0,0,0,0,0,0,0], economic: [129.2,52.5,63.1,79.4,68,58.5,68.1,74.5,95.8], format: "percent" },
+      { label: "Margen de contribución", financial: [0,0,0,0,0,0,0,0,0], economic: [59,63.2,52.5,41.5,60.7,54.4,63.9,69.5,93.7], format: "percent" },
+      { label: "Gastos fijos / facturación", financial: [0,0,0,0,0,0,0,0,0], economic: [52.4,68.6,44.3,59.8,57.5,44.2,47.4,26.6,26.5], format: "percent" },
+      { label: "Gastos variables / facturación", financial: [0,0,0,0,0,0,0,0,0], economic: [41,36.8,47.5,58.5,39.3,45.6,36.1,30.5,6.3], format: "percent" },
+      { label: "Deuda neta estimada", financial: [0,0,0,0,0,656573,0,5373767,0] },
+      { label: "Rotación mensual de inventario", financial: [0.95,0.95,1.41,0.64,0.81,1.17,1.08,0.95,0.07], format: "times" },
+      { label: "Días de inventario", financial: [31.5,31.5,21.3,47.1,37,25.7,27.8,31.7,441.4], format: "days" },
+      { label: "Compras / facturación", financial: [31.5,26.8,32.4,37.4,28.7,34,28.1,25.3,12], format: "percent" },
+      { label: "Meta compras / ventas", financial: [35,35,35,35,35,35,35,35,35], format: "percent" },
+      { label: "Desviación compras vs meta", financial: [-3.5,-8.2,-2.6,2.4,-6.3,-1,-6.9,-9.7,-23], format: "percent" },
+      { label: "Personal / facturación neta", financial: [31.8,30.9,24.9,25.4,38,27,26.1,3.8,21.7], format: "percent" },
+      { label: "Cocina / facturación neta", financial: [32.1,28.3,34.4,37.9,31.1,37.9,28.6,26,5.3], format: "percent" },
+      { label: "Alquileres / facturación neta", financial: [4.3,4.6,3.2,3.1,3,3,3,2.9,1], format: "percent" },
+      { label: "Logística / facturación neta", financial: [2.4,1,0.9,0.9,0.9,0.9,1,1.5,0.2], format: "percent" },
+      { label: "Servicios / facturación neta", financial: [2.7,10.1,3.9,4.2,4.6,3.6,3,1.6,0], format: "percent" },
+    ],
+  },
+};
 const USERS: Record<string, User> = {
   "Stefany García": { name: "Stefany García", role: "vendedora", location: "Congreso" },
   "Jessica Vivas": { name: "Jessica Vivas", role: "vendedora", accessAllLocations: true },
@@ -1052,6 +1135,8 @@ export default function Home() {
     [newGuideTitle, setNewGuideTitle] = useState(""),
     [newGuideDetail, setNewGuideDetail] = useState(""),
     [adminReport, setAdminReport] = useState("Resumen"),
+    [plSection, setPlSection] = useState("ingresos"),
+    [plPerspective, setPlPerspective] = useState<"financial" | "economic">("financial"),
     [hourInterval, setHourInterval] = useState(1),
     [newUserName, setNewUserName] = useState(""),
     [newUserRole, setNewUserRole] = useState<Role>("vendedora"),
@@ -6579,6 +6664,54 @@ export default function Home() {
                           <b className="mt-2 block text-2xl">{money.format(41057572)}</b>
                         </div>
                       </div>
+                      <div className="mt-5 rounded border bg-white p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <b>Detalle completo del P&amp;L</b>
+                            <p className="mt-1 text-sm text-slate-500">
+                              Elegí un bloque para ver cada línea mensual de la hoja consolidada.
+                            </p>
+                          </div>
+                          <div className="flex rounded-lg bg-[#eef2f6] p-1 text-sm font-bold">
+                            <button onClick={() => setPlPerspective("financial")} className={`rounded px-3 py-2 ${plPerspective === "financial" ? "bg-[#183a67] text-white" : ""}`}>Financiero</button>
+                            <button onClick={() => setPlPerspective("economic")} className={`rounded px-3 py-2 ${plPerspective === "economic" ? "bg-[#183a67] text-white" : ""}`}>Económico</button>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {Object.entries(PL_SECTIONS).map(([key, section]) => (
+                            <button key={key} onClick={() => setPlSection(key)} className={`rounded-full px-3 py-2 text-sm font-bold ${plSection === key ? "bg-[#183a67] text-white" : "bg-[#eef2f6]"}`}>
+                              {section.title}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="mt-4 overflow-auto rounded border">
+                          <table className="w-full min-w-[1050px] text-sm">
+                            <thead className="bg-[#183a67] text-white">
+                              <tr>
+                                <th className="sticky left-0 bg-[#183a67] p-3 text-left">Concepto</th>
+                                {PL_MONTHS.map((month) => <th key={month} className="p-3 text-right">{month}</th>)}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {PL_SECTIONS[plSection].rows.map((row) => {
+                                const values = plPerspective === "economic" && row.economic ? row.economic : row.financial;
+                                return (
+                                  <tr key={row.label} className="border-t odd:bg-[#fbfaf7]">
+                                    <td className="sticky left-0 bg-inherit p-3 font-bold">{row.label}</td>
+                                    {values.map((value, index) => {
+                                      const shown = row.format === "percent" ? `${value.toFixed(1)}%` : row.format === "times" ? `${value.toFixed(2)}x` : row.format === "days" ? `${value.toFixed(1)} días` : money.format(value);
+                                      return <td key={`${row.label}-${index}`} className={`p-3 text-right ${typeof value === "number" && value < 0 ? "text-red-700" : ""}`}>{shown}</td>;
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        {plPerspective === "economic" && PL_SECTIONS[plSection].rows.every((row) => !row.economic) && (
+                          <p className="mt-3 rounded bg-[#fff5d8] p-3 text-sm">Esta sección no tiene una línea económica distinta en el P&amp;L original; se muestra la base financiera.</p>
+                        )}
+                      </div>
                       <div className="mt-5 grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
                         <div className="overflow-auto rounded border">
                           <table className="w-full min-w-[560px] text-sm">
@@ -6630,6 +6763,24 @@ export default function Home() {
                               las fórmulas históricas para evitar trasladar porcentajes
                               o conciliaciones inconsistentes.
                             </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                        <div className="rounded border p-4">
+                          <b>Proyección del mes · Septiembre 2026</b>
+                          <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
+                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">FC bruta acumulada</span><b>{money.format(31624548)}</b></div>
+                            <div className="rounded bg-[#eef5ef] p-3"><span className="block text-slate-600">Proyección de cierre</span><b>{money.format(135533777)}</b></div>
+                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">Promedio diario actual</span><b>{money.format(4517793)}</b></div>
+                          </div>
+                          <p className="mt-3 text-sm text-slate-600">Proyección según histórico: <b>{money.format(143659801)}</b> · Objetivo histórico acumulado: <b>{money.format(200146906)}</b>.</p>
+                        </div>
+                        <div className="rounded border p-4">
+                          <b>Conciliación de caja por mes</b>
+                          <p className="mt-2 text-sm text-slate-600">La hoja contempla efectivo, banco, Mercado Pago y otras billeteras para cada mes. En esta primera importación los saldos de conciliación están pendientes de completar.</p>
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+                            {['Efectivo', 'Banco', 'Mercado Pago', 'Otras cuentas / billeteras'].map((account) => <span key={account} className="rounded bg-[#fff5d8] px-3 py-2">{account} · Pendiente</span>)}
                           </div>
                         </div>
                       </div>
