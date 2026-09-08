@@ -9,7 +9,8 @@ declare(strict_types=1);
  */
 function ensure_pnl_sync_schema(PDO $pdo): void
 {
-    $pdo->exec(
+    if (!table_exists($pdo, 'pnl_sync_runs')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS pnl_sync_runs (
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             status VARCHAR(20) NOT NULL,
@@ -24,8 +25,10 @@ function ensure_pnl_sync_schema(PDO $pdo): void
             finished_at DATETIME NULL,
             INDEX idx_pnl_sync_status_date (status, started_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    $pdo->exec(
+        );
+    }
+    if (!table_exists($pdo, 'pnl_oauth_states')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS pnl_oauth_states (
             state_hash CHAR(64) PRIMARY KEY,
             user_id BIGINT UNSIGNED NOT NULL,
@@ -33,7 +36,8 @@ function ensure_pnl_sync_schema(PDO $pdo): void
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_pnl_oauth_expiry (expires_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
+        );
+    }
 }
 
 function pnl_private_token_path(): string

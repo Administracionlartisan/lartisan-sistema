@@ -13,10 +13,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $route = trim((string) ($_GET['route'] ?? ''), '/');
-$pdo = db($config);
-ensure_user_locations_schema($pdo);
-// Mantiene listas las tablas operativas aun antes de la primera venta.
-ensure_operations_schema($pdo);
+try {
+    $pdo = db($config);
+} catch (Throwable $error) {
+    error_log('LARTISAN API database initialization failed: ' . $error->getMessage());
+    json_response(['ok' => false, 'error' => 'database_initialization_failed', 'type' => get_class($error)], 503);
+}
+if ($method === 'GET' && ($route === '' || $route === 'health')) {
+    $pdo->query('SELECT 1');
+    json_response(['ok' => true, 'service' => 'lartisan-api']);
+}
+try {
+    ensure_user_locations_schema($pdo);
+    // Mantiene listas las tablas operativas aun antes de la primera venta.
+    ensure_operations_schema($pdo);
+} catch (Throwable $error) {
+    error_log('LARTISAN API schema initialization failed: ' . $error->getMessage());
+    json_response(['ok' => false, 'error' => 'schema_initialization_failed', 'type' => get_class($error)], 503);
+}
 $pdo->exec(
     "CREATE TABLE IF NOT EXISTS password_recovery_codes (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -103,11 +117,6 @@ if ($method === 'POST' && $route === 'admin/pnl/sync') {
         audit($pdo, (int) $admin['id'], 'pnl_sync_failed');
         json_response(['ok' => false, 'error' => 'No se pudo actualizar el P&L. Se conserva la última versión válida.'], 502);
     }
-}
-
-if ($method === 'GET' && ($route === '' || $route === 'health')) {
-    $pdo->query('SELECT 1');
-    json_response(['ok' => true, 'service' => 'lartisan-api']);
 }
 
 if ($method === 'POST' && $route === 'auth/login') {

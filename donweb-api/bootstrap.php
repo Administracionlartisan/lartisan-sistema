@@ -14,9 +14,9 @@ if (!is_file($configPath)) {
 
 $config = require $configPath;
 
-// Las credenciales de Google se mantienen fuera de public_html.  El archivo
-// privado ya se usa para los respaldos y puede contener la conexión de solo
-// lectura para los informes, sin exponer secretos desde la API.
+// Las credenciales de Google se mantienen fuera de public_html. El archivo
+// privado ya se usa para los respaldos y comparte la conexión de solo lectura
+// con los informes, sin exponer secretos desde la API.
 $privateIntegrationPath = dirname(__DIR__, 2) . '/lartisan-backup-config.php';
 if (is_file($privateIntegrationPath)) {
     $privateIntegrationConfig = require $privateIntegrationPath;
@@ -110,6 +110,12 @@ function ensure_user_locations_schema(PDO $pdo): void
     if (!$column) {
         $pdo->exec('ALTER TABLE users ADD COLUMN assigned_locations TEXT NULL AFTER assigned_location');
     }
+}
+
+function table_exists(PDO $pdo, string $table): bool
+{
+    $statement = $pdo->query('SHOW TABLES LIKE ' . $pdo->quote($table));
+    return (bool) $statement->fetchColumn();
 }
 
 function assigned_locations(array $user): array
@@ -225,7 +231,8 @@ function user_can_access_site(array $user, string $site): bool
 
 function ensure_operations_schema(PDO $pdo): void
 {
-    $pdo->exec(
+    if (!table_exists($pdo, 'operation_site_states')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS operation_site_states (
             site VARCHAR(80) NOT NULL PRIMARY KEY,
             state_json LONGTEXT NOT NULL,
@@ -234,8 +241,10 @@ function ensure_operations_schema(PDO $pdo): void
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_operation_states_updated (updated_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    $pdo->exec(
+        );
+    }
+    if (!table_exists($pdo, 'operation_events')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS operation_events (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             site VARCHAR(80) NOT NULL,
@@ -246,13 +255,15 @@ function ensure_operations_schema(PDO $pdo): void
             INDEX idx_operation_events_site_date (site, created_at),
             INDEX idx_operation_events_user_date (user_id, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
+        );
+    }
     ensure_normalized_operations_schema($pdo);
 }
 
 function ensure_normalized_operations_schema(PDO $pdo): void
 {
-    $pdo->exec(
+    if (!table_exists($pdo, 'lartisan_sales')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_sales (
             id CHAR(36) NOT NULL PRIMARY KEY,
             site VARCHAR(80) NOT NULL,
@@ -271,8 +282,10 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             INDEX idx_lartisan_sales_site_date (site, occurred_at),
             INDEX idx_lartisan_sales_status (site, status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    $pdo->exec(
+        );
+    }
+    if (!table_exists($pdo, 'lartisan_sale_items')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_sale_items (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             sale_id CHAR(36) NOT NULL,
@@ -287,8 +300,10 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             INDEX idx_lartisan_sale_items_product (product_id),
             CONSTRAINT fk_lartisan_sale_items_sale FOREIGN KEY (sale_id) REFERENCES lartisan_sales(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    $pdo->exec(
+        );
+    }
+    if (!table_exists($pdo, 'lartisan_sale_payments')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_sale_payments (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             sale_id CHAR(36) NOT NULL,
@@ -298,8 +313,10 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             UNIQUE KEY uq_lartisan_sale_payment_method (sale_id, payment_method),
             CONSTRAINT fk_lartisan_sale_payments_sale FOREIGN KEY (sale_id) REFERENCES lartisan_sales(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    $pdo->exec(
+        );
+    }
+    if (!table_exists($pdo, 'lartisan_cash_sessions')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_cash_sessions (
             id CHAR(36) NOT NULL PRIMARY KEY,
             site VARCHAR(80) NOT NULL,
@@ -311,8 +328,10 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_lartisan_cash_sessions_site_opened (site, opened_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    $pdo->exec(
+        );
+    }
+    if (!table_exists($pdo, 'lartisan_cash_movements')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_cash_movements (
             id CHAR(36) NOT NULL PRIMARY KEY,
             site VARCHAR(80) NOT NULL,
@@ -329,8 +348,10 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             INDEX idx_lartisan_cash_movements_site_date (site, occurred_at),
             INDEX idx_lartisan_cash_movements_session (session_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    $pdo->exec(
+        );
+    }
+    if (!table_exists($pdo, 'lartisan_stock_movements')) {
+        $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_stock_movements (
             id CHAR(36) NOT NULL PRIMARY KEY,
             site VARCHAR(80) NOT NULL,
@@ -344,14 +365,14 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             created_by VARCHAR(190) NULL,
             INDEX idx_lartisan_stock_movements_site_product_date (site, product_id, occurred_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
+        );
+    }
     ensure_column($pdo, 'lartisan_stock_movements', 'source_reference', 'CHAR(36) NULL AFTER remito');
 }
 
 function ensure_column(PDO $pdo, string $table, string $column, string $definition): void
 {
-    $statement = $pdo->prepare("SHOW COLUMNS FROM `$table` LIKE ?");
-    $statement->execute([$column]);
+    $statement = $pdo->query("SHOW COLUMNS FROM `$table` LIKE " . $pdo->quote($column));
     if (!$statement->fetch()) {
         $pdo->exec("ALTER TABLE `$table` ADD COLUMN `$column` $definition");
     }
