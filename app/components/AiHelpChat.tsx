@@ -1,10 +1,10 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AssistantRole, fallbackAnswers, matchAssistantTopic, topicsForRole } from "../data/assistantKnowledge";
+import { AssistantRole, AssistantTopic, HelpAccess, HELP_REVIEW_DATE, fallbackAnswers, searchAssistant, topicsForRole } from "../data/assistantKnowledge";
 import { DiagnosticContext, formatDiagnostic, runOperationDiagnostics } from "../data/operationDiagnostics";
 
-type ChatMessage = { id: string; role: "user" | "assistant"; content: string; unknown?: boolean };
+type ChatMessage = { id: string; role: "user" | "assistant"; content: string; unknown?: boolean; category?: string; choices?: AssistantTopic[] };
 const API_BASE = "https://www.lartisantaller.com/sistema-api";
 const roleNames: Record<AssistantRole, string> = {
   vendedora: "Vendedora",
@@ -18,9 +18,10 @@ const suggestions: Record<AssistantRole, string[]> = {
 };
 
 export default function AiHelpChat({
-  role, site, section, userName, diagnosticContext, onSupportCreated,
+  role, site, section, userName, capabilities, diagnosticContext, onSupportCreated,
 }: {
   role: AssistantRole; site: string; section: string; userName: string;
+  capabilities: HelpAccess["capabilities"];
   diagnosticContext: Omit<DiagnosticContext, "browserOnline">;
   onSupportCreated?: () => void;
 }) {
@@ -32,12 +33,13 @@ export default function AiHelpChat({
   const [notice, setNotice] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([{
     id: "welcome", role: "assistant",
-    content: `Hola ${userName.split(" ")[0]}. Soy la guía de L’ARTISAN. Puedo explicarte cómo usar el sistema, pero no realizo ni modifico operaciones.`,
+    content: `Hola ${userName.split(" ")[0]}. Soy la guía de L’ARTISAN: busco respuestas verificadas del sistema y puedo revisar algunas condiciones de esta pantalla. No soy una IA generativa, no leo todo el historial y no realizo ni modifico operaciones. Podés preguntar con tus palabras.`,
   }]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const answerCursor = useRef<Record<string, number>>({});
   const fallbackCursor = useRef(0);
-  const availableTopics = useMemo(() => topicsForRole(role), [role]);
+  const previousTopic = useRef<string | undefined>(undefined);
+  const availableTopics = useMemo(() => topicsForRole(role, capabilities), [role, capabilities]);
   const groupedTopics = useMemo(() => {
     const grouped = new Map<string, typeof availableTopics>();
     for (const topic of availableTopics) grouped.set(topic.category, [...(grouped.get(topic.category) || []), topic]);
@@ -54,17 +56,33 @@ export default function AiHelpChat({
     setMessages((items) => [...items, { id: crypto.randomUUID(), role: "user", content: clean }]);
     setQuestion(""); setNotice(""); setShowCatalog(false); setSending(true);
     await new Promise((resolve) => window.setTimeout(resolve, 260));
-    const topic = matchAssistantTopic(clean, role);
-    let content: string; let unknown = false;
-    if (topic) {
+    const result = searchAssistant(clean, { role, capabilities }, previousTopic.current);
+    let content: string; let unknown = false; let category: string | undefined; let choices: AssistantTopic[] | undefined;
+    if (result.kind === "answer") {
+      const topic = result.topic;
       const cursor = answerCursor.current[topic.id] || 0;
       content = topic.answers[cursor % 3];
       answerCursor.current[topic.id] = cursor + 1;
+      previousTopic.current = topic.id;
+      category = topic.category;
+      if (topic.diagnostic) {
+        if (topic.diagnostic === "Conexión" || diagnosticContext.section === topic.diagnostic) {
+          const findings = runOperationDiagnostics({ ...diagnosticContext, browserOnline: navigator.onLine }, topic.diagnostic);
+          content += "\n\n" + formatDiagnostic(findings, diagnosticContext.section, diagnosticContext.site);
+        } else {
+          content += `\n\nPara revisar este caso con los datos de la pantalla, abrí ${topic.diagnostic} y tocá ‘Revisar qué está fallando’. No estoy viendo esa sección ahora.`;
+        }
+      }
+    } else if (result.kind === "clarify" || result.kind === "restricted") {
+      content = result.message; unknown = true;
+      previousTopic.current = undefined;
+      if (result.kind === "clarify") choices = result.choices;
     } else {
       content = fallbackAnswers[fallbackCursor.current % 3];
       fallbackCursor.current += 1; unknown = true;
+      previousTopic.current = undefined;
     }
-    setMessages((items) => [...items, { id: crypto.randomUUID(), role: "assistant", content, unknown }]);
+    setMessages((items) => [...items, { id: crypto.randomUUID(), role: "assistant", content, unknown, category, choices }]);
     setSending(false);
   };
 
@@ -73,6 +91,7 @@ export default function AiHelpChat({
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(question); }
   };
   const diagnose = () => {
+    previousTopic.current = undefined;
     const findings = runOperationDiagnostics({ ...diagnosticContext, browserOnline: navigator.onLine });
     setShowCatalog(false);
     setNotice("");
@@ -93,8 +112,9 @@ export default function AiHelpChat({
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: lastQuestion.content, site, section }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "No se pudo enviar la consulta.");
+      const data: unknown = await response.json();
+      const errorMessage = data && typeof data === "object" && "error" in data && typeof data.error === "string" ? data.error : "No se pudo enviar la consulta.";
+      if (!response.ok) throw new Error(errorMessage);
       setNotice("Consulta enviada a Administración. Ya quedó en su bandeja de tareas.");
       onSupportCreated?.();
     } catch (error) {
@@ -140,6 +160,9 @@ export default function AiHelpChat({
                 <div key={message.id}
                   className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.role === "user" ? "ml-auto bg-[#183a67] text-white" : message.unknown ? "border border-[#e7c26a] bg-[#fff5d8]" : "border bg-white"}`}>
                   {message.content}
+                  {message.category && <p className="mt-2 text-[11px] text-slate-500">Guía verificada · {message.category} · {HELP_REVIEW_DATE}</p>}
+                  {message.choices?.map((item) => <button key={item.id} type="button" disabled={sending}
+                    onClick={() => void ask(item.question)} className="mt-2 block w-full rounded-lg border border-[#183a67]/30 bg-white p-2 text-left text-xs font-bold text-[#183a67] hover:bg-[#eef3f8] disabled:opacity-50">{item.question}</button>)}
                 </div>
               ))}
               {sending && <div className="w-fit rounded-2xl border bg-white px-4 py-3 text-sm text-slate-500">Buscando en la guía…</div>}
@@ -147,7 +170,7 @@ export default function AiHelpChat({
           )}
           {!showCatalog && messages.length === 1 && (
             <div className="flex gap-2 overflow-x-auto px-4 pb-3">
-              {suggestions[role].map((item) => <button key={item} onClick={() => void ask(item)}
+              {suggestions[role].filter((item) => searchAssistant(item, { role, capabilities }).kind === "answer").map((item) => <button key={item} onClick={() => void ask(item)}
                 className="shrink-0 rounded-full border bg-white px-3 py-2 text-left text-xs font-bold hover:border-[#183a67]">{item}</button>)}
             </div>
           )}

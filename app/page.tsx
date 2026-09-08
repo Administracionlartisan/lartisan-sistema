@@ -8172,10 +8172,19 @@ export default function Home() {
         </section>
       </div>
       <AiHelpChat
+        key={`${user.role}:${user.name}:${site}`}
         role={user.role}
         site={user.role === "administracion" ? "" : site}
         section={tab}
         userName={user.name}
+        capabilities={{
+          central: managesCentralOrders,
+          minimumStock: canAdjustStock,
+          countStock: canCountRealStock,
+          approveStock: isBetzi,
+          supervisorReports: isAndrea,
+          schedules: isBetzi,
+        }}
         diagnosticContext={{
           site,
           section: tab,
@@ -8189,7 +8198,10 @@ export default function Home() {
           discount,
           maxDiscount: siteLimits.maxDiscount,
           splitPayment,
-          splitPaymentTotal,
+          splitPaymentTotal: splitPayments.filter((payment) => payment.amount > 0).reduce((sum, payment) => sum + payment.amount, 0),
+          positivePaymentsCount: splitPayments.filter((payment) => payment.amount > 0).length,
+          openOrdersCount: savedOrders.filter((order) => order.site === site).length,
+          requiresEnvelope,
           saleNet: net,
           countedCash: counted,
           envelopeCash: envelope,
