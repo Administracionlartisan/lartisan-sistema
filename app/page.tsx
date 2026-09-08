@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import AiHelpChat from "./components/AiHelpChat";
+import { ADMIN_REPORTS, canOpenReport } from "./data/reportGuide";
 
 type Product = {
   id: number;
@@ -521,155 +522,6 @@ const ADMIN_DEMO_ROWS = [
     tickets: 37,
     status: "Cerrada",
     source: "Demostración",
-  },
-];
-const ADMIN_REPORTS = [
-  {
-    id: "Gerencia",
-    title: "Gerencia",
-    detail:
-      "Tablero breve con facturación, proyección, metas y alertas críticas.",
-  },
-  {
-    id: "PLConsolidado",
-    title: "P&L consolidado",
-    detail:
-      "Resultado financiero y económico mensual, márgenes, caja, deuda e inventario consolidado.",
-  },
-  {
-    id: "Resumen",
-    title: "Resumen ejecutivo",
-    detail: "Ventas, tickets, cierres y alertas por local.",
-  },
-  {
-    id: "Ventas",
-    title: "Ventas",
-    detail: "Facturación bruta/neta, tickets y evolución diaria.",
-  },
-  {
-    id: "DetalleVentas",
-    title: "Detalle de ventas",
-    detail: "Ventas por día, cliente, comprobante y forma de cobro.",
-  },
-  {
-    id: "Rentabilidad",
-    title: "Rentabilidad",
-    detail: "Costo, margen y contribución por producto, categoría y local.",
-  },
-  {
-    id: "Productos",
-    title: "Productos",
-    detail: "Unidades, ranking, categorías y productos sin movimiento.",
-  },
-  {
-    id: "Evolucion",
-    title: "Evolución",
-    detail: "Comparativos diarios, semanales, mensuales y proyección.",
-  },
-  {
-    id: "VendidoCobrado",
-    title: "Vendido vs. cobrado",
-    detail: "Comparación mensual consolidada para todos los locales.",
-  },
-  {
-    id: "Pagos",
-    title: "Medios de pago",
-    detail: "Efectivo, tarjetas, QR, transferencias y delivery.",
-  },
-  {
-    id: "Cajas",
-    title: "Cajas",
-    detail: "Aperturas, cierres, diferencias, gastos y sobres.",
-  },
-  {
-    id: "CajaMayor",
-    title: "Caja Mayor",
-    detail: "Sobres enviados por cada local y retiros realizados por Oscar.",
-  },
-  {
-    id: "Bancos",
-    title: "Control bancario",
-    detail: "Ventas electrónicas, acreditaciones, comisiones y diferencias.",
-  },
-  {
-    id: "Ajustes",
-    title: "Descuentos y anulaciones",
-    detail: "Control de impacto, motivo y responsable.",
-  },
-  {
-    id: "Egresos",
-    title: "Egresos",
-    detail: "Gastos por local, categoría, comprobante y responsable.",
-  },
-  {
-    id: "Stock",
-    title: "Stock",
-    detail: "Teórico vs. real, mínimos, ingresos y ajustes.",
-  },
-  {
-    id: "Reposicion",
-    title: "Reposición",
-    detail:
-      "Quiebres, cobertura estimada y sugerencias de reposición por local.",
-  },
-  {
-    id: "PedidosCentral",
-    title: "Pedidos a Central",
-    detail:
-      "Solicitudes, preparación, despacho, entregas y tiempos de respuesta.",
-  },
-  {
-    id: "Objetivos",
-    title: "Objetivos",
-    detail: "Meta mensual, avance, proyección y faltante por local.",
-  },
-  {
-    id: "HorariosVenta",
-    title: "Horarios de venta",
-    detail:
-      "Ventas y tickets por día y franja horaria para organizar operación.",
-  },
-  {
-    id: "Personal",
-    title: "Personal",
-    detail: "Fichajes, tardanzas, horas y ausencias.",
-  },
-  {
-    id: "Clientes",
-    title: "Clientes",
-    detail: "Altas con consentimiento y recurrencia de compra.",
-  },
-  {
-    id: "Promociones",
-    title: "Promociones",
-    detail: "Uso, ventas generadas, impacto y margen posterior.",
-  },
-  {
-    id: "Calidad",
-    title: "Calidad de datos",
-    detail:
-      "Cierres faltantes, duplicados, errores y fallos de sincronización.",
-  },
-  {
-    id: "Fiscal",
-    title: "Fiscal",
-    detail: "Facturas ARCA, comprobantes internos y notas de crédito.",
-  },
-  {
-    id: "Auditoria",
-    title: "Auditoría",
-    detail: "Trazabilidad de cada acción sensible.",
-  },
-  {
-    id: "Incidencias",
-    title: "Incidencias",
-    detail:
-      "Faltantes, problemas operativos, devoluciones y reclamos por local.",
-  },
-  {
-    id: "Alertas",
-    title: "Alertas operativas",
-    detail: "Caja, stock, pedidos, devoluciones, egresos y novedades que requieren acción.",
   },
 ];
 const SOLD_COLLECTED_REFERENCE = [
@@ -8177,6 +8029,14 @@ export default function Home() {
         site={user.role === "administracion" ? "" : site}
         section={tab}
         userName={user.name}
+        reportPermissions={user.reportPermissions}
+        onOpenReport={(reportId) => {
+          const access = { role: user.role, reportPermissions: user.reportPermissions, supervisorReports: isAndrea };
+          if (!canOpenReport(access, reportId)) return;
+          if (reportId === "Supervision") setTab("Reportes");
+          else { setAdminReport(reportId); setTab("Administración"); }
+          setNavOpen(false);
+        }}
         capabilities={{
           central: managesCentralOrders,
           minimumStock: canAdjustStock,

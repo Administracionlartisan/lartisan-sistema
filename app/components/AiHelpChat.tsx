@@ -3,8 +3,9 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AssistantRole, AssistantTopic, HelpAccess, HELP_REVIEW_DATE, fallbackAnswers, searchAssistant, topicsForRole } from "../data/assistantKnowledge";
 import { DiagnosticContext, formatDiagnostic, runOperationDiagnostics } from "../data/operationDiagnostics";
+import { availableReportGuides, canOpenReport, locateReport, reportQuestion, ReportAccess, ReportGuide } from "../data/reportGuide";
 
-type ChatMessage = { id: string; role: "user" | "assistant"; content: string; unknown?: boolean; category?: string; choices?: AssistantTopic[] };
+type ChatMessage = { id: string; role: "user" | "assistant"; content: string; unknown?: boolean; category?: string; choices?: AssistantTopic[]; report?: ReportGuide; reportChoices?: ReportGuide[] };
 const API_BASE = "https://www.lartisantaller.com/sistema-api";
 const roleNames: Record<AssistantRole, string> = {
   vendedora: "Vendedora",
@@ -18,15 +19,18 @@ const suggestions: Record<AssistantRole, string[]> = {
 };
 
 export default function AiHelpChat({
-  role, site, section, userName, capabilities, diagnosticContext, onSupportCreated,
+  role, site, section, userName, capabilities, diagnosticContext, onSupportCreated, reportPermissions, onOpenReport,
 }: {
   role: AssistantRole; site: string; section: string; userName: string;
   capabilities: HelpAccess["capabilities"];
+  reportPermissions: string[];
+  onOpenReport: (id: string) => void;
   diagnosticContext: Omit<DiagnosticContext, "browserOnline">;
   onSupportCreated?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [showCatalog, setShowCatalog] = useState(false);
+  const [showReports, setShowReports] = useState(false);
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
   const [escalating, setEscalating] = useState(false);
@@ -39,6 +43,9 @@ export default function AiHelpChat({
   const answerCursor = useRef<Record<string, number>>({});
   const fallbackCursor = useRef(0);
   const previousTopic = useRef<string | undefined>(undefined);
+  const previousReport = useRef<string | undefined>(undefined);
+  const reportAccess: ReportAccess = { role, reportPermissions, supervisorReports: capabilities?.supervisorReports === true };
+  const reportCatalog = availableReportGuides(reportAccess);
   const availableTopics = useMemo(() => topicsForRole(role, capabilities), [role, capabilities]);
   const groupedTopics = useMemo(() => {
     const grouped = new Map<string, typeof availableTopics>();
@@ -50,12 +57,24 @@ export default function AiHelpChat({
     if (open) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending, open]);
 
-  const ask = async (text: string) => {
+  const ask = async (text: string, reportOnly = false) => {
     const clean = text.trim();
     if (clean.length < 2 || sending) return;
     setMessages((items) => [...items, { id: crypto.randomUUID(), role: "user", content: clean }]);
-    setQuestion(""); setNotice(""); setShowCatalog(false); setSending(true);
+    setQuestion(""); setNotice(""); setShowCatalog(false); setShowReports(false); setSending(true);
     await new Promise((resolve) => window.setTimeout(resolve, 260));
+    const located = locateReport(clean, reportAccess, { force: reportOnly, previousId: previousReport.current });
+    if (located) {
+      previousTopic.current = undefined;
+      previousReport.current = located.kind === "answer" ? located.report.id : undefined;
+      setMessages((items) => [...items, { id: crypto.randomUUID(), role: "assistant", content: located.content,
+        category: "Orientador de reportes", unknown: located.kind !== "answer",
+        report: located.kind === "answer" ? located.report : undefined,
+        reportChoices: located.kind === "clarify" ? located.choices : undefined }]);
+      setSending(false);
+      return;
+    }
+    previousReport.current = undefined;
     const result = searchAssistant(clean, { role, capabilities }, previousTopic.current);
     let content: string; let unknown = false; let category: string | undefined; let choices: AssistantTopic[] | undefined;
     if (result.kind === "answer") {
@@ -92,6 +111,8 @@ export default function AiHelpChat({
   };
   const diagnose = () => {
     previousTopic.current = undefined;
+    previousReport.current = undefined;
+    setShowReports(false);
     const findings = runOperationDiagnostics({ ...diagnosticContext, browserOnline: navigator.onLine });
     setShowCatalog(false);
     setNotice("");
@@ -135,12 +156,24 @@ export default function AiHelpChat({
             <button type="button" onClick={diagnose} className="rounded-full bg-[#eef3f8] px-3 py-2 text-xs font-black text-[#183a67] hover:bg-[#dfe9f3]">
               Revisar qué está fallando
             </button>
-            <button type="button" onClick={() => setShowCatalog((value) => !value)}
+            {role !== "vendedora" && <button type="button" onClick={() => { setShowReports(value => !value); setShowCatalog(false); }}
+              aria-expanded={showReports} className="rounded-full bg-[#eef3f8] px-3 py-2 text-sm font-bold text-[#183a67] hover:bg-[#dfe9f3]">Encontrar un informe</button>}
+            <button type="button" onClick={() => { setShowCatalog((value) => !value); setShowReports(false); }}
               className="px-1 py-2 text-xs font-bold text-[#183a67] underline" aria-expanded={showCatalog}>
               {showCatalog ? "Ocultar preguntas" : `Ver ${availableTopics.length} preguntas`}
             </button>
           </div>
-          {showCatalog ? (
+          {showReports ? (
+            <div className="flex-1 space-y-3 overflow-y-auto p-4">
+              <h3 className="font-bold">¿Qué información necesitás?</h3>
+              <p className="text-sm text-slate-600">Preguntá con tus palabras o elegí un informe. Te indicaré dónde está, filtros reales y limitaciones. No consulto cifras en vivo.</p>
+              {reportCatalog.length ? reportCatalog.map(report => <button key={report.id} type="button" disabled={sending}
+                onClick={() => void ask(reportQuestion(report), true)} className="block w-full rounded-xl border bg-white p-3 text-left hover:border-[#183a67]">
+                <b className="block text-base">{report.title}</b><span className="mt-1 block text-sm">{report.detail}</span>
+                <span className={`mt-2 inline-block rounded px-2 py-1 text-xs font-bold ${report.status === "Pendiente" ? "bg-[#fff5d8]" : "bg-[#eef2f6]"}`}>{report.status}</span>
+              </button>) : <p className="rounded bg-[#fff5d8] p-3 text-sm">No hay reportes habilitados para tu perfil. Supervisión necesita la habilitación específica de Reportes; no incluye todos los informes administrativos. Pedí revisión a Administración.</p>}
+            </div>
+          ) : showCatalog ? (
             <div className="flex-1 space-y-4 overflow-y-auto p-4">
               {groupedTopics.map(([category, topics]) => (
                 <section key={category}>
@@ -161,6 +194,11 @@ export default function AiHelpChat({
                   className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.role === "user" ? "ml-auto bg-[#183a67] text-white" : message.unknown ? "border border-[#e7c26a] bg-[#fff5d8]" : "border bg-white"}`}>
                   {message.content}
                   {message.category && <p className="mt-2 text-[11px] text-slate-500">Guía verificada · {message.category} · {HELP_REVIEW_DATE}</p>}
+                  {message.report && canOpenReport(reportAccess, message.report.id) && <button type="button"
+                    onClick={() => { if (message.report && canOpenReport(reportAccess, message.report.id)) { onOpenReport(message.report.id); setOpen(false); } }}
+                    className="mt-3 block w-full rounded-lg bg-[#183a67] p-3 text-sm font-bold text-white">Abrir {message.report.title}</button>}
+                  {message.reportChoices?.filter(item => canOpenReport(reportAccess, item.id)).map(item => <button key={item.id} type="button" disabled={sending}
+                    onClick={() => void ask(reportQuestion(item), true)} className="mt-2 block w-full rounded-lg border bg-white p-3 text-left text-sm font-bold">{item.title} · {item.status}</button>)}
                   {message.choices?.map((item) => <button key={item.id} type="button" disabled={sending}
                     onClick={() => void ask(item.question)} className="mt-2 block w-full rounded-lg border border-[#183a67]/30 bg-white p-2 text-left text-xs font-bold text-[#183a67] hover:bg-[#eef3f8] disabled:opacity-50">{item.question}</button>)}
                 </div>
@@ -168,13 +206,13 @@ export default function AiHelpChat({
               {sending && <div className="w-fit rounded-2xl border bg-white px-4 py-3 text-sm text-slate-500">Buscando en la guía…</div>}
             </div>
           )}
-          {!showCatalog && messages.length === 1 && (
+          {!showCatalog && !showReports && messages.length === 1 && (
             <div className="flex gap-2 overflow-x-auto px-4 pb-3">
               {suggestions[role].filter((item) => searchAssistant(item, { role, capabilities }).kind === "answer").map((item) => <button key={item} onClick={() => void ask(item)}
                 className="shrink-0 rounded-full border bg-white px-3 py-2 text-left text-xs font-bold hover:border-[#183a67]">{item}</button>)}
             </div>
           )}
-          {!showCatalog && lastQuestion && lastAssistant && !notice && (
+          {!showCatalog && !showReports && lastQuestion && lastAssistant && !notice && (
             <div className="border-t px-4 py-2 text-xs">¿No resolvió tu duda?{" "}
               <button onClick={escalate} disabled={escalating} className="font-bold underline disabled:opacity-50">
                 {escalating ? "Enviando…" : "Enviar a Administración"}
