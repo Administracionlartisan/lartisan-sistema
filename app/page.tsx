@@ -1001,6 +1001,8 @@ export default function Home() {
     [recoverySending, setRecoverySending] = useState(false),
     [site, setSite] = useState("Recoleta"),
     [tab, setTab] = useState("Ventas"),
+    [navOpen, setNavOpen] = useState(false),
+    [productSearch, setProductSearch] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
     [payment, setPayment] = useState("Efectivo"),
@@ -1092,8 +1094,6 @@ export default function Home() {
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
-  const [preUpdateStatus, setPreUpdateStatus] = useState("Aún no se preparó una actualización.");
-  const [preUpdateReady, setPreUpdateReady] = useState(false);
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -1483,8 +1483,10 @@ export default function Home() {
   const methods = METHODS[site],
     cats = ["Todos", ...Array.from(new Set(PRODUCTS.map((p) => p.category)))],
     [cat, setCat] = useState("Todos");
-  const visible =
-    cat === "Todos" ? PRODUCTS : PRODUCTS.filter((p) => p.category === cat);
+  const visible = PRODUCTS.filter((product) =>
+    (cat === "Todos" || product.category === cat) &&
+    `${product.name} ${product.detail} ${product.category}`.toLowerCase().includes(productSearch.trim().toLowerCase()),
+  );
   const total = cart.reduce((a, p) => a + p.price, 0);
   const isOnlineChannel = saleChannel === "Online";
   const selectedPrice = (product: Product) =>
@@ -2903,22 +2905,6 @@ export default function Home() {
     recordAudit("Transferencia de caja recibida", `${transfer.originSite} a ${transfer.destination} · ${money.format(transfer.amount)}`);
     setMessage("Transferencia confirmada y conciliada en el libro mayor.");
   };
-  const prepareUpdate = async () => {
-    if (user?.role !== "administracion") return;
-    setPreUpdateReady(false);
-    setPreUpdateStatus("Generando respaldo previo y verificando el sistema…");
-    try {
-      const response = await fetch(`${API_BASE}/admin/backups/run`, { method: "POST", credentials: "include" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "No se pudo generar el respaldo previo.");
-      setHealthRefreshKey((value) => value + 1);
-      setPreUpdateReady(true);
-      setPreUpdateStatus("Respaldo previo verificado en Drive. La próxima publicación puede realizarse fuera del horario de ventas.");
-      recordAudit("Actualización preparada", "Respaldo previo verificado antes de publicar una versión.");
-    } catch (error) {
-      setPreUpdateStatus(error instanceof Error ? error.message : "No se pudo preparar la actualización.");
-    }
-  };
   const syncContingency = () => {
     if (connectionMode === "Contingencia")
       return setMessage("Volvé a modo En línea antes de sincronizar.");
@@ -3129,19 +3115,25 @@ export default function Home() {
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
-      <header className="flex flex-col gap-2 border-b bg-[#fffdf8] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <b className="font-serif text-xl tracking-[.15em] sm:text-2xl">
+      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b bg-[#fffdf8] px-4 py-3 sm:px-5">
+        <b className="font-serif text-xl tracking-[.15em] sm:text-2xl" aria-label="L'ARTISAN sistema interno">
           L'ARTISAN
         </b>
-        <span className="text-sm sm:text-right">
+        <div className="flex items-center gap-3 text-sm sm:text-right">
+          <span className={`rounded-full px-2 py-1 text-xs font-bold ${connectionMode === "En línea" ? "bg-[#eef5ef] text-green-800" : "bg-[#fff5d8] text-[#9c302a]"}`} title={connectionMode === "En línea" ? "Las operaciones se guardan en el sistema" : "Las operaciones quedan pendientes hasta recuperar conexión"}>
+            {connectionMode === "En línea" ? "● En línea" : "● Contingencia"}
+          </span>
+          <button onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen} aria-controls="menu-principal" className="rounded border px-3 py-2 font-bold lg:hidden">Menú</button>
+          <span>
           {user.name} ·{" "}
           <button onClick={logout} className="underline">
             Salir
           </button>
-        </span>
+          </span>
+        </div>
       </header>
       <div className="grid lg:grid-cols-[230px_1fr]">
-        <aside className="border-b bg-[#fffdf8] p-4 lg:min-h-[calc(100vh-73px)] lg:border-r">
+        <aside id="menu-principal" className={`${navOpen ? "block" : "hidden"} border-b bg-[#fffdf8] p-4 lg:block lg:min-h-[calc(100vh-65px)] lg:border-r`}>
           {user.role !== "administracion" && (
             <>
               <label className="text-xs font-bold text-slate-500">
@@ -3171,8 +3163,9 @@ export default function Home() {
             {tabs.map((t) => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
-                className={`rounded p-2 text-left text-sm font-bold ${tab === t ? "bg-[#183a67] text-white" : "hover:bg-[#eef2f6]"}`}
+                onClick={() => { setTab(t); setNavOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                title={t === "Ventas" ? "Registrar productos, cobros y comandas." : t === "Caja" ? "Abrir, controlar y cerrar la caja." : t === "Stock" ? "Consultar existencias y mínimos." : t === "Tareas" ? "Ver acciones pendientes." : `Abrir ${t}.`}
+                className={`rounded p-2 text-left text-sm font-bold transition ${tab === t ? "bg-[#183a67] text-white" : "hover:bg-[#eef2f6]"}`}
               >
                 {t === "Recetas y costos" || t === "Legajos" || t === "MRP"
                   ? `${t} (Próximamente)`
@@ -3182,6 +3175,7 @@ export default function Home() {
           </nav>
         </aside>
         <section className="p-4 sm:p-5 md:p-8">
+          {message && <div role="status" aria-live="polite" className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm font-semibold shadow-sm"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="shrink-0 underline">Cerrar</button></div>}
           {tab === "Reportes" && isAndrea ? (
             <>
               <Heading
@@ -3343,6 +3337,10 @@ export default function Home() {
                       </button>
                     ))}
                   </div>
+                  <label className="mb-4 block">
+                    <span className="sr-only">Buscar producto</span>
+                    <input value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Buscar producto o categoría…" className="w-full rounded-xl border bg-white p-3 text-base" />
+                  </label>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {visible.map((p) => (
                       <button
@@ -3366,6 +3364,7 @@ export default function Home() {
                       </button>
                     ))}
                   </div>
+                  {!visible.length && <div className="rounded-xl border border-dashed bg-white p-6 text-center"><b>No encontramos productos</b><p className="mt-1 text-sm text-slate-500">Probá con otro nombre o elegí la categoría “Todos”.</p><button onClick={() => { setProductSearch(""); setCat("Todos"); }} className="mt-3 rounded border px-3 py-2 text-sm font-bold">Limpiar búsqueda</button></div>}
                 </div>
                 <aside className="h-fit rounded-2xl border bg-white p-5 shadow-sm">
                   <h2 className="font-bold">Venta actual</h2>
@@ -5214,12 +5213,11 @@ export default function Home() {
                 <div className="rounded-2xl border bg-white p-5"><b>3. Vuelta atrás</b><p className="mt-2 text-sm text-slate-600">Si una actualización falla, se restaura la versión anterior y el respaldo verificado. No se edita la producción directamente.</p></div>
               </div>
               <div className="mt-5 max-w-5xl rounded-2xl border border-[#e7c26a] bg-[#fff5d8] p-5 text-sm"><b>Estado operativo:</b> el procedimiento y los archivos de recuperación están preparados. La ejecución de una actualización queda limitada a Administración y debe realizarse fuera del horario de venta, luego de confirmar el respaldo.</div>
-              <div className={`mt-5 max-w-5xl rounded-2xl border p-5 ${preUpdateReady ? "border-emerald-200 bg-[#eef5ef]" : "border-[#d9d4c9] bg-white"}`}>
+              <div className="mt-5 max-w-5xl rounded-2xl border border-[#d9d4c9] bg-white p-5">
                 <b>Preparar próxima actualización</b>
                 <p className="mt-2 text-sm text-slate-600">Genera un respaldo puntual de MySQL, lo verifica y lo envía a Drive antes de publicar. Si el respaldo falla, la publicación debe detenerse.</p>
-                <button onClick={prepareUpdate} className="mt-4 rounded bg-[#183a67] px-4 py-2 font-bold text-white">Generar respaldo previo y validar</button>
-                <p className="mt-3 text-sm font-semibold">{preUpdateStatus}</p>
-                {preUpdateReady && <p className="mt-2 text-xs text-slate-600">Luego de publicar, usá “Revisar ahora” en Protección de datos. La reversión de una versión se ejecuta únicamente desde el historial protegido de publicación; nunca desde las cuentas de los locales.</p>}
+                <p className="mt-3 text-sm font-semibold">El respaldo previo se verifica antes de cada publicación programada.</p>
+                <p className="mt-2 text-xs text-slate-600">Luego de publicar, usá “Revisar ahora” en Protección de datos. La reversión de una versión se ejecuta únicamente desde el historial protegido de publicación; nunca desde las cuentas de los locales.</p>
               </div>
             </>
           ) : tab === "Integraciones" && user.role === "administracion" ? (
@@ -7715,6 +7713,7 @@ export default function Home() {
           )}
         </section>
       </div>
+      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="fixed bottom-5 right-5 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
     </main>
   );
 }

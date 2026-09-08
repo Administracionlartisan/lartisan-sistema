@@ -16,6 +16,40 @@ button,
 select {
   font: inherit;
 }
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid #ec3a35;
+  outline-offset: 2px;
+}
+button:not(:disabled) {
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: no-preference) {
+  button,
+  a {
+    transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease;
+  }
+  button:not(:disabled):active {
+    transform: scale(.98);
+  }
+}
+@media (max-width: 640px) {
+  button,
+  input,
+  select,
+  textarea {
+    min-height: 42px;
+  }
+}
 
 @media print {
   body {
