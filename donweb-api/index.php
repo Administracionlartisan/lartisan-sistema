@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/pnl_sync.php';
+require __DIR__ . '/assistant.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -160,6 +161,93 @@ if ($method === 'POST' && $route === 'auth/logout') {
 if ($method === 'GET' && $route === 'auth/me') {
     $user = require_user($pdo);
     json_response(['ok' => true, 'user' => public_user($user)]);
+}
+
+if ($method === 'POST' && $route === 'assistant/chat') {
+    $user = require_user($pdo);
+    ensure_assistant_schema($pdo);
+    $body = request_body();
+    $question = assistant_clean_text($body['question'] ?? '', 1200);
+    $site = assistant_clean_text($body['site'] ?? '', 80);
+    $section = assistant_clean_text($body['section'] ?? '', 120);
+    $history = is_array($body['history'] ?? null) ? $body['history'] : [];
+    if (mb_strlen($question, 'UTF-8') < 2) {
+        json_response(['ok' => false, 'error' => 'Escribí una pregunta para consultar al asistente.'], 422);
+    }
+    if ($site !== '' && !in_array($site, operational_sites(), true)) $site = '';
+    if ($site !== '' && $user['role'] !== 'administracion' && !user_can_access_site($user, $site)) {
+        json_response(['ok' => false, 'error' => 'No tenés acceso a ese local.'], 403);
+    }
+    $rate = $pdo->prepare("SELECT COUNT(*) FROM ai_chat_messages WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)");
+    $rate->execute([(int) $user['id']]);
+    if ((int) $rate->fetchColumn() >= 12) {
+        json_response(['ok' => false, 'error' => 'Alcanzaste el límite momentáneo. Esperá unos minutos antes de volver a consultar.'], 429);
+    }
+    $insert = $pdo->prepare("INSERT INTO ai_chat_messages (user_id, role_snapshot, site, section_name, question, status) VALUES (?, ?, ?, ?, ?, 'processing')");
+    $insert->execute([(int) $user['id'], $user['role'], $site ?: null, $section ?: null, $question]);
+    $messageId = (int) $pdo->lastInsertId();
+    try {
+        $result = assistant_openai_response($config, $user, $site, $section, $question, $history);
+        $pdo->prepare("UPDATE ai_chat_messages SET answer = ?, status = 'answered', request_id = ? WHERE id = ?")
+            ->execute([$result['answer'], $result['requestId'] ?: null, $messageId]);
+        audit($pdo, (int) $user['id'], 'ai_assistant_question', 'message_id=' . $messageId);
+        json_response(['ok' => true, 'messageId' => $messageId, 'answer' => $result['answer']]);
+    } catch (Throwable $error) {
+        error_log('LARTISAN assistant failed: ' . $error->getMessage());
+        $pdo->prepare("UPDATE ai_chat_messages SET status = 'failed' WHERE id = ?")->execute([$messageId]);
+        $notConfigured = $error->getMessage() === 'assistant_not_configured';
+        json_response([
+            'ok' => false,
+            'messageId' => $messageId,
+            'error' => $notConfigured
+                ? 'El asistente está instalado y pendiente de activar por Administración.'
+                : 'El asistente no pudo responder ahora. Podés enviar la consulta a Administración.',
+        ], 503);
+    }
+}
+
+if ($method === 'POST' && $route === 'assistant/escalate') {
+    $user = require_user($pdo);
+    ensure_assistant_schema($pdo);
+    $body = request_body();
+    $question = assistant_clean_text($body['question'] ?? '', 1200);
+    $site = assistant_clean_text($body['site'] ?? '', 80);
+    $section = assistant_clean_text($body['section'] ?? '', 120);
+    $chatMessageId = filter_var($body['messageId'] ?? null, FILTER_VALIDATE_INT) ?: null;
+    if (mb_strlen($question, 'UTF-8') < 2) {
+        json_response(['ok' => false, 'error' => 'No hay una consulta para enviar.'], 422);
+    }
+    if ($site !== '' && !in_array($site, operational_sites(), true)) $site = '';
+    if ($site !== '' && $user['role'] !== 'administracion' && !user_can_access_site($user, $site)) {
+        json_response(['ok' => false, 'error' => 'No tenés acceso a ese local.'], 403);
+    }
+    $rate = $pdo->prepare("SELECT COUNT(*) FROM ai_support_requests WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)");
+    $rate->execute([(int) $user['id']]);
+    if ((int) $rate->fetchColumn() >= 5) {
+        json_response(['ok' => false, 'error' => 'Ya enviaste varias consultas hoy. Administración las revisará desde su bandeja.'], 429);
+    }
+    $stmt = $pdo->prepare("INSERT INTO ai_support_requests (chat_message_id, user_id, username_snapshot, role_snapshot, site, section_name, question) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$chatMessageId, (int) $user['id'], $user['full_name'], $user['role'], $site ?: null, $section ?: null, $question]);
+    $requestId = (int) $pdo->lastInsertId();
+    audit($pdo, (int) $user['id'], 'ai_support_requested', 'request_id=' . $requestId);
+    json_response(['ok' => true, 'requestId' => $requestId, 'message' => 'Consulta enviada a Administración.']);
+}
+
+if ($method === 'GET' && $route === 'admin/assistant-requests') {
+    require_user($pdo, ['administracion']);
+    ensure_assistant_schema($pdo);
+    $rows = $pdo->query("SELECT id, username_snapshot, role_snapshot, site, section_name, question, status, created_at, resolved_at FROM ai_support_requests ORDER BY (status = 'pendiente') DESC, created_at DESC LIMIT 100")->fetchAll();
+    json_response(['ok' => true, 'requests' => $rows]);
+}
+
+if ($method === 'PATCH' && preg_match('#^admin/assistant-requests/(\d+)$#', $route, $matches)) {
+    $admin = require_user($pdo, ['administracion']);
+    ensure_assistant_schema($pdo);
+    $requestId = (int) $matches[1];
+    $pdo->prepare("UPDATE ai_support_requests SET status = 'resuelta', resolved_at = NOW(), resolved_by = ? WHERE id = ? AND status = 'pendiente'")
+        ->execute([(int) $admin['id'], $requestId]);
+    audit($pdo, (int) $admin['id'], 'ai_support_resolved', 'request_id=' . $requestId);
+    json_response(['ok' => true]);
 }
 
 if ($method === 'POST' && $route === 'auth/change-password') {

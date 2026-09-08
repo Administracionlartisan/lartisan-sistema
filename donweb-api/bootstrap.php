@@ -25,6 +25,15 @@ if (is_file($privateIntegrationPath)) {
     }
 }
 
+// La clave de OpenAI vive fuera de public_html y nunca se envía al navegador.
+$privateAiPath = dirname(__DIR__, 2) . '/lartisan-ai-config.php';
+if (is_file($privateAiPath)) {
+    $privateAiConfig = require $privateAiPath;
+    if (is_array($privateAiConfig)) {
+        $config['openai'] = array_replace_recursive($config['openai'] ?? [], $privateAiConfig);
+    }
+}
+
 function json_response(array $payload, int $status = 200): never
 {
     http_response_code($status);

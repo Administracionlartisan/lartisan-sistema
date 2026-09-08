@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import AiHelpChat from "./components/AiHelpChat";
 
 type Product = {
   id: number;
@@ -286,6 +287,16 @@ type SystemHealth = {
   activeUsers?: number;
   totalUsers?: number;
   freeSpaceMb?: number | null;
+};
+type AiSupportRequest = {
+  id: string;
+  userName: string;
+  role: Role;
+  site?: string;
+  section?: string;
+  question: string;
+  status: "pendiente" | "resuelta";
+  createdAt: string;
 };
 const EMPTY_CASH_FIELDS: CashFields = {
   fund: 0,
@@ -1199,6 +1210,7 @@ export default function Home() {
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
+  const [aiSupportRequests, setAiSupportRequests] = useState<AiSupportRequest[]>([]);
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -1324,9 +1336,10 @@ export default function Home() {
     return true;
   };
   const loadAdminSecurityData = async () => {
-    const [usersResponse, resetResponse] = await Promise.all([
+    const [usersResponse, resetResponse, assistantResponse] = await Promise.all([
       fetch(`${API_BASE}/admin/users`, { credentials: "include" }),
       fetch(`${API_BASE}/admin/reset-requests`, { credentials: "include" }),
+      fetch(`${API_BASE}/admin/assistant-requests`, { credentials: "include" }),
     ]);
     if (usersResponse.ok) {
       const data = await usersResponse.json();
@@ -1357,6 +1370,47 @@ export default function Home() {
         ),
       );
     }
+    if (assistantResponse.ok) {
+      const data = await assistantResponse.json();
+      setAiSupportRequests(
+        (data.requests || []).map(
+          (request: {
+            id: number;
+            username_snapshot: string;
+            role_snapshot: Role;
+            site?: string | null;
+            section_name?: string | null;
+            question: string;
+            status: "pendiente" | "resuelta";
+            created_at: string;
+          }): AiSupportRequest => ({
+            id: String(request.id),
+            userName: request.username_snapshot,
+            role: request.role_snapshot,
+            site: request.site || undefined,
+            section: request.section_name || undefined,
+            question: request.question,
+            status: request.status,
+            createdAt: new Date(request.created_at.replace(" ", "T") + "-03:00").toLocaleString("es-AR"),
+          }),
+        ),
+      );
+    }
+  };
+
+  const resolveAiSupportRequest = async (id: string) => {
+    const response = await fetch(`${API_BASE}/admin/assistant-requests/${id}`, {
+      method: "PATCH",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      setMessage("No se pudo marcar la consulta como resuelta.");
+      return;
+    }
+    setAiSupportRequests((items) =>
+      items.map((item) => (item.id === id ? { ...item, status: "resuelta" } : item)),
+    );
+    setMessage("Consulta marcada como resuelta.");
   };
   useEffect(() => {
     let active = true;
@@ -1783,6 +1837,9 @@ export default function Home() {
       : []),
     ...(user?.role === "administracion"
       ? [
+          ...aiSupportRequests
+            .filter((request) => request.status === "pendiente")
+            .map((request) => ({ title: "Consulta para Administración", detail: `${request.userName}${request.site ? ` · ${request.site}` : ""}: ${request.question}`, action: "Tareas" })),
           { title: "Activar respaldos externos", detail: "Pendiente técnico: conectar Drive, proteger la credencial y programar copias los lunes y jueves a las 21:00.", action: "Protección de datos" },
           { title: "Revisar alertas operativas", detail: "Controlá cajas, stock, pedidos y comprobantes pendientes.", action: "Administración" },
         ]
@@ -3432,6 +3489,37 @@ export default function Home() {
                   </div>
                 )}
               </div>
+              {user.role === "administracion" && aiSupportRequests.some((request) => request.status === "pendiente") && (
+                <section className="mt-6 rounded-2xl border bg-white p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold text-[#ec3a35]">AYUDA DEL SISTEMA</p>
+                      <h2 className="mt-1 text-xl font-bold">Consultas derivadas</h2>
+                    </div>
+                    <span className="rounded-full bg-[#fff5d8] px-3 py-1 text-sm font-bold">
+                      {aiSupportRequests.filter((request) => request.status === "pendiente").length} pendiente(s)
+                    </span>
+                  </div>
+                  <div className="mt-4 divide-y">
+                    {aiSupportRequests.filter((request) => request.status === "pendiente").map((request) => (
+                      <article key={request.id} className="py-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <b>{request.userName}</b>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {[request.site, request.section, request.createdAt].filter(Boolean).join(" · ")}
+                            </p>
+                            <p className="mt-2 text-sm">{request.question}</p>
+                          </div>
+                          <button onClick={() => void resolveAiSupportRequest(request.id)} className="rounded border px-3 py-2 text-sm font-bold hover:bg-[#eef5ef]">
+                            Marcar resuelta
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
             </>
           ) : tab === "Ventas" ? (
             <>
@@ -8044,7 +8132,14 @@ export default function Home() {
           )}
         </section>
       </div>
-      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="fixed bottom-5 right-5 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
+      <AiHelpChat
+        role={user.role}
+        site={user.role === "administracion" ? "" : site}
+        section={tab}
+        userName={user.name}
+        onSupportCreated={user.role === "administracion" ? () => void loadAdminSecurityData() : undefined}
+      />
+      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-40 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
     </main>
   );
 }

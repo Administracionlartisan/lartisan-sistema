@@ -29,4 +29,10 @@ return [
         'range' => "'P&L Consolidado 2026 COPIA'!A1:AN220",
         'redirect_uri' => 'https://www.lartisantaller.com/sistema-api/admin/pnl/google-callback',
     ],
+    // En producción esta sección se guarda fuera de public_html en
+    // lartisan-ai-config.php.
+    'openai' => [
+        'api_key' => 'CONFIGURAR_EN_ARCHIVO_PRIVADO',
+        'model' => 'gpt-5.6-luna',
+    ],
 ];
