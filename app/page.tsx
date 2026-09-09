@@ -1053,6 +1053,8 @@ export default function Home() {
       { username: string; password: string } | null
     >(null),
     [resettingUserId, setResettingUserId] = useState<string | null>(null),
+    [actionPermissionDrafts, setActionPermissionDrafts] = useState<Record<string, string[]>>({}),
+    [savingPermissionsFor, setSavingPermissionsFor] = useState<string | null>(null),
     [priceIncrease, setPriceIncrease] = useState(0),
     [priceRounding, setPriceRounding] = useState(100),
     [priceCategory, setPriceCategory] = useState("Todos"),
@@ -1747,6 +1749,12 @@ export default function Home() {
     (user?.role === "vendedora" && user.location === "Villa Mitre");
   const can = (permission: string) =>
     Boolean(user?.actionPermissions.includes(permission));
+  const pendingResetFor = (profile: ManagedUser) =>
+    resetRequests.find(
+      (request) =>
+        request.status === "Pendiente" &&
+        (request.userId === profile.id || request.username.toLowerCase() === profile.username.toLowerCase()),
+    );
   const currentRequestLines = PRODUCTS.filter(
     (product) => (requestQuantities[product.id] || 0) > 0,
   ).map((product) => ({
@@ -2062,26 +2070,46 @@ export default function Home() {
         profile.id === id ? { ...profile, ...changes } : profile,
       ),
     );
-    const response = await fetch(`${API_BASE}/admin/users/${id}`, {
-      method: "PATCH",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        role: changes.role,
-        assignedLocation: changes.location,
-        assignedLocations: changes.locations,
-        accessAllLocations: changes.accessAllLocations,
-        active: changes.active,
-        mfaRequired: changes.mfaRequired,
-        reportPermissions: changes.reportPermissions,
-        actionPermissions: changes.actionPermissions,
-      }),
-    });
-    if (!response.ok) {
+    try {
+      const response = await fetch(`${API_BASE}/admin/users/${id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: changes.role,
+          assignedLocation: changes.location,
+          assignedLocations: changes.locations,
+          accessAllLocations: changes.accessAllLocations,
+          active: changes.active,
+          mfaRequired: changes.mfaRequired,
+          reportPermissions: changes.reportPermissions,
+          actionPermissions: changes.actionPermissions,
+        }),
+      });
+      if (response.ok) return true;
       const data = (await response.json()) as ApiPayload;
       setMessage(data.error || "No se pudo guardar el cambio del usuario.");
       await loadAdminSecurityData();
+      return false;
+    } catch {
+      setMessage("No se pudo conectar con el servicio de usuarios.");
+      await loadAdminSecurityData();
+      return false;
     }
+  };
+  const saveActionPermissions = async (profile: ManagedUser) => {
+    const permissions = actionPermissionDrafts[profile.id];
+    if (!permissions) return;
+    setSavingPermissionsFor(profile.id);
+    const saved = await updateManagedUser(profile.id, { actionPermissions: permissions });
+    setSavingPermissionsFor(null);
+    if (!saved) return;
+    setActionPermissionDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[profile.id];
+      return next;
+    });
+    setMessage(`Permisos de ${profile.name} guardados correctamente.`);
   };
   const requestPasswordReset = async () => {
     if (!login.trim()) return setMessage("Ingresá primero tu nombre de usuario.");
@@ -6175,11 +6203,43 @@ export default function Home() {
               </div>
               <div className="mt-6 overflow-auto rounded-xl border bg-white">
                 <div className="border-b p-5">
-                  <b>Usuarios registrados</b>
-                  <p className="mt-1 text-sm text-slate-500">
-                    La cuenta principal de Administración está protegida contra
-                    bloqueo accidental.
-                  </p>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <b>Usuarios registrados</b>
+                      <p className="mt-1 text-sm text-slate-500">
+                        La cuenta principal de Administración está protegida contra bloqueo accidental.
+                      </p>
+                    </div>
+                    {resetRequests.some((request) => request.status === "Pendiente") && (
+                      <span className="rounded bg-[#fff5d8] px-3 py-1 text-sm font-bold text-[#8a5b00]">
+                        {resetRequests.filter((request) => request.status === "Pendiente").length} recuperaciones pendientes
+                      </span>
+                    )}
+                  </div>
+                  {generatedTemporaryPassword && (
+                    <div id="temporary-password-result" className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border-2 border-[#e7c26a] bg-[#fff5d8] p-4">
+                      <span className="text-sm font-bold text-[#8a5b00]">
+                        Clave temporal para @{generatedTemporaryPassword.username}:
+                      </span>
+                      <code className="rounded bg-white px-3 py-2 text-base font-bold text-[#183a67]">
+                        {generatedTemporaryPassword.password}
+                      </code>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard
+                            .writeText(generatedTemporaryPassword.password)
+                            .then(() => setMessage("Contraseña copiada al portapapeles."))
+                            .catch(() => setMessage("Copiá la contraseña manualmente."));
+                        }}
+                        className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white"
+                      >
+                        Copiar
+                      </button>
+                      <button onClick={() => setGeneratedTemporaryPassword(null)} className="text-sm font-bold underline">
+                        Ocultar
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <table className="w-full min-w-[850px] text-sm">
                   <thead className="bg-[#eef2f6]">
@@ -6209,7 +6269,15 @@ export default function Home() {
                             </span>
                           )}
                         </td>
-                        <td className="p-3 text-slate-600">Solicitud al administrador</td>
+                        <td className="p-3">
+                          {pendingResetFor(profile) ? (
+                            <span className="inline-flex rounded bg-[#fff5d8] px-2 py-1 text-xs font-bold text-[#8a5b00]">
+                              Pendiente · {pendingResetFor(profile)?.requestedAt}
+                            </span>
+                          ) : (
+                            <span className="text-slate-500">Sin solicitud pendiente</span>
+                          )}
+                        </td>
                         <td className="p-3">
                           <select
                             value={profile.role}
@@ -6310,7 +6378,11 @@ export default function Home() {
                               disabled={
                                 profile.primary || resettingUserId === profile.id
                               }
-                              onClick={() => resetManagedUserPassword(profile)}
+                              onClick={() => {
+                                const request = pendingResetFor(profile);
+                                if (request) resetPassword(request);
+                                else resetManagedUserPassword(profile);
+                              }}
                               className="rounded bg-[#183a67] px-3 py-2 font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
                               title={
                                 profile.primary
@@ -6320,7 +6392,9 @@ export default function Home() {
                             >
                               {resettingUserId === profile.id
                                 ? "Restableciendo…"
-                                : "Restablecer contraseña"}
+                                : pendingResetFor(profile)
+                                  ? "Atender recuperación"
+                                  : "Restablecer contraseña"}
                             </button>
                             <button
                               disabled={profile.primary}
@@ -6345,75 +6419,6 @@ export default function Home() {
                     ))}
                   </tbody>
                 </table>
-              </div>
-              <div className="mt-6 rounded-xl border bg-white p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <b>Recuperación de contraseñas</b>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Las vendedoras solicitan recuperación desde el acceso; Administración entrega una contraseña temporal por un canal validado.
-                    </p>
-                  </div>
-                  <span className="rounded bg-[#fff5d8] px-3 py-1 text-sm font-bold">
-                    {resetRequests.filter((request) => request.status === "Pendiente").length} pendientes
-                  </span>
-                </div>
-                {generatedTemporaryPassword && (
-                  <div id="temporary-password-result" className="mt-4 rounded-xl border-2 border-[#e7c26a] bg-[#fff5d8] p-4">
-                    <p className="text-sm font-bold text-[#8a5b00]">
-                      Contraseña provisoria generada
-                    </p>
-                    <p className="mt-2 text-sm">
-                      Usuario: <b>@{generatedTemporaryPassword.username}</b>
-                    </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-3">
-                      <code className="rounded bg-white px-3 py-2 text-base font-bold text-[#183a67]">
-                        {generatedTemporaryPassword.password}
-                      </code>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard
-                            .writeText(generatedTemporaryPassword.password)
-                            .then(() => setMessage("Contraseña copiada al portapapeles."))
-                            .catch(() => setMessage("Copiá la contraseña manualmente."));
-                        }}
-                        className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white"
-                      >
-                        Copiar contraseña
-                      </button>
-                      <button
-                        onClick={() => setGeneratedTemporaryPassword(null)}
-                        className="text-sm font-bold underline"
-                      >
-                        Ocultar
-                      </button>
-                    </div>
-                    <p className="mt-3 text-xs text-slate-600">
-                      Enviála por un canal validado. La persona deberá cambiarla en su próximo ingreso y sus sesiones anteriores ya fueron cerradas.
-                    </p>
-                  </div>
-                )}
-                <div className="mt-4 divide-y">
-                  {resetRequests.length ? resetRequests.map((request) => (
-                    <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
-                      <span>
-                        <b>@{request.username}</b> · {request.site || "Administración"} · {request.requestedAt}
-                      </span>
-                      {request.status === "Pendiente" ? (
-                        <button
-                          onClick={() => resetPassword(request)}
-                          className="rounded bg-[#183a67] px-3 py-2 font-bold text-white"
-                        >
-                          Generar contraseña temporal
-                        </button>
-                      ) : (
-                        <span className="font-bold text-green-700">Restablecida</span>
-                      )}
-                    </div>
-                  )) : (
-                    <p className="py-3 text-sm text-slate-500">No hay solicitudes de recuperación.</p>
-                  )}
-                </div>
               </div>
               <div className="mt-6 space-y-4">
                 <div>
@@ -6489,51 +6494,75 @@ export default function Home() {
                     reportes que puede consultar.
                   </p>
                 </div>
-                {managedUsers.map((profile) => (
-                  <div
-                    key={profile.id}
-                    className="rounded-xl border bg-white p-5"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <b>{profile.name}</b>
-                      <span className="text-xs text-slate-500">
-                        {profile.actionPermissions.length} acciones habilitadas
-                      </span>
-                    </div>
-                    <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      {ACTION_PERMISSIONS.map((permission) => (
-                        <label
-                          key={permission.id}
-                          className="flex items-center gap-2 rounded bg-[#eef2f6] p-3 text-sm"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={profile.actionPermissions.includes(
-                              permission.id,
-                            )}
-                            disabled={profile.primary}
-                            onChange={() =>
-                              updateManagedUser(profile.id, {
-                                actionPermissions:
-                                  profile.actionPermissions.includes(
-                                    permission.id,
-                                  )
-                                    ? profile.actionPermissions.filter(
-                                        (id) => id !== permission.id,
-                                      )
-                                    : [
-                                        ...profile.actionPermissions,
-                                        permission.id,
-                                      ],
+                {managedUsers.map((profile) => {
+                  const visiblePermissions =
+                    actionPermissionDrafts[profile.id] ?? profile.actionPermissions;
+                  const hasPendingChanges = actionPermissionDrafts[profile.id] !== undefined;
+                  return (
+                    <div key={profile.id} className="rounded-xl border bg-white p-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <b>{profile.name}</b>
+                          <span className="ml-3 text-xs text-slate-500">
+                            {visiblePermissions.length} acciones habilitadas
+                          </span>
+                        </div>
+                        {hasPendingChanges && (
+                          <span className="rounded bg-[#fff5d8] px-2 py-1 text-xs font-bold text-[#8a5b00]">
+                            Cambios sin guardar
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {ACTION_PERMISSIONS.map((permission) => (
+                          <label
+                            key={permission.id}
+                            className="flex items-center gap-2 rounded bg-[#eef2f6] p-3 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={visiblePermissions.includes(permission.id)}
+                              disabled={profile.primary || savingPermissionsFor === profile.id}
+                              onChange={() =>
+                                setActionPermissionDrafts((drafts) => ({
+                                  ...drafts,
+                                  [profile.id]: visiblePermissions.includes(permission.id)
+                                    ? visiblePermissions.filter((id) => id !== permission.id)
+                                    : [...visiblePermissions, permission.id],
+                                }))
+                              }
+                            />
+                            {permission.label}
+                          </label>
+                        ))}
+                      </div>
+                      {!profile.primary && (
+                        <div className="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4">
+                          <button
+                            disabled={!hasPendingChanges || savingPermissionsFor === profile.id}
+                            onClick={() =>
+                              setActionPermissionDrafts((drafts) => {
+                                const next = { ...drafts };
+                                delete next[profile.id];
+                                return next;
                               })
                             }
-                          />
-                          {permission.label}
-                        </label>
-                      ))}
+                            className="rounded border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Descartar
+                          </button>
+                          <button
+                            disabled={!hasPendingChanges || savingPermissionsFor === profile.id}
+                            onClick={() => saveActionPermissions(profile)}
+                            className="rounded bg-[#183a67] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {savingPermissionsFor === profile.id ? "Guardando…" : "Guardar cambios"}
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           ) : tab === "Horarios" && isBetzi ? (
