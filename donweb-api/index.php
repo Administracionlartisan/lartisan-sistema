@@ -518,6 +518,46 @@ if ($method === 'POST' && $route === 'admin/reset-password') {
     json_response(['ok' => true]);
 }
 
+if ($method === 'POST' && preg_match('#^admin/users/(\d+)/reset-password$#', $route, $matches)) {
+    $admin = require_user($pdo, ['administracion']);
+    $userId = (int) $matches[1];
+    $stmt = $pdo->prepare('SELECT id, username, full_name FROM users WHERE id = ?');
+    $stmt->execute([$userId]);
+    $target = $stmt->fetch();
+    if (!$target) {
+        json_response(['ok' => false, 'error' => 'Usuario no encontrado'], 404);
+    }
+    if (in_array($target['username'], ['administracion', 'administracion@lartisantaller.com'], true)) {
+        json_response(['ok' => false, 'error' => 'La cuenta principal se recupera desde el acceso administrativo'], 422);
+    }
+
+    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    $randomPart = '';
+    for ($index = 0; $index < 8; $index++) {
+        $randomPart .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+    }
+    $temporaryPassword = 'Lar!' . $randomPart . '7a';
+
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE users SET password_hash = ?, must_change_password = 1, failed_attempts = 0, locked_until = NULL WHERE id = ?')
+            ->execute([password_hash($temporaryPassword, PASSWORD_DEFAULT), $userId]);
+        $pdo->prepare("UPDATE password_reset_requests SET status = 'resuelta', resolved_at = NOW(), resolved_by = ? WHERE user_id = ? AND status = 'pendiente'")
+            ->execute([$admin['id'], $userId]);
+        $pdo->prepare('DELETE FROM user_sessions WHERE user_id = ?')->execute([$userId]);
+        audit($pdo, (int) $admin['id'], 'password_reset_by_admin', 'user_id=' . $userId);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    json_response([
+        'ok' => true,
+        'username' => $target['username'],
+        'temporaryPassword' => $temporaryPassword,
+    ]);
+}
+
 if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)) {
     $admin = require_user($pdo, ['administracion']);
     $userId = (int) $matches[1];

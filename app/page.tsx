@@ -1128,6 +1128,7 @@ export default function Home() {
     [generatedTemporaryPassword, setGeneratedTemporaryPassword] = useState<
       { username: string; password: string } | null
     >(null),
+    [resettingUserId, setResettingUserId] = useState<string | null>(null),
     [priceIncrease, setPriceIncrease] = useState(0),
     [priceRounding, setPriceRounding] = useState(100),
     [priceCategory, setPriceCategory] = useState("Todos"),
@@ -2149,7 +2150,50 @@ export default function Home() {
       username: request.username,
       password: temporaryPassword,
     });
-    setMessage(`Contraseña temporal para ${request.username}: ${temporaryPassword}`);
+    setMessage(`La contraseña temporal de ${request.username} quedó lista para copiar.`);
+  };
+  const resetManagedUserPassword = async (profile: ManagedUser) => {
+    if (
+      !window.confirm(
+        `¿Restablecer la contraseña de ${profile.name}? Su clave actual y sus sesiones abiertas dejarán de funcionar.`,
+      )
+    )
+      return;
+    setResettingUserId(profile.id);
+    setGeneratedTemporaryPassword(null);
+    setMessage("");
+    try {
+      const response = await fetch(
+        `${API_BASE}/admin/users/${profile.id}/reset-password`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        setMessage(data.error || "No se pudo restablecer la contraseña.");
+        return;
+      }
+      setGeneratedTemporaryPassword({
+        username: data.username || profile.username,
+        password: data.temporaryPassword,
+      });
+      await loadAdminSecurityData();
+      setMessage(`La contraseña temporal de ${profile.name} quedó lista para copiar.`);
+      window.setTimeout(
+        () =>
+          document
+            .getElementById("temporary-password-result")
+            ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+        50,
+      );
+    } catch {
+      setMessage("No se pudo conectar con el servicio de usuarios. Intentá nuevamente.");
+    } finally {
+      setResettingUserId(null);
+    }
   };
   const increasedPrice = (productId: number) => {
     const increased = prices[productId] * (1 + priceIncrease / 100);
@@ -6046,7 +6090,7 @@ export default function Home() {
                       <th className="p-3 text-left">Local asignado</th>
                       <th className="p-3 text-center">Doble factor</th>
                       <th className="p-3 text-center">Estado</th>
-                      <th className="p-3 text-center">Acción</th>
+                      <th className="p-3 text-center">Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -6161,23 +6205,41 @@ export default function Home() {
                           </span>
                         </td>
                         <td className="p-3 text-center">
-                          <button
-                            disabled={profile.primary}
-                            onClick={() => {
-                              updateManagedUser(profile.id, {
-                                active: !profile.active,
-                              });
-                              recordAudit(
-                                profile.active
-                                  ? "Usuario bloqueado"
-                                  : "Usuario habilitado",
-                                profile.name,
-                              );
-                            }}
-                            className="rounded border px-3 py-2 font-bold disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            {profile.active ? "Bloquear" : "Habilitar"}
-                          </button>
+                          <div className="flex flex-col items-stretch gap-2">
+                            <button
+                              disabled={
+                                profile.primary || resettingUserId === profile.id
+                              }
+                              onClick={() => resetManagedUserPassword(profile)}
+                              className="rounded bg-[#183a67] px-3 py-2 font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                              title={
+                                profile.primary
+                                  ? "La cuenta principal se recupera desde el acceso administrativo."
+                                  : "Genera una clave temporal y cierra las sesiones anteriores."
+                              }
+                            >
+                              {resettingUserId === profile.id
+                                ? "Restableciendo…"
+                                : "Restablecer contraseña"}
+                            </button>
+                            <button
+                              disabled={profile.primary}
+                              onClick={() => {
+                                updateManagedUser(profile.id, {
+                                  active: !profile.active,
+                                });
+                                recordAudit(
+                                  profile.active
+                                    ? "Usuario bloqueado"
+                                    : "Usuario habilitado",
+                                  profile.name,
+                                );
+                              }}
+                              className="rounded border px-3 py-2 font-bold disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {profile.active ? "Bloquear" : "Habilitar"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -6197,7 +6259,7 @@ export default function Home() {
                   </span>
                 </div>
                 {generatedTemporaryPassword && (
-                  <div className="mt-4 rounded-xl border-2 border-[#e7c26a] bg-[#fff5d8] p-4">
+                  <div id="temporary-password-result" className="mt-4 rounded-xl border-2 border-[#e7c26a] bg-[#fff5d8] p-4">
                     <p className="text-sm font-bold text-[#8a5b00]">
                       Contraseña provisoria generada
                     </p>
@@ -6227,7 +6289,7 @@ export default function Home() {
                       </button>
                     </div>
                     <p className="mt-3 text-xs text-slate-600">
-                      Enviála por un canal validado. Andrea deberá cambiarla en su primer ingreso.
+                      Enviála por un canal validado. La persona deberá cambiarla en su próximo ingreso y sus sesiones anteriores ya fueron cerradas.
                     </p>
                   </div>
                 )}
