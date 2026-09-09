@@ -156,19 +156,34 @@ button:not(:disabled) {
     box-shadow: none !important;
     padding: 28px !important;
   }
-  body.receipt-printing * {
-    visibility: hidden !important;
+  body.receipt-printing main {
+    min-height: 0 !important;
   }
-  body.receipt-printing .receipt-print-area,
-  body.receipt-printing .receipt-print-area * {
-    visibility: visible !important;
+  body.receipt-printing main > *:not(.receipt-modal) {
+    display: none !important;
   }
-  body.receipt-printing .receipt-print-area {
-    position: absolute;
-    inset: 0 auto auto 0;
+  body.receipt-printing .receipt-modal {
+    position: static !important;
+    display: block !important;
+    inset: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  body.receipt-printing .receipt-modal > div {
     width: 74mm !important;
     max-width: 74mm !important;
     padding: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  body.receipt-printing .receipt-print-area {
+    position: static !important;
+    width: 74mm !important;
+    max-width: 74mm !important;
+    padding: 0 0 8mm !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   body:not(.receipt-printing) .receipt-modal {
     display: none !important;
