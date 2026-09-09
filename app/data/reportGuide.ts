@@ -113,7 +113,25 @@ export const supervisionReportGuide = report("Supervision", "Reportes de Andrea"
   "app/page.tsx · tab === Reportes && isAndrea");
 
 // Single source of names/IDs for the menu, guide, permissions and drift tests.
-export const ADMIN_REPORTS = adminReportGuides.map(({ id, title, detail, status }) => ({ id, title, detail: `${detail} Estado: ${status}.` }));
+export const ADMIN_REPORTS = adminReportGuides.map(({ id, title, detail, status }) => ({ id, title, summary: detail, status, detail: `${detail} Estado: ${status}.` }));
+export type NavigationReport = (typeof ADMIN_REPORTS)[number];
+export const REPORT_AREAS = [
+  { id: "direccion", title: "Dirección", reports: ["Resumen", "Gerencia", "PLConsolidado", "Evolucion", "Objetivos"] },
+  { id: "ventas", title: "Ventas", reports: ["Ventas", "DetalleVentas", "Productos", "Rentabilidad", "HorariosVenta", "Promociones"] },
+  { id: "caja", title: "Caja y cobros", reports: ["Pagos", "VendidoCobrado", "Cajas", "CajaMayor", "Bancos", "Egresos"] },
+  { id: "stock", title: "Stock y pedidos", reports: ["Stock", "Reposicion", "PedidosCentral"] },
+  { id: "personas", title: "Personas y clientes", reports: ["Personal", "Clientes"] },
+  { id: "control", title: "Control", reports: ["Alertas", "Ajustes", "Calidad", "Auditoria", "Incidencias", "Fiscal"] },
+] as const;
+export function reportArea(id: string) {
+  return REPORT_AREAS.find(area => (area.reports as readonly string[]).includes(id));
+}
+export function groupAvailableReports(reports: readonly NavigationReport[]) {
+  return REPORT_AREAS.map(area => ({ ...area, reports: area.reports.flatMap(id => {
+    const report = reports.find(item => item.id === id);
+    return report ? [report] : [];
+  }) })).filter(area => area.reports.length > 0);
+}
 export function availableReportGuides(access: ReportAccess) {
   if (access.role === "administracion") return adminReportGuides.filter(r => access.reportPermissions.includes(r.id));
   return access.role === "supervisora" && access.supervisorReports ? [supervisionReportGuide] : [];
@@ -123,7 +141,8 @@ export function canOpenReport(access: ReportAccess, id: string) {
 }
 export const reportQuestion = (report: ReportGuide) => `¿Dónde encuentro el informe ${report.title}?`;
 export function describeReport(report: ReportGuide, followup?: "filters" | "export" | "source") {
-  const path = report.id === "Supervision" ? "Menú → Reportes → Reportes de Andrea" : `Menú → Administración → Panel central → ${report.title}`;
+  const area = reportArea(report.id);
+  const path = report.id === "Supervision" ? "Menú → Reportes → Reportes de Andrea" : `Menú → Administración → Panel central → ${area ? `${area.title} → ` : ""}${report.title}`;
   const intro = `Dónde: ${path}.\n\nQué encontrarás: ${report.detail}\n\nEstado: ${report.status}.`;
   const filters = `Filtros y lectura: ${report.filters}`;
   const limits = `Importante: ${report.limits}`;
