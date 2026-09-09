@@ -947,6 +947,87 @@ const money2 = new Intl.NumberFormat("es-AR", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+const THERMAL_COLUMNS = 32;
+const thermalSafe = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’‘]/g, "'")
+    .replace(/[–—·]/g, "-")
+    .replace(/[^\x20-\x7E]/g, "")
+    .trim();
+const thermalCenter = (value: string) => {
+  const text = thermalSafe(value).slice(0, THERMAL_COLUMNS);
+  return text.padStart(text.length + Math.floor((THERMAL_COLUMNS - text.length) / 2));
+};
+const thermalPair = (label: string, value: string) => {
+  const left = thermalSafe(label);
+  const right = thermalSafe(value);
+  const spaces = THERMAL_COLUMNS - left.length - right.length;
+  return spaces > 0 ? `${left}${" ".repeat(spaces)}${right}` : `${left}\n${right.padStart(THERMAL_COLUMNS)}`;
+};
+const thermalWrap = (value: string) => {
+  const words = thermalSafe(value).split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  for (const word of words) {
+    const previous = lines.at(-1) || "";
+    if (!previous || previous.length + word.length + 1 > THERMAL_COLUMNS) lines.push(word.slice(0, THERMAL_COLUMNS));
+    else lines[lines.length - 1] = `${previous} ${word}`;
+  }
+  return lines.length ? lines : [""];
+};
+const thermalMoney = (value: number) => `$ ${Math.round(value).toLocaleString("es-AR")}`;
+function buildThermalReceipt(sale: Sale, salePayments: Payment[], servedBy: string) {
+  const divider = "-".repeat(THERMAL_COLUMNS);
+  const grouped = Array.from(
+    sale.items.reduce<Map<number, { product: Product; quantity: number }>>((rows, product) => {
+      const current = rows.get(product.id);
+      rows.set(product.id, { product, quantity: (current?.quantity || 0) + 1 });
+      return rows;
+    }, new Map()).values(),
+  );
+  const lines = [
+    "",
+    thermalCenter("L'ARTISAN"),
+    thermalCenter("TICKET DE VENTA"),
+    thermalCenter("COMPROBANTE INTERNO"),
+    thermalCenter("NO FISCAL"),
+    divider,
+    ...thermalWrap(`Local: ${sale.site}`),
+    ...thermalWrap(`Fecha: ${sale.createdAt}`),
+    `Operacion: ${sale.id.slice(0, 8).toUpperCase()}`,
+    ...thermalWrap(`Atendio: ${servedBy}`),
+    ...thermalWrap(`Cliente: ${sale.customer}`),
+    `Canal: ${thermalSafe(sale.channel)}`,
+    divider,
+  ];
+  grouped.forEach(({ product, quantity }) => {
+    lines.push(...thermalWrap(`${quantity} x ${product.name}`));
+    const invited = sale.invitedQuantities?.[product.id] || 0;
+    if (invited) lines.push(`  Invitacion: ${invited} un.`);
+  });
+  lines.push(
+    divider,
+    thermalPair("Bruto", thermalMoney(sale.gross)),
+    thermalPair("Descuento", `-${thermalMoney(sale.discount)}`),
+    thermalPair("TOTAL", thermalMoney(sale.net)),
+  );
+  salePayments.forEach((payment) => lines.push(thermalPair(payment.method, thermalMoney(payment.amount))));
+  lines.push(
+    divider,
+    thermalCenter(sale.invoiceType),
+    "",
+    ...thermalWrap("Este ticket no reemplaza una factura fiscal con CAE."),
+    "",
+    thermalCenter("Gracias por tu compra"),
+    "",
+    "",
+    "",
+    "",
+    "",
+  );
+  return lines.join("\n");
+}
 function Heading({ k, h, p }: { k: string; h: string; p: string }) {
   return (
     <div className="mb-6">
@@ -8046,52 +8127,13 @@ export default function Home() {
       {receiptSale && (
         <div className="receipt-modal fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Vista previa del ticket">
           <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl">
-            <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-3 font-mono text-[12px] leading-5 text-black">
-              <div className="border-b border-dashed border-black pb-3 text-center">
-                <p className="font-serif text-xl font-bold tracking-[.14em]">L’ARTISAN</p>
-                <p className="mt-1 font-bold">TICKET DE VENTA</p>
-                <p>COMPROBANTE INTERNO · NO FISCAL</p>
-              </div>
-              <div className="border-b border-dashed border-black py-3">
-                <p>Local: {receiptSale.site}</p>
-                <p>Fecha: {receiptSale.createdAt}</p>
-                <p>Operación: {receiptSale.id.slice(0, 8).toUpperCase()}</p>
-                <p>Atendió: {user.name}</p>
-                <p>Cliente: {receiptSale.customer}</p>
-                <p>Canal: {receiptSale.channel}</p>
-              </div>
-              <div className="border-b border-dashed border-black py-3">
-                {Array.from(
-                  receiptSale.items.reduce<Map<number, { product: Product; quantity: number }>>((rows, product) => {
-                    const current = rows.get(product.id);
-                    rows.set(product.id, { product, quantity: (current?.quantity || 0) + 1 });
-                    return rows;
-                  }, new Map()).values(),
-                ).map(({ product, quantity }) => (
-                  <div key={product.id} className="mb-2">
-                    <div>{quantity} x {product.name}</div>
-                    {(receiptSale.invitedQuantities?.[product.id] || 0) > 0 && (
-                      <p>  Invitación: {receiptSale.invitedQuantities?.[product.id]} un.</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <div className="border-b border-dashed border-black py-3">
-                <div className="flex justify-between"><span>Bruto</span><span>{money.format(receiptSale.gross)}</span></div>
-                <div className="flex justify-between"><span>Descuento</span><span>-{money.format(receiptSale.discount)}</span></div>
-                <div className="mt-1 flex justify-between text-base font-bold"><span>TOTAL</span><span>{money.format(receiptSale.net)}</span></div>
-                {payments.filter((payment) => payment.saleId === receiptSale.id).map((payment, index) => (
-                  <div key={`${payment.method}-${index}`} className="flex justify-between">
-                    <span>{payment.method}</span><span>{money.format(payment.amount)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="pt-3 text-center">
-                <p>{receiptSale.invoiceType}</p>
-                <p className="mt-2">Este ticket no reemplaza una factura fiscal con CAE.</p>
-                <p className="mt-2 font-bold">Gracias por tu compra</p>
-              </div>
-            </div>
+            <pre className="receipt-print-area mx-auto w-full max-w-[80mm] whitespace-pre-wrap bg-white p-3 font-mono text-[12px] leading-[1.35] text-black">
+              {buildThermalReceipt(
+                receiptSale,
+                payments.filter((payment) => payment.saleId === receiptSale.id),
+                user.name,
+              )}
+            </pre>
             <div className="no-print mt-4 grid grid-cols-2 gap-2">
               <button onClick={() => setReceiptSale(null)} className="rounded border px-4 py-3 font-bold">Cerrar</button>
               <button onClick={printReceipt} className="rounded bg-[#183a67] px-4 py-3 font-bold text-white">Imprimir ticket</button>
