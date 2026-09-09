@@ -137,6 +137,10 @@ button:not(:disabled) {
 }
 
 @media print {
+  @page {
+    size: 80mm auto;
+    margin: 3mm;
+  }
   body {
     background: #fff;
   }
@@ -151,5 +155,22 @@ button:not(:disabled) {
     border-radius: 0 !important;
     box-shadow: none !important;
     padding: 28px !important;
+  }
+  body.receipt-printing * {
+    visibility: hidden !important;
+  }
+  body.receipt-printing .receipt-print-area,
+  body.receipt-printing .receipt-print-area * {
+    visibility: visible !important;
+  }
+  body.receipt-printing .receipt-print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 74mm !important;
+    max-width: 74mm !important;
+    padding: 0 !important;
+  }
+  body:not(.receipt-printing) .receipt-modal {
+    display: none !important;
   }
 }

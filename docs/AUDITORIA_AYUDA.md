@@ -1,10 +1,18 @@
 # Auditoría de la ayuda L’ARTISAN
 
-Fecha: 8 de septiembre de 2026. Alcance: código local del portal, guía, búsqueda y diagnóstico de pantalla. No es una auditoría de producción, penetración, base de datos ni comprobación de respaldos reales. Las mejoras quedan preparadas; la publicación se verifica por separado.
+Fecha: 9 de septiembre de 2026. Alcance: código local del portal, guía, búsqueda y diagnóstico de pantalla. No es una auditoría de producción, penetración, base de datos ni comprobación de respaldos reales. Las mejoras quedan preparadas; la publicación se verifica por separado.
 
 ## Resultado
 
-- 86 temas, cada uno con tres presentaciones que conservan las mismas instrucciones verificadas. No se pretende cubrir todas las preguntas imaginables.
+### Actualización de la guía para vendedoras
+
+- Se incorporó la instalación del acceso móvil en iPhone y Android con el ícono de L’ARTISAN.
+- Se agregó el procedimiento de pago dividido y la derivación segura cuando el medio de pago quedó mal registrado.
+- Se reforzó la selección del local antes de fichar, abrir caja o vender.
+- Se corrigió la contingencia para exigir el mismo equipo, conservar la sesión y verificar la sincronización antes del cierre.
+- Se mantuvieron separados los procedimientos de invitación, devolución, anulación y recepción de pedidos según permisos.
+
+- 88 temas, cada uno con tres presentaciones que conservan las mismas instrucciones verificadas. No se pretende cubrir todas las preguntas imaginables.
 - Búsqueda por palabras completas, sin tildes ni distinción de mayúsculas, conjugaciones y sinónimos explícitos; tolerancia limitada a una edición o transposición, con precauciones para palabras cortas.
 - Las consultas ambiguas ofrecen hasta tres temas, en vez de seleccionar uno arbitrariamente. Las desconocidas piden sección, acción y aviso; no inventan procedimientos.
 - Seguimiento de preguntas breves como “no entendí” sobre el último tema permitido; se descarta si cambió el usuario/local, el tema o los permisos.
@@ -15,11 +23,11 @@ Fecha: 8 de septiembre de 2026. Alcance: código local del portal, guía, búsqu
 
 | Perfil | Temas disponibles |
 | --- | ---: |
-| Vendedora | 57 |
-| Ventas de Central | 59 |
-| Andrea (con sus habilitaciones actuales) | 62 |
-| Betzi (con sus habilitaciones actuales) | 62 |
-| Administración/Gerencia | 79 |
+| Vendedora | 59 |
+| Ventas de Central | 61 |
+| Andrea (con sus habilitaciones actuales) | 64 |
+| Betzi (con sus habilitaciones actuales) | 64 |
+| Administración/Gerencia | 81 |
 
 El filtro utiliza los booleanos reales del portal: Central, mínimos, conteo, aprobación de stock, reportes y horarios. No concede permisos. El catálogo está en el código cliente y no contiene información confidencial: ocultar preguntas no es una barrera de seguridad. La autorización de operaciones y datos debe aplicarse en el servidor.
 
@@ -212,5 +220,3 @@ Cada cambio funcional debe actualizar la respuesta afectada, su fuente, la fecha
 ### Próximamente
 
 - **¿Qué significan MRP, Recetas y Legajos (Próximamente)?** — Administración/Gerencia. Fuente: app/page.tsx · MRP / Recetas y costos / Legajos.
-
-

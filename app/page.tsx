@@ -442,6 +442,18 @@ const GUIDE_UPDATES = [
   },
   {
     date: "Sistema nuevo",
+    title: "Acceso desde el celular",
+    detail:
+      "Abrí ventas.lartisantaller.com en Safari o Chrome. En iPhone elegí Compartir > Agregar a inicio; en Android elegí Instalar app o Agregar a pantalla principal. Se mostrará con el logo de L’ARTISAN.",
+  },
+  {
+    date: "Sistema nuevo",
+    title: "Local y permisos asignados",
+    detail:
+      "Si tenés acceso a más de un local, elegí el correcto antes de fichar, abrir caja o vender. Las secciones y acciones disponibles dependen de tu usuario; si falta un local o un botón, avisá a Administración.",
+  },
+  {
+    date: "Sistema nuevo",
     title: "Fichaje, turno y apertura de caja",
     detail:
       "Registrá tu fichaje y, antes de vender, entrá a Caja, declará el fondo inicial y abrí la caja con tu usuario. Si cambia la vendedora, cerrá el turno sin cerrar la caja del día.",
@@ -451,6 +463,18 @@ const GUIDE_UPDATES = [
     title: "Mostrador, Online y comprobantes",
     detail:
       "Antes de cobrar, elegí la lista de precios correcta: Mostrador u Online. Luego seleccioná el medio de pago real y el tipo de comprobante correspondiente.",
+  },
+  {
+    date: "Sistema nuevo",
+    title: "Pagos con dos medios",
+    detail:
+      "Para un pago mixto, activá Pago dividido y cargá cada medio con su importe. La suma debe coincidir con el total. Si registraste un medio incorrecto, no repitas la venta: pedí revisión a Administración.",
+  },
+  {
+    date: "Sistema nuevo",
+    title: "Ticket térmico de 80 mm",
+    detail:
+      "Después de cobrar, revisá el ticket y elegí Imprimir. Seleccioná la impresora térmica del local con papel de 80 mm. También podés reimprimirlo desde Ventas de esta sesión. Es un comprobante interno, no una factura fiscal con CAE.",
   },
   {
     date: "Sistema nuevo",
@@ -480,7 +504,7 @@ const GUIDE_UPDATES = [
     date: "Sistema nuevo",
     title: "Contingencia sin internet",
     detail:
-      "Si se corta internet, usá Contingencia para guardar las operaciones pendientes. Al recuperar conexión, sincronizalas antes de cerrar la caja.",
+      "Si la pantalla sigue abierta, usá Contingencia en el mismo equipo. No cierres sesión, no borres datos del navegador ni repitas el cobro en otro dispositivo. Al volver Internet, sincronizá y verificá las operaciones antes de cerrar caja.",
   },
 ];
 const ADMIN_DEMO_ROWS = [
@@ -990,6 +1014,7 @@ export default function Home() {
     [cashAdjustmentDetail, setCashAdjustmentDetail] = useState(""),
     [cashOpenBySite, setCashOpenBySite] = useState<Record<string, boolean>>({}),
     [sales, setSales] = useState<Sale[]>([]),
+    [receiptSale, setReceiptSale] = useState<Sale | null>(null),
     [audit, setAudit] = useState<AuditEvent[]>([]),
     [syncStatus, setSyncStatus] = useState("Sin cierre enviado"),
     [schedules, setSchedules] = useState<EmployeeSchedule[]>(INITIAL_SCHEDULES),
@@ -2595,6 +2620,7 @@ export default function Home() {
       ...currentPayments.map((item) => ({ ...item, saleId: sale.id })),
     ]);
     setSales((x) => [sale, ...x]);
+    setReceiptSale(sale);
     currentPayments.forEach((item) =>
       appendCashLedgerEntry({
         kind: invitation ? "Invitación" : "Venta",
@@ -2639,6 +2665,14 @@ export default function Home() {
     setSplitPayment(false);
     setSplitPayments([{ method: "Efectivo", amount: 0 }, { method: "Transferencia", amount: 0 }]);
     setCustomer("Consumidor final");
+  };
+  const printReceipt = () => {
+    if (!receiptSale) return;
+    document.body.classList.add("receipt-printing");
+    const cleanup = () => document.body.classList.remove("receipt-printing");
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+    window.setTimeout(cleanup, 1000);
   };
   const cancelSale = (sale: Sale) => {
     if (!can("anular"))
@@ -3687,14 +3721,14 @@ export default function Home() {
                     {cashIsOpen ? "Cobrar venta" : "Abrí caja para cobrar"}
                   </button>
                   <button
-                    onClick={() =>
-                      setMessage(
-                        "Comprobante interno listo para imprimir o enviar.",
-                      )
-                    }
+                    onClick={() => {
+                      const latest = sales.find((sale) => sale.site === site);
+                      if (!latest) return setMessage("Primero registrá una venta para generar el ticket.");
+                      setReceiptSale(latest);
+                    }}
                     className="mt-2 w-full rounded border py-2 font-bold"
                   >
-                    Vista previa del comprobante
+                    Imprimir último ticket
                   </button>
                   <button
                     onClick={saveOrder}
@@ -3773,6 +3807,12 @@ export default function Home() {
                                 Anular
                               </button>
                             )}
+                            <button
+                              onClick={() => setReceiptSale(sale)}
+                              className="underline"
+                            >
+                              Ticket
+                            </button>
                           </div>
                         ))
                     ) : (
@@ -5123,16 +5163,18 @@ export default function Home() {
                 <div className="rounded-2xl border bg-white p-6">
                   <h2 className="font-bold">Uso diario</h2>
                   <ol className="mt-4 list-decimal space-y-3 pl-5 text-sm leading-6">
-                    <li>Ingresá con tu usuario personal y registrá el fichaje.</li>
+                    <li>Ingresá con tu usuario personal, elegí el local correcto y registrá el fichaje.</li>
                     <li>Abrí Caja, declarando fondo inicial y responsable.</li>
                     <li>Elegí Mostrador u Online antes de cargar productos.</li>
                     <li>Guardá comandas si necesitás atender varias ventas.</li>
                     <li>Aplicá descuentos o invitaciones por producto cuando corresponda.</li>
-                    <li>Cobrá con el medio real y seleccioná el comprobante correcto.</li>
+                    <li>Cobrá con el medio real; si son dos, usá Pago dividido y verificá que los importes completen el total.</li>
+                    <li>Revisá el ticket y, si el cliente lo solicita, imprimilo en la térmica de 80 mm.</li>
                     <li>Registrá egresos, devoluciones o incidencias durante el día.</li>
                     <li>Revisá Stock y enviá pedidos sugeridos cuando haga falta.</li>
                     <li>Cerrá o cobrá todas las comandas antes del cierre.</li>
                     <li>Controlá medios de pago, efectivo, sobre y diferencias antes de confirmar.</li>
+                    <li>Si trabajaste en Contingencia, sincronizá y comprobá los pendientes antes de cerrar caja.</li>
                   </ol>
                   <p className="mt-5 rounded-lg bg-[#eef2f6] p-3 text-xs leading-5 text-slate-600">
                     Nunca compartas tu contraseña. Si la olvidás, solicitá la recuperación desde la pantalla de ingreso.
@@ -8001,6 +8043,62 @@ export default function Home() {
           )}
         </section>
       </div>
+      {receiptSale && (
+        <div className="receipt-modal fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Vista previa del ticket">
+          <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl">
+            <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-3 font-mono text-[12px] leading-5 text-black">
+              <div className="border-b border-dashed border-black pb-3 text-center">
+                <p className="font-serif text-xl font-bold tracking-[.14em]">L’ARTISAN</p>
+                <p className="mt-1 font-bold">TICKET DE VENTA</p>
+                <p>COMPROBANTE INTERNO · NO FISCAL</p>
+              </div>
+              <div className="border-b border-dashed border-black py-3">
+                <p>Local: {receiptSale.site}</p>
+                <p>Fecha: {receiptSale.createdAt}</p>
+                <p>Operación: {receiptSale.id.slice(0, 8).toUpperCase()}</p>
+                <p>Atendió: {user.name}</p>
+                <p>Cliente: {receiptSale.customer}</p>
+                <p>Canal: {receiptSale.channel}</p>
+              </div>
+              <div className="border-b border-dashed border-black py-3">
+                {Array.from(
+                  receiptSale.items.reduce<Map<number, { product: Product; quantity: number }>>((rows, product) => {
+                    const current = rows.get(product.id);
+                    rows.set(product.id, { product, quantity: (current?.quantity || 0) + 1 });
+                    return rows;
+                  }, new Map()).values(),
+                ).map(({ product, quantity }) => (
+                  <div key={product.id} className="mb-2">
+                    <div>{quantity} x {product.name}</div>
+                    {(receiptSale.invitedQuantities?.[product.id] || 0) > 0 && (
+                      <p>  Invitación: {receiptSale.invitedQuantities?.[product.id]} un.</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="border-b border-dashed border-black py-3">
+                <div className="flex justify-between"><span>Bruto</span><span>{money.format(receiptSale.gross)}</span></div>
+                <div className="flex justify-between"><span>Descuento</span><span>-{money.format(receiptSale.discount)}</span></div>
+                <div className="mt-1 flex justify-between text-base font-bold"><span>TOTAL</span><span>{money.format(receiptSale.net)}</span></div>
+                {payments.filter((payment) => payment.saleId === receiptSale.id).map((payment, index) => (
+                  <div key={`${payment.method}-${index}`} className="flex justify-between">
+                    <span>{payment.method}</span><span>{money.format(payment.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="pt-3 text-center">
+                <p>{receiptSale.invoiceType}</p>
+                <p className="mt-2">Este ticket no reemplaza una factura fiscal con CAE.</p>
+                <p className="mt-2 font-bold">Gracias por tu compra</p>
+              </div>
+            </div>
+            <div className="no-print mt-4 grid grid-cols-2 gap-2">
+              <button onClick={() => setReceiptSale(null)} className="rounded border px-4 py-3 font-bold">Cerrar</button>
+              <button onClick={printReceipt} className="rounded bg-[#183a67] px-4 py-3 font-bold text-white">Imprimir ticket</button>
+            </div>
+          </div>
+        </div>
+      )}
       <AiHelpChat
         key={`${user.role}:${user.name}:${site}`}
         role={user.role}
