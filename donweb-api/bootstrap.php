@@ -66,6 +66,9 @@ function configure_cors(array $config): void
         header('Vary: Origin');
     }
     header('X-Content-Type-Options: nosniff');
+    header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
     header('Referrer-Policy: no-referrer');
     header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'");
 }
@@ -101,7 +104,7 @@ function audit(PDO $pdo, ?int $userId, string $type, ?string $detail = null): vo
 
 function public_user(array $user): array
 {
-    return [
+    $result = [
         'id' => (int) $user['id'],
         'username' => $user['username'],
         'fullName' => $user['full_name'],
@@ -111,6 +114,16 @@ function public_user(array $user): array
         'accessAllLocations' => (bool) $user['access_all_locations'],
         'mustChangePassword' => (bool) $user['must_change_password'],
     ];
+    if (($user['report_permissions'] ?? null) !== null) {
+        $result['reportPermissions'] = json_decode((string) $user['report_permissions'], true) ?: [];
+    }
+    if (($user['action_permissions'] ?? null) !== null) {
+        $result['actionPermissions'] = json_decode((string) $user['action_permissions'], true) ?: [];
+    }
+    if (($user['mfa_required'] ?? null) !== null) {
+        $result['mfaRequired'] = (bool) $user['mfa_required'];
+    }
+    return $result;
 }
 
 function ensure_user_locations_schema(PDO $pdo): void
@@ -118,6 +131,14 @@ function ensure_user_locations_schema(PDO $pdo): void
     $column = $pdo->query("SHOW COLUMNS FROM users LIKE 'assigned_locations'")->fetch();
     if (!$column) {
         $pdo->exec('ALTER TABLE users ADD COLUMN assigned_locations TEXT NULL AFTER assigned_location');
+    }
+    foreach ([
+        'report_permissions' => 'TEXT NULL',
+        'action_permissions' => 'TEXT NULL',
+        'mfa_required' => 'TINYINT(1) NULL',
+    ] as $name => $definition) {
+        $existing = $pdo->query("SHOW COLUMNS FROM users LIKE " . $pdo->quote($name))->fetch();
+        if (!$existing) $pdo->exec("ALTER TABLE users ADD COLUMN $name $definition");
     }
 }
 

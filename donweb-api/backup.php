@@ -97,22 +97,32 @@ function create_sql_backup(PDO $pdo, string $path): void
 {
     $gzip = gzopen($path, 'wb9');
     if ($gzip === false) throw new RuntimeException('No se pudo crear el archivo de respaldo.');
-    gzwrite($gzip, "-- L'ARTISAN database backup\nSET FOREIGN_KEY_CHECKS=0;\nSTART TRANSACTION;\n");
-    $tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
-    foreach ($tables as $table) {
-        $safeTable = str_replace('`', '``', (string) $table);
-        $create = $pdo->query("SHOW CREATE TABLE `$safeTable`")->fetch(PDO::FETCH_NUM);
-        if (!$create || !isset($create[1])) throw new RuntimeException("No se pudo leer la tabla $table.");
-        gzwrite($gzip, "\nDROP TABLE IF EXISTS `$safeTable`;\n" . $create[1] . ";\n");
-        $rows = $pdo->query("SELECT * FROM `$safeTable`");
-        while ($row = $rows->fetch(PDO::FETCH_ASSOC)) {
-            $columns = array_map(static fn (string $column): string => '`' . str_replace('`', '``', $column) . '`', array_keys($row));
-            $values = array_map(static fn ($value): string => $value === null ? 'NULL' : $pdo->quote((string) $value), array_values($row));
-            gzwrite($gzip, "INSERT INTO `$safeTable` (" . implode(',', $columns) . ') VALUES (' . implode(',', $values) . ");\n");
+    try {
+        $pdo->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        $pdo->beginTransaction();
+        gzwrite($gzip, "-- L'ARTISAN database backup\nSET FOREIGN_KEY_CHECKS=0;\nSTART TRANSACTION;\n");
+        $tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($tables as $table) {
+            $safeTable = str_replace('`', '``', (string) $table);
+            $create = $pdo->query("SHOW CREATE TABLE `$safeTable`")->fetch(PDO::FETCH_NUM);
+            if (!$create || !isset($create[1])) throw new RuntimeException("No se pudo leer la tabla $table.");
+            gzwrite($gzip, "\nDROP TABLE IF EXISTS `$safeTable`;\n" . $create[1] . ";\n");
+            $rows = $pdo->query("SELECT * FROM `$safeTable`");
+            while ($row = $rows->fetch(PDO::FETCH_ASSOC)) {
+                $columns = array_map(static fn (string $column): string => '`' . str_replace('`', '``', $column) . '`', array_keys($row));
+                $values = array_map(static fn ($value): string => $value === null ? 'NULL' : $pdo->quote((string) $value), array_values($row));
+                gzwrite($gzip, "INSERT INTO `$safeTable` (" . implode(',', $columns) . ') VALUES (' . implode(',', $values) . ");\n");
+            }
         }
+        $pdo->commit();
+        gzwrite($gzip, "COMMIT;\nSET FOREIGN_KEY_CHECKS=1;\n-- LARTISAN_BACKUP_COMPLETE\n");
+        gzclose($gzip);
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        gzclose($gzip);
+        @unlink($path);
+        throw $error;
     }
-    gzwrite($gzip, "COMMIT;\nSET FOREIGN_KEY_CHECKS=1;\n-- LARTISAN_BACKUP_COMPLETE\n");
-    gzclose($gzip);
 }
 
 function verify_backup(string $path): void
@@ -121,9 +131,19 @@ function verify_backup(string $path): void
     $gzip = gzopen($path, 'rb');
     if ($gzip === false) throw new RuntimeException('El respaldo comprimido no puede abrirse.');
     $tail = '';
-    while (!gzeof($gzip)) $tail = substr($tail . (string) gzread($gzip, 8192), -256);
+    $scan = '';
+    $hasUsers = false;
+    $hasOperations = false;
+    while (!gzeof($gzip)) {
+        $chunk = (string) gzread($gzip, 8192);
+        $tail = substr($tail . $chunk, -256);
+        $scan = substr($scan . $chunk, -32768);
+        $hasUsers = $hasUsers || str_contains($scan, 'CREATE TABLE `users`');
+        $hasOperations = $hasOperations || str_contains($scan, 'CREATE TABLE `operation_site_states`');
+    }
     gzclose($gzip);
     if (strpos($tail, 'LARTISAN_BACKUP_COMPLETE') === false) throw new RuntimeException('El respaldo está incompleto.');
+    if (!$hasUsers || !$hasOperations) throw new RuntimeException('El respaldo no contiene las tablas esenciales del sistema.');
 }
 
 function upload_to_drive(array $config, string $path): string

@@ -148,7 +148,7 @@ export function describeReport(report: ReportGuide, followup?: "filters" | "expo
   const limits = `Importante: ${report.limits}`;
   const exportNote = report.id === "Supervision"
     ? "Esta pantalla de Supervisión no tiene exportación propia. Solicitá el informe a Administración; no tiene los mismos filtros o botones que el panel administrativo."
-    : "‘Exportar informe Excel’ requiere permiso de exportación y actualmente descarga un resumen por local de ventas/tickets/caja, aunque el nombre del archivo cambie. No es una exportación específica del detalle de este reporte. ‘Imprimir / Guardar PDF’ imprime la vista actual; revisá el resultado antes de compartirlo. No exporto ni envío archivos automáticamente.";
+    : "‘Exportar informe CSV’ requiere permiso de exportación y descarga un resumen por local de ventas/tickets/caja que puede abrirse con Excel; no es una exportación específica del detalle de este reporte. ‘Imprimir / Guardar PDF’ imprime la vista actual; revisá el resultado antes de compartirlo. No exporto ni envío archivos automáticamente.";
   if (followup === "export") return `${intro}\n\n${exportNote}`;
   if (followup === "filters") return `${intro}\n\n${filters}\n\n${limits}`;
   return `${intro}\n\n${filters}\n\n${limits}\n\nTe oriento dónde consultar; no estoy leyendo ni calculando las cifras del informe.`;

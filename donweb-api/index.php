@@ -436,12 +436,16 @@ if ($method === 'GET' && $route === 'operations/states') {
 
 if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $matches)) {
     $user = require_user($pdo);
+    if (!empty($user['must_change_password'])) {
+        json_response(['ok' => false, 'error' => 'Primero debés cambiar la contraseña temporal'], 403);
+    }
     ensure_operations_schema($pdo);
     $site = rawurldecode($matches[1]);
     if (!user_can_access_site($user, $site)) {
         json_response(['ok' => false, 'error' => 'No tenés acceso a este local'], 403);
     }
     $body = request_body();
+    $baseRevision = max(0, (int) ($body['baseRevision'] ?? 0));
     $state = $body['state'] ?? null;
     $eventType = trim((string) ($body['eventType'] ?? 'actualizacion_operativa'));
     $event = $body['event'] ?? [];
@@ -455,12 +459,24 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
     }
     $pdo->beginTransaction();
     try {
-        $pdo->prepare(
-            "INSERT INTO operation_site_states (site, state_json, revision, updated_by)
-             VALUES (?, ?, 1, ?)
-             ON DUPLICATE KEY UPDATE state_json = VALUES(state_json), revision = revision + 1,
-                 updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP"
-        )->execute([$site, $stateJson, $user['id']]);
+        $revisionStatement = $pdo->prepare('SELECT revision FROM operation_site_states WHERE site = ? FOR UPDATE');
+        $revisionStatement->execute([$site]);
+        $currentRevision = $revisionStatement->fetchColumn();
+        if ($currentRevision === false) {
+            if ($baseRevision !== 0) {
+                $pdo->rollBack();
+                json_response(['ok' => false, 'error' => 'La versión del local cambió', 'currentRevision' => 0], 409);
+            }
+            $pdo->prepare('INSERT INTO operation_site_states (site, state_json, revision, updated_by) VALUES (?, ?, 1, ?)')
+                ->execute([$site, $stateJson, $user['id']]);
+        } else {
+            if ((int) $currentRevision !== $baseRevision) {
+                $pdo->rollBack();
+                json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
+            }
+            $pdo->prepare('UPDATE operation_site_states SET state_json = ?, revision = revision + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE site = ?')
+                ->execute([$stateJson, $user['id'], $site]);
+        }
         $pdo->prepare(
             'INSERT INTO operation_events (site, user_id, event_type, event_json) VALUES (?, ?, ?, ?)'
         )->execute([$site, $user['id'], $eventType, $eventJson]);
@@ -562,7 +578,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     $admin = require_user($pdo, ['administracion']);
     $userId = (int) $matches[1];
     $body = request_body();
-    $stmt = $pdo->prepare('SELECT username, role, assigned_location, assigned_locations, access_all_locations, active FROM users WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT username, role, assigned_location, assigned_locations, access_all_locations, active, report_permissions, action_permissions, mfa_required FROM users WHERE id = ?');
     $stmt->execute([$userId]);
     $existing = $stmt->fetch();
     if (!$existing) {
@@ -586,6 +602,13 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     $active = array_key_exists('active', $body)
         ? (!empty($body['active']) ? 1 : 0)
         : (int) $existing['active'];
+    $reportPermissions = array_key_exists('reportPermissions', $body) ? $body['reportPermissions'] : json_decode((string) ($existing['report_permissions'] ?? '[]'), true);
+    $actionPermissions = array_key_exists('actionPermissions', $body) ? $body['actionPermissions'] : json_decode((string) ($existing['action_permissions'] ?? '[]'), true);
+    if (!is_array($reportPermissions)) $reportPermissions = [];
+    if (!is_array($actionPermissions)) $actionPermissions = [];
+    $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar'], true))));
+    $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : $existing['mfa_required'];
     if (!in_array($role, ['vendedora', 'supervisora', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
     }
@@ -603,8 +626,8 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     }
     $location = $locations[0] ?? $location;
     $pdo->prepare(
-        'UPDATE users SET username = ?, role = ?, assigned_location = ?, assigned_locations = ?, access_all_locations = ?, active = ? WHERE id = ?'
-    )->execute([$username, $role, $location, json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations, $active, $userId]);
+        'UPDATE users SET username = ?, role = ?, assigned_location = ?, assigned_locations = ?, access_all_locations = ?, active = ?, report_permissions = ?, action_permissions = ?, mfa_required = ? WHERE id = ?'
+    )->execute([$username, $role, $location, json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations, $active, json_encode($reportPermissions, JSON_UNESCAPED_UNICODE), json_encode($actionPermissions, JSON_UNESCAPED_UNICODE), $mfaRequired, $userId]);
     audit($pdo, (int) $admin['id'], 'user_updated', 'user_id=' . $userId);
     json_response(['ok' => true]);
 }
@@ -612,7 +635,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
 if ($method === 'GET' && $route === 'admin/users') {
     require_user($pdo, ['administracion']);
     $rows = $pdo->query(
-        'SELECT id, username, full_name, role, assigned_location, assigned_locations, access_all_locations, active, must_change_password, created_at
+        'SELECT id, username, full_name, role, assigned_location, assigned_locations, access_all_locations, active, must_change_password, report_permissions, action_permissions, mfa_required, created_at
          FROM users ORDER BY full_name'
     )->fetchAll();
     json_response(['ok' => true, 'users' => $rows]);
@@ -679,6 +702,9 @@ if ($method === 'POST' && $route === 'admin/users') {
     $locations = array_values(array_unique(array_filter($locations, static fn ($site): bool => is_string($site) && in_array($site, operational_sites(), true))));
     if ($allLocations) $locations = operational_sites();
     $temporaryPassword = (string) ($body['temporaryPassword'] ?? '');
+    $reportPermissions = is_array($body['reportPermissions'] ?? null) ? array_values(array_filter($body['reportPermissions'], 'is_string')) : null;
+    $actionPermissions = is_array($body['actionPermissions'] ?? null) ? array_values(array_filter($body['actionPermissions'], 'is_string')) : null;
+    $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : null;
     if (!valid_username($username)
         || $fullName === ''
         || !in_array($role, ['vendedora', 'supervisora', 'administracion'], true)
@@ -686,11 +712,11 @@ if ($method === 'POST' && $route === 'admin/users') {
         json_response(['ok' => false, 'error' => 'Los datos del usuario no son válidos'], 422);
     }
     $stmt = $pdo->prepare(
-        'INSERT INTO users (username, full_name, password_hash, role, assigned_location, assigned_locations, access_all_locations)
-         VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO users (username, full_name, password_hash, role, assigned_location, assigned_locations, access_all_locations, report_permissions, action_permissions, mfa_required)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     try {
-        $stmt->execute([$username, $fullName, password_hash($temporaryPassword, PASSWORD_DEFAULT), $role, $locations[0], json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations]);
+        $stmt->execute([$username, $fullName, password_hash($temporaryPassword, PASSWORD_DEFAULT), $role, $locations[0], json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations, $reportPermissions === null ? null : json_encode($reportPermissions, JSON_UNESCAPED_UNICODE), $actionPermissions === null ? null : json_encode($actionPermissions, JSON_UNESCAPED_UNICODE), $mfaRequired]);
     } catch (PDOException $error) {
         if ((string) $error->getCode() === '23000') {
             json_response(['ok' => false, 'error' => 'Ese nombre de usuario ya existe'], 409);

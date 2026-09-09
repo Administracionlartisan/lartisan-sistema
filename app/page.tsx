@@ -1,10 +1,8 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
 import AiHelpChat from "./components/AiHelpChat";
 import ReportNavigation from "./components/ReportNavigation";
 import { ADMIN_REPORTS, canOpenReport } from "./data/reportGuide";
-
 type Product = {
   id: number;
   name: string;
@@ -93,6 +91,7 @@ type CashShift = {
   id: string;
   site: string;
   openedAt: string;
+  openedAtISO?: string;
   openedBy: string;
   initialFund: number;
   closedAt?: string;
@@ -148,7 +147,14 @@ type AuditEvent = {
   action: string;
   detail: string;
 };
-type Payment = { method: string; amount: number; saleId?: string };
+type Payment = {
+  method: string;
+  amount: number;
+  saleId?: string;
+  site?: string;
+  shiftId?: string;
+  createdAtISO?: string;
+};
 type PriceChange = {
   id: string;
   at: string;
@@ -281,6 +287,11 @@ type OperationalSnapshot = {
   audit?: AuditEvent[];
   cash?: CashFields;
   cashOpen?: boolean;
+  prices?: Record<number, number>;
+  onlinePrices?: Record<number, number>;
+  limitsBySite?: Record<string, OperationalLimits>;
+  schedules?: EmployeeSchedule[];
+  priceChanges?: PriceChange[];
 };
 type SystemHealth = {
   api: "Verificando" | "Disponible" | "Sin respuesta";
@@ -349,6 +360,20 @@ const usernameFromName = (name: string) =>
     .replace(/[^a-z0-9]+/g, ".")
     .replace(/^\.|\.$/g, "");
 const API_BASE = "https://www.lartisantaller.com/sistema-api";
+const downloadCsv = (filename: string, rows: Array<Array<string | number | null>>) => {
+  const escapeCell = (value: string | number | null) => {
+    let text = value === null ? "" : String(value);
+    if (/^[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replaceAll('"', '""')}"`;
+  };
+  const content = `\uFEFF${rows.map((row) => row.map(escapeCell).join(";")).join("\r\n")}`;
+  const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
 type ApiUser = {
   id: number | string;
   username: string;
@@ -364,6 +389,38 @@ type ApiUser = {
   active?: boolean | number;
   mustChangePassword?: boolean;
   must_change_password?: boolean | number;
+  mfaRequired?: boolean;
+  mfa_required?: boolean | number;
+  reportPermissions?: string[];
+  report_permissions?: string | null;
+  actionPermissions?: string[];
+  action_permissions?: string | null;
+};
+type ApiPayload = {
+  error?: string;
+  message?: string;
+  user: ApiUser;
+  users?: ApiUser[];
+  connected?: boolean;
+  authorizationUrl?: string;
+  delivery?: string;
+  username?: string;
+  temporaryPassword?: string;
+  snapshot?: {
+    rows?: string[][];
+    updatedAt?: string | null;
+    rowsImported?: number;
+  };
+};
+const parseStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+  if (typeof value !== "string" || !value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 };
 const managedUserFromApi = (profile: ApiUser): ManagedUser => {
   const name = profile.fullName || profile.full_name || profile.username;
@@ -401,14 +458,21 @@ const managedUserFromApi = (profile: ApiUser): ManagedUser => {
     accessAllLocations,
     active: profile.active === undefined ? true : Boolean(profile.active),
     mfaRequired:
-      profile.role === "administracion" ||
-      profile.username === "andrea.fernandez" ||
-      profile.username === "betzi.avila",
+      profile.mfaRequired != null || profile.mfa_required != null
+        ? Boolean(profile.mfaRequired ?? profile.mfa_required)
+        : profile.role === "administracion" ||
+          profile.username === "andrea.fernandez" ||
+          profile.username === "betzi.avila",
     reportPermissions:
-      profile.role === "administracion"
-        ? ADMIN_REPORTS.map((report) => report.id)
-        : [],
-    actionPermissions: defaultActionPermissions(profile.role),
+      profile.reportPermissions != null || profile.report_permissions != null
+        ? parseStringArray(profile.reportPermissions ?? profile.report_permissions)
+        : profile.role === "administracion"
+          ? ADMIN_REPORTS.map((report) => report.id)
+          : [],
+    actionPermissions:
+      profile.actionPermissions != null || profile.action_permissions != null
+        ? parseStringArray(profile.actionPermissions ?? profile.action_permissions)
+        : defaultActionPermissions(profile.role),
     primary: profile.username === "administracion@lartisantaller.com",
     mustChangePassword: Boolean(
       profile.mustChangePassword ?? profile.must_change_password,
@@ -507,77 +571,9 @@ const GUIDE_UPDATES = [
       "Si la pantalla sigue abierta, usá Contingencia en el mismo equipo. No cierres sesión, no borres datos del navegador ni repitas el cobro en otro dispositivo. Al volver Internet, sincronizá y verificá las operaciones antes de cerrar caja.",
   },
 ];
-const ADMIN_DEMO_ROWS = [
-  {
-    site: "Recoleta",
-    gross: 23788260,
-    net: 23788260,
-    tickets: 608,
-    status: "Pendiente",
-    source: "Copia de prueba · INGRESOS · 01/08 al 25/08",
-  },
-  {
-    site: "Villa Mitre",
-    gross: 984000,
-    net: 941000,
-    tickets: 51,
-    status: "Cerrada",
-    source: "Demostración",
-  },
-  {
-    site: "Congreso",
-    gross: 1112000,
-    net: 1067000,
-    tickets: 58,
-    status: "Cerrada",
-    source: "Demostración",
-  },
-  {
-    site: "Maure",
-    gross: 875000,
-    net: 846000,
-    tickets: 44,
-    status: "Pendiente",
-    source: "Demostración",
-  },
-  {
-    site: "Novo Pacheco",
-    gross: 702000,
-    net: 691000,
-    tickets: 37,
-    status: "Cerrada",
-    source: "Demostración",
-  },
-];
-const SOLD_COLLECTED_REFERENCE = [
-  ["enero 2026", "Vendido", 14835562, 9727642, 16083441],
-  ["enero 2026", "Cobrado", 2821740, 1608927, 4085981],
-  ["febrero 2026", "Vendido", 17249272, 10885253, 16143760],
-  ["febrero 2026", "Cobrado", 2501335, 2154695, 3501880],
-  ["marzo 2026", "Vendido", 26542586, 18635365, 22797365],
-  ["marzo 2026", "Cobrado", 3473603, 3537330, 5402925],
-  ["abril 2026", "Vendido", 27465380, 21202197, 24990033],
-  ["abril 2026", "Cobrado", 3922250, 3964220, 5594140],
-  ["mayo 2026", "Vendido", 31295097, 25493016, 28461278],
-  ["mayo 2026", "Cobrado", 4044882, 4252900, 5632102],
-  ["junio 2026", "Vendido", 33082626, 25781877, 24898427],
-  ["junio 2026", "Cobrado", 5143359, 4829290, 5706426],
-  ["julio 2026", "Vendido", 30689998, 24353422, 24578793],
-  ["julio 2026", "Cobrado", 4966885, 4285087, 5619751],
-  ["agosto 2026", "Vendido", 29206980, 24382090, 23992415],
-  ["agosto 2026", "Cobrado", 4551142, 4594701, 5526605],
-] as const;
-const PL_CONSOLIDATED_REFERENCE = [
-  { month: "Enero", revenue: 83583181, change: null },
-  { month: "Febrero", revenue: 89617087, change: 7.2 },
-  { month: "Marzo", revenue: 131273947, change: 46.5 },
-  { month: "Abril", revenue: 132570997, change: 1.0 },
-  { month: "Mayo", revenue: 145056522, change: 9.4 },
-  { month: "Junio", revenue: 156446368, change: 7.9 },
-  { month: "Julio", revenue: 154247712, change: -1.4 },
-  { month: "Agosto", revenue: 162555242, change: 5.4 },
-  { month: "Septiembre", revenue: 31624548, change: null },
-] as const;
+const ADMIN_DEMO_ROWS: Array<{ site: string; gross: number; net: number; tickets: number; status: string; source: string }> = [];
+const SOLD_COLLECTED_REFERENCE: ReadonlyArray<readonly [string, string, number, number, number]> = [];
+const PL_CONSOLIDATED_REFERENCE: ReadonlyArray<{ month: string; revenue: number; change: number | null }> = [];
 const PL_MONTHS = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre"] as const;
 type PLRow = {
   label: string;
@@ -586,80 +582,10 @@ type PLRow = {
   format?: "money" | "percent" | "times" | "days";
 };
 const PL_SECTIONS: Record<string, { title: string; rows: PLRow[] }> = {
-  ingresos: {
-    title: "Ingresos y canales de cobro",
-    rows: [
-      { label: "Facturación bruta", financial: [83583181,89617087,131273947,132570997,145056522,156446368,154247712,162555242,31624548] },
-      { label: "Franquicia", financial: [17678580,17397080,30162911,31812397,41314654,41371893,45367316,32510173,6293457] },
-      { label: "Restaurantes", financial: [14877872,13406930,18936557,16125664,10962189,11442470,22110890,19600208,2000944] },
-      { label: "Almacenes", financial: [8941183,6325035,9958035,7992902,9083108,15703183,15226462,14576616,4854424] },
-      { label: "Efectivo", financial: [8516648,8157910,11561654,13480610,13929884,15679075,14871723,17616083,3600672] },
-      { label: "Banco", financial: [19071523,23501887,33377359,36715094,35019453,32778986,21874975,30087719,24395091] },
-      { label: "Mercado Pago", financial: [9646835,12370348,15462935,17009228,16540059,16843415,22703531,34646834,31182150] },
-      { label: "Rappi", financial: [2264839,2434702,3043378,3846995,3193225,3444851,1685000,1778425,2598700], economic: [2264839,2434702,3043378,3347716,3193225,3444851,1778425,2598700,945269] },
-      { label: "Pedidos Ya", financial: [1003050,1078279,1347849,3668860,3999057,3077081,7888335,7747012,2780880] },
-      { label: "Ingresos netos", financial: [82000530,84672171,123850677,130651751,134041629,140340954,151728233,158563070,82665629], economic: [82000530,84672171,123850677,130651751,134041629,140340954,151728233,158563070,71198464] },
-      { label: "Total ingresos", financial: [83772635,86599835,131338509,142922659,143585567,150205953,157508558,181918154,108061949] },
-    ],
-  },
-  egresos: {
-    title: "Egresos fijos, variables y retiros",
-    rows: [
-      { label: "Egresos fijos", financial: [50051252,47224385,62890775,65459631,68239684,86644715,76354956,101097699,19678159], economic: [44058817,60244348,57838679,81693743,80987604,65910681,75748084,46472691,18886298] },
-      { label: "Retiros socio · Adolfo", financial: [752838,1482726,2100000,2520000,2730000,2730000,2730000,3003000,0] },
-      { label: "Retiros socio · Cata", financial: [322645,635454,920454,1080000,1170000,1170000,1170000,1287000,0] },
-      { label: "Equipamiento", financial: [775692,1237960,3264561,7275085,929300,1214443,5541492,16220550,2990497], economic: [454266,906846,3317879,8997075,565926,887112,6409783,16952998,2479833] },
-      { label: "Personal", financial: [26639104,25575610,29588720,26971407,36609065,50509713,38362678,40704388,15462949], economic: [26045010,26156767,30811960,33163165,50913525,37893490,39651052,6101013,15462949] },
-      { label: "Publicidad", financial: [768000,922000,753000,753000,1522528,428290,2274800,2356552,0] },
-      { label: "Impuestos", financial: [7784586,5197148,14659098,16873512,14337331,18089954,15971990,24004035,20933], economic: [8691443,16840008,9922427,24374120,12673769,12241449,10877227,12258910,20933] },
-      { label: "Alquileres", financial: [3546504,3936383,4019002,4074002,4074002,4171007,4562547,4562547,730000] },
-      { label: "Logística", financial: [1850094,1671353,1246645,1306638,1238252,1366273,1275522,2649058,175128], economic: [2002931,838988,1139186,1233239,1238252,1286273,1541378,2423202,175128] },
-      { label: "Servicios", financial: [7611789,6565752,6339296,4605987,5629207,6965035,4465927,6310569,298652], economic: [2243179,8525176,4854771,5499143,6099602,5103060,4595297,2466469,17455] },
-      { label: "Egresos variables", financial: [31793719,31887618,53845548,67919090,65480883,57780913,57798518,55424135,23391354], economic: [33653019,31178145,58853518,76389407,52744458,63989794,54799600,48426456,4507017] },
-      { label: "Cocina", financial: [24492395,25205928,40904544,43099298,49096755,46955222,47946644,43223985,20399801], economic: [26328282,23976943,42558432,49534057,41674657,53149357,43405069,41173640,3791909] },
-      { label: "Descartables", financial: [1403856,2951980,5172856,7647366,9999354,5555148,6015026,7495445,2601285], economic: [3881451,3240207,7284192,10115232,4829302,6024618,8371303,3117018,324839] },
-      { label: "Limpieza", financial: [213382,0,766505,372948,1154461,318662,934558,847154,0], economic: [270700,189910,600844,865031,594909,664679,1002772,478246,0] },
-      { label: "Tercerizados", financial: [95745,732915,365904,417377,765265,2241657,1901909,0,0], economic: [223929,783281,0,1267298,0,2521457,1120075,0,0] },
-      { label: "Reparaciones", financial: [1403340,946795,1139700,2912112,1108406,1304182,600381,2014639,0], economic: [343657,737805,2914012,1137800,1108406,1204182,700381,2014639,0] },
-      { label: "Total egresos", financial: [81844970,79112003,116736323,133378720,133720567,144425628,134153474,156521834,43069514], economic: [77711836,91422493,116692197,158083150,133732061,129900474,130547684,94899147,23393315] },
-    ],
-  },
-  resultados: {
-    title: "Resultados, caja y punto de equilibrio",
-    rows: [
-      { label: "Resultado económico antes de retiros", financial: [0,0,0,0,0,0,0,0,0], economic: [5364178,-2704478,-113671743,7719971,8019971,8019971,8019971,8409971,4119971] },
-      { label: "Retiros de socios", financial: [1075483,2118180,3020454,3600000,3900000,3900000,3900000,4290000,0] },
-      { label: "Resultado económico después de retiros", financial: [0,0,0,0,0,0,0,0,0], economic: [4288695,-4822658,-116692197,4119971,4119971,4119971,4119971,4119971,4119971] },
-      { label: "Flujo financiero neto", financial: [155560,5560168,4783076,-2726970,321061,-4084674,17574759,2041236,39596115] },
-      { label: "Caja inicial", financial: [1772104,1927664,7487832,12270908,9543938,9865000,5780325,23355084,25396320] },
-      { label: "Caja final teórica", financial: [1927664,7487832,12270908,9543938,9865000,5780325,23355084,25396320,64992435] },
-      { label: "Costo de mercadería vendida", financial: [0,0,0,0,0,0,0,0,0], economic: [-23943784,40208183,45665953,26901412,42896641,58181505,48364326,40428185,2957777] },
-      { label: "Margen bruto", financial: [0,0,0,0,0,0,0,0,0], economic: [105944314,44463988,78184724,103750339,91144988,82159449,103363906,118134885,68240687] },
-      { label: "Margen de contribución", financial: [0,0,0,0,0,0,0,0,0], economic: [48347511,53494025,64997159,54262344,81297171,76351160,96928633,110136614,66691447] },
-      { label: "Punto de equilibrio mensual", financial: [0,0,0,0,0,0,0,0,0], economic: [72902535,92004084,104454939,188032502,127100954,113981740,112468137,60730185,20162637] },
-      { label: "Cobertura de punto de equilibrio", financial: [0,0,0,0,0,0,0,0,0], economic: [112.5,92,118.6,69.5,105.5,123.1,134.9,261.1,353.1], format: "percent" },
-    ],
-  },
-  indicadores: {
-    title: "Rentabilidad, deuda e inventario",
-    rows: [
-      { label: "Margen bruto", financial: [0,0,0,0,0,0,0,0,0], economic: [129.2,52.5,63.1,79.4,68,58.5,68.1,74.5,95.8], format: "percent" },
-      { label: "Margen de contribución", financial: [0,0,0,0,0,0,0,0,0], economic: [59,63.2,52.5,41.5,60.7,54.4,63.9,69.5,93.7], format: "percent" },
-      { label: "Gastos fijos / facturación", financial: [0,0,0,0,0,0,0,0,0], economic: [52.4,68.6,44.3,59.8,57.5,44.2,47.4,26.6,26.5], format: "percent" },
-      { label: "Gastos variables / facturación", financial: [0,0,0,0,0,0,0,0,0], economic: [41,36.8,47.5,58.5,39.3,45.6,36.1,30.5,6.3], format: "percent" },
-      { label: "Deuda neta estimada", financial: [0,0,0,0,0,656573,0,5373767,0] },
-      { label: "Rotación mensual de inventario", financial: [0.95,0.95,1.41,0.64,0.81,1.17,1.08,0.95,0.07], format: "times" },
-      { label: "Días de inventario", financial: [31.5,31.5,21.3,47.1,37,25.7,27.8,31.7,441.4], format: "days" },
-      { label: "Compras / facturación", financial: [31.5,26.8,32.4,37.4,28.7,34,28.1,25.3,12], format: "percent" },
-      { label: "Meta compras / ventas", financial: [35,35,35,35,35,35,35,35,35], format: "percent" },
-      { label: "Desviación compras vs meta", financial: [-3.5,-8.2,-2.6,2.4,-6.3,-1,-6.9,-9.7,-23], format: "percent" },
-      { label: "Personal / facturación neta", financial: [31.8,30.9,24.9,25.4,38,27,26.1,3.8,21.7], format: "percent" },
-      { label: "Cocina / facturación neta", financial: [32.1,28.3,34.4,37.9,31.1,37.9,28.6,26,5.3], format: "percent" },
-      { label: "Alquileres / facturación neta", financial: [4.3,4.6,3.2,3.1,3,3,3,2.9,1], format: "percent" },
-      { label: "Logística / facturación neta", financial: [2.4,1,0.9,0.9,0.9,0.9,1,1.5,0.2], format: "percent" },
-      { label: "Servicios / facturación neta", financial: [2.7,10.1,3.9,4.2,4.6,3.6,3,1.6,0], format: "percent" },
-    ],
-  },
+  ingresos: { title: "Ingresos y canales de cobro", rows: [] },
+  egresos: { title: "Egresos fijos, variables y retiros", rows: [] },
+  resultados: { title: "Resultados, caja y punto de equilibrio", rows: [] },
+  rentabilidad: { title: "Rentabilidad, deuda e inventario", rows: [] },
 };
 const USERS: Record<string, User> = {
   "Stefany García": { name: "Stefany García", role: "vendedora", location: "Congreso" },
@@ -1114,11 +1040,9 @@ export default function Home() {
     [hourInterval, setHourInterval] = useState(1),
     [newUserName, setNewUserName] = useState(""),
     [newUserRole, setNewUserRole] = useState<Role>("vendedora"),
-    [newUserSite, setNewUserSite] = useState("Recoleta"),
     [newUserSites, setNewUserSites] = useState<string[]>(["Recoleta"]),
     [newUserAllLocations, setNewUserAllLocations] = useState(false),
     [newUserUsername, setNewUserUsername] = useState(""),
-    [newUserEmail, setNewUserEmail] = useState(""),
     [newUserPassword, setNewUserPassword] = useState(""),
     [newUserMfaRequired, setNewUserMfaRequired] = useState(false),
     [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([]),
@@ -1147,6 +1071,9 @@ export default function Home() {
   const [operationalVersion, setOperationalVersion] = useState(0);
   const operationalEventRef = useRef<{ action: string; detail: string } | null>(null);
   const lastPersistedSnapshot = useRef<Record<string, string>>({});
+  const serverRevision = useRef<Record<string, number>>({});
+  const persistQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingReceiptRef = useRef<Sale | null>(null);
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
   const [cashLedger, setCashLedger] = useState<CashLedgerEntry[]>([]);
@@ -1223,11 +1150,9 @@ export default function Home() {
   );
   const [stock, setStock] = useState<Record<string, Record<number, number>>>(
     Object.fromEntries(
-      SITES.map((s, n) => [
+      SITES.map((s) => [
         s,
-        Object.fromEntries(
-          PRODUCTS.map((p, i) => [p.id, 8 + ((i + n * 3) % 18)]),
-        ),
+        Object.fromEntries(PRODUCTS.map((p) => [p.id, 0])),
       ]),
     ),
   );
@@ -1251,12 +1176,7 @@ export default function Home() {
       ]),
     ),
   );
-  const [payments, setPayments] = useState<Payment[]>([
-    { method: "Efectivo", amount: 62000 },
-    { method: "Tarjeta", amount: 75500 },
-    { method: "Mercado Pago / QR", amount: 43000 },
-    { method: "Transferencia", amount: 12000 },
-  ]);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const cashFields = cashFieldsBySite[site] || EMPTY_CASH_FIELDS;
   const updateCashField = <K extends keyof CashFields>(
     field: K,
@@ -1288,8 +1208,13 @@ export default function Home() {
       setMessage("Administración debe ingresar desde admin.lartisantaller.com.");
       return false;
     }
+    setOperationalReady(false);
     setUser(next);
-    const initialSite = next.accessAllLocations ? "Recoleta" : next.locations?.[0] || next.location || "Recoleta";
+    const rememberedSite = window.localStorage.getItem(`lartisan:last-site:${next.id}`);
+    const allowedSites = next.accessAllLocations ? SITES : next.locations || [];
+    const initialSite = rememberedSite && allowedSites.includes(rememberedSite)
+      ? rememberedSite
+      : allowedSites[0] || next.location || "Recoleta";
     setSite(initialSite);
     setPayment(METHODS[initialSite][0]);
     setTab(next.role === "administracion" ? "Administración" : "Ventas");
@@ -1303,11 +1228,14 @@ export default function Home() {
       fetch(`${API_BASE}/admin/assistant-requests`, { credentials: "include" }),
     ]);
     if (usersResponse.ok) {
-      const data = await usersResponse.json();
-      setManagedUsers((data.users as ApiUser[]).map(managedUserFromApi));
+      const data = (await usersResponse.json()) as { users: ApiUser[] };
+      setManagedUsers(data.users.map(managedUserFromApi));
     }
     if (resetResponse.ok) {
-      const data = await resetResponse.json();
+      const data = (await resetResponse.json()) as { requests: Array<{
+        id: number; user_id: number; username: string; assigned_location?: string | null;
+        requested_at: string; status: "pendiente" | "resuelta";
+      }> };
       setResetRequests(
         data.requests.map(
           (request: {
@@ -1332,7 +1260,11 @@ export default function Home() {
       );
     }
     if (assistantResponse.ok) {
-      const data = await assistantResponse.json();
+      const data = (await assistantResponse.json()) as { requests?: Array<{
+        id: number; username_snapshot: string; role_snapshot: Role; site?: string | null;
+        section_name?: string | null; question: string; status: "pendiente" | "resuelta";
+        created_at: string;
+      }> };
       setAiSupportRequests(
         (data.requests || []).map(
           (request: {
@@ -1375,17 +1307,30 @@ export default function Home() {
   };
   useEffect(() => {
     let active = true;
-    fetch(`${API_BASE}/auth/me`, { credentials: "include" })
-      .then(async (response) => {
-        if (!active || !response.ok) return;
-        const data = await response.json();
-        applyAuthenticatedUser(data.user);
-      })
-      .catch(() => undefined)
-      .finally(() => active && setAuthLoading(false));
+    const restoreSession = async () => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch(`${API_BASE}/auth/me`, {
+            credentials: "include",
+            cache: "no-store",
+          });
+          if (response.status === 401) return;
+          if (!response.ok) throw new Error("No se pudo verificar la sesión");
+          const data = (await response.json()) as { user: ApiUser };
+          if (active) applyAuthenticatedUser(data.user);
+          return;
+        } catch {
+          if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 600));
+          else if (active) setMessage("No se pudo verificar tu sesión. Revisá la conexión y volvé a intentar.");
+        }
+      }
+    };
+    void restoreSession().finally(() => active && setAuthLoading(false));
     return () => {
       active = false;
     };
+  // La restauración se reinicia solo cuando cambia el portal; la función usa el estado del montaje actual.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portal]);
   useEffect(() => {
     if (user?.role !== "administracion") return;
@@ -1441,7 +1386,7 @@ export default function Home() {
     fetch(`${API_BASE}/admin/pnl/latest`, { credentials: "include", cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) return;
-        const data = await response.json();
+        const data = (await response.json()) as ApiPayload;
         if (!active) return;
         setPnlConnection({
           connected: Boolean(data.connected),
@@ -1455,7 +1400,7 @@ export default function Home() {
   const connectPnlGoogle = async () => {
     setPnlSyncMessage("");
     const response = await fetch(`${API_BASE}/admin/pnl/authorization-url`, { credentials: "include" });
-    const data = await response.json();
+    const data = (await response.json()) as ApiPayload;
     if (!response.ok || !data.authorizationUrl) {
       setPnlSyncMessage("No se pudo iniciar la autorización con Google.");
       return;
@@ -1467,10 +1412,11 @@ export default function Home() {
     setPnlSyncMessage("");
     try {
       const response = await fetch(`${API_BASE}/admin/pnl/sync`, { method: "POST", credentials: "include" });
-      const data = await response.json();
+      const data = (await response.json()) as ApiPayload;
       if (!response.ok) throw new Error(data.error || "No se pudo actualizar el P&L.");
+      if (!data.snapshot) throw new Error("Drive no devolvió una copia válida del P&L.");
       setPnlConnection({ connected: true, rows: data.snapshot.rows || [], updatedAt: data.snapshot.updatedAt || new Date().toISOString() });
-      setPnlSyncMessage(`P&L actualizado desde Drive: ${data.snapshot.rowsImported} filas verificadas.`);
+      setPnlSyncMessage(`P&L actualizado desde Drive: ${data.snapshot.rowsImported || 0} filas verificadas.`);
     } catch (error) {
       setPnlSyncMessage(error instanceof Error ? error.message : "No se pudo actualizar el P&L.");
     } finally {
@@ -1552,15 +1498,28 @@ export default function Home() {
       lastPersistedSnapshot.current = Object.fromEntries(
         entries.map(([local, entry]) => [local, JSON.stringify(entry.state)]),
       );
+      serverRevision.current = Object.fromEntries(
+        entries.map(([local, entry]) => [local, entry.revision]),
+      );
+      const configuration = entries.find(([, entry]) => entry.state.prices || entry.state.limitsBySite || entry.state.schedules)?.[1].state;
+      if (configuration?.prices) setPrices(configuration.prices);
+      if (configuration?.onlinePrices) setOnlinePrices(configuration.onlinePrices);
+      if (configuration?.limitsBySite) setLimitsBySite(configuration.limitsBySite);
+      if (configuration?.schedules) setSchedules(configuration.schedules);
+      if (configuration?.priceChanges) setPriceChanges(configuration.priceChanges);
     }
     setOperationalReady(true);
   };
   useEffect(() => {
     if (!user) return;
-    setOperationalReady(false);
-    loadOperationalData().catch(() =>
-      setMessage("No se pudieron recuperar las operaciones guardadas."),
-    );
+    const timer = window.setTimeout(() => {
+      loadOperationalData().catch(() =>
+        setMessage("No se pudieron recuperar las operaciones guardadas."),
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  // Cargar nuevamente solo cuando cambia la identidad autenticada.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
   const operationalSnapshot = (local: string): OperationalSnapshot => {
     const localSales = sales.filter((item) => item.site === local);
@@ -1583,47 +1542,70 @@ export default function Home() {
       stockMovements: filterBySite(stockMovements),
       expensesLog: filterBySite(expensesLog),
       returnsLog: filterBySite(returnsLog),
-      cashTransfers: cashTransfers.filter((item) => item.originSite === local),
+      cashTransfers: cashTransfers.filter(
+        (item) => item.originSite === local || item.destination === local,
+      ),
       attendanceRecords: filterBySite(attendanceRecords),
       incidents: filterBySite(incidents),
       stockAdjustments: filterBySite(stockAdjustments),
       audit: filterBySite(audit),
       cash: cashFieldsBySite[local] || EMPTY_CASH_FIELDS,
       cashOpen: Boolean(cashOpenBySite[local]),
+      prices,
+      onlinePrices,
+      limitsBySite,
+      schedules,
+      priceChanges,
     };
   };
   useEffect(() => {
     if (!user || !operationalReady || operationalVersion === 0) return;
-    const snapshot = operationalSnapshot(site);
-    const serialized = JSON.stringify(snapshot);
-    if (lastPersistedSnapshot.current[site] === serialized) return;
     const event = operationalEventRef.current || {
       action: "Actualización operativa",
       detail: "Cambios registrados en el sistema.",
     };
-    const timer = window.setTimeout(() => {
-      fetch(`${API_BASE}/operations/states/${encodeURIComponent(site)}`, {
-        method: "PUT",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          state: snapshot,
-          eventType: "operacion_registrada",
-          event: { ...event, recordedAt: new Date().toISOString() },
-        }),
-      })
-        .then(async (response) => {
-          if (!response.ok) throw new Error("No se pudo guardar");
-          lastPersistedSnapshot.current[site] = serialized;
-          setSyncStatus("Operación guardada en la base de datos.");
-        })
-        .catch(() =>
-          setMessage(
-            "No se pudo guardar esta operación. Verificá la conexión antes de continuar.",
-          ),
-        );
-    }, 350);
-    return () => window.clearTimeout(timer);
+    const persistenceSites = user.accessAllLocations ? SITES : user.locations || [site];
+    persistenceSites.forEach((local) => {
+      const snapshot = operationalSnapshot(local);
+      const serialized = JSON.stringify(snapshot);
+      if (lastPersistedSnapshot.current[local] === serialized) return;
+      persistQueue.current = persistQueue.current.then(async () => {
+        const response = await fetch(`${API_BASE}/operations/states/${encodeURIComponent(local)}`, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          keepalive: true,
+          body: JSON.stringify({
+            state: snapshot,
+            baseRevision: serverRevision.current[local] || 0,
+            eventType: "operacion_registrada",
+            event: { ...event, recordedAt: new Date().toISOString() },
+          }),
+        });
+        if (response.status === 409) {
+          setOperationalReady(false);
+          setMessage(`Otro equipo actualizó ${local}. Volvé a ingresar antes de continuar para evitar pérdidas.`);
+          throw new Error("Conflicto de versión");
+        }
+        if (!response.ok) throw new Error("No se pudo guardar");
+        const data = (await response.json()) as { revision?: number };
+        if (typeof data.revision === "number") serverRevision.current[local] = data.revision;
+        lastPersistedSnapshot.current[local] = serialized;
+        const pendingReceipt = pendingReceiptRef.current;
+        if (pendingReceipt && pendingReceipt.site === local && snapshot.sales?.some((sale) => sale.id === pendingReceipt.id)) {
+          pendingReceiptRef.current = null;
+          setReceiptSale(pendingReceipt);
+          setMessage(`Venta confirmada y guardada: ${money.format(pendingReceipt.net)}. Ya podés imprimir el ticket.`);
+        }
+        if (pendingSync > 0) setPendingSync(0);
+        setSyncStatus("Operación guardada en la base de datos.");
+      }).catch(() => {
+        setPendingSync((value) => Math.max(1, value));
+        setMessage("La operación quedó pendiente. No recargues ni repitas el cobro; verificá la conexión.");
+      });
+    });
+  // La lista explícita evita guardar por cambios visuales ajenos a la operación.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     operationalVersion,
     operationalReady,
@@ -1651,7 +1633,15 @@ export default function Home() {
     audit,
     cashFieldsBySite,
     cashOpenBySite,
+    prices,
+    onlinePrices,
+    limitsBySite,
+    schedules,
+    priceChanges,
   ]);
+  useEffect(() => {
+    if (user) window.localStorage.setItem(`lartisan:last-site:${user.id}`, site);
+  }, [site, user]);
   const methods = METHODS[site],
     cats = ["Todos", ...Array.from(new Set(PRODUCTS.map((p) => p.category)))],
     [cat, setCat] = useState("Todos");
@@ -1686,16 +1676,30 @@ export default function Home() {
   const discountAmount = Math.round((discountableTotal * discount) / 100);
   const net = discountableTotal - discountAmount;
   const splitPaymentTotal = splitPayments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const activeShift = activeShiftBySite[site];
   const totals = methods.map((method) => ({
     method,
     amount: payments
-      .filter((p) => p.method === method)
+      .filter((p) =>
+        p.method === method &&
+        (p.site
+          ? p.site === site
+          : Boolean(
+              p.saleId &&
+                sales.some((sale) =>
+                  sale.id === p.saleId &&
+                  sale.site === site &&
+                  sale.status === "activa" &&
+                  (!activeShift?.openedAtISO || Date.parse(sale.createdAtISO) >= Date.parse(activeShift.openedAtISO)),
+                ),
+            )) &&
+        (!activeShift || !p.shiftId || p.shiftId === activeShift.id),
+      )
       .reduce((a, p) => a + p.amount, 0),
   }));
   const requiresEnvelope = site !== "Novo Pacheco";
   const cashIsOpen = Boolean(cashOpenBySite[site]);
   const siteLimits = limitsBySite[site];
-  const activeShift = activeShiftBySite[site];
   const currentCashLedger = cashLedger.filter(
     (entry) => entry.site === site && entry.shiftId === activeShift?.id,
   );
@@ -1819,9 +1823,22 @@ export default function Home() {
   const selectedRequest = stockRequests.find(
     (request) => request.id === selectedRequestId,
   );
-  const adminRows = ADMIN_DEMO_ROWS.filter(
-    (row) => reportSite === "Todos los locales" || row.site === reportSite,
-  );
+  const adminRows = SITES
+    .filter((local) => reportSite === "Todos los locales" || local === reportSite)
+    .map((local) => {
+      const matching = sales.filter((sale) => {
+        const day = sale.createdAtISO?.slice(0, 10);
+        return sale.site === local && sale.status === "activa" && day >= reportFrom && day <= reportTo;
+      });
+      return {
+        site: local,
+        gross: matching.reduce((sum, sale) => sum + sale.gross, 0),
+        net: matching.reduce((sum, sale) => sum + sale.net, 0),
+        tickets: matching.length,
+        status: cashOpenBySite[local] ? "Abierta" : "Cerrada",
+        source: "Operaciones guardadas",
+      };
+    });
   const adminTotals = adminRows.reduce(
     (total, row) => ({
       gross: total.gross + row.gross,
@@ -1830,7 +1847,7 @@ export default function Home() {
     }),
     { gross: 0, net: 0, tickets: 0 },
   );
-  const hasDemoData = adminRows.some((row) => row.source === "Demostración");
+  const hasDemoData = false;
   const operationalAlerts = [
     ...SITES.filter((local) => cashOpenBySite[local]).map((local) => ({
       label: `Caja abierta en ${local}`,
@@ -1909,11 +1926,7 @@ export default function Home() {
     );
     return intervals;
   }, [hourInterval, reportFrom, reportSite, reportTo, sales]);
-  const expected =
-      fund +
-      (totals.find((x) => x.method === "Efectivo")?.amount || 0) -
-      expenses -
-      withdrawals,
+  const expected = ledgerCashBalance - expenses - withdrawals,
     cashRemaining = counted - (requiresEnvelope ? envelope : 0),
     cashVariance = counted - expected;
   const logout = async () => {
@@ -1943,7 +1956,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currentPassword, newPassword }),
     });
-    const data = await response.json();
+    const data = (await response.json()) as ApiPayload;
     if (!response.ok) {
       setMessage(data.error || "No se pudo cambiar la contraseña.");
       return;
@@ -1968,7 +1981,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: login.trim(), password }),
       });
-      const data = await response.json();
+      const data = (await response.json()) as ApiPayload;
       if (!response.ok) {
         setMessage(data.error || "No se pudo iniciar sesión.");
         return;
@@ -2014,13 +2027,17 @@ export default function Home() {
         username: cleanUsername,
         fullName: cleanName,
         role: newUserRole,
-        assignedLocation: newUserAllLocations ? null : newUserSites[0] || newUserSite,
+        assignedLocation: newUserAllLocations ? null : newUserSites[0] || "Recoleta",
         assignedLocations: newUserAllLocations ? SITES : newUserSites,
         accessAllLocations: newUserAllLocations,
         temporaryPassword: newUserPassword,
+        mfaRequired: newUserMfaRequired,
+        reportPermissions:
+          newUserRole === "administracion" ? ADMIN_REPORTS.map((report) => report.id) : [],
+        actionPermissions: defaultActionPermissions(newUserRole),
       }),
     });
-    const data = await response.json();
+    const data = (await response.json()) as ApiPayload;
     if (!response.ok) {
       setMessage(data.error || "No se pudo crear el usuario.");
       return;
@@ -2033,7 +2050,6 @@ export default function Home() {
     });
     setNewUserName("");
     setNewUserUsername("");
-    setNewUserEmail("");
     setNewUserPassword("");
     setNewUserSites(["Recoleta"]);
     setNewUserAllLocations(false);
@@ -2056,10 +2072,13 @@ export default function Home() {
         assignedLocations: changes.locations,
         accessAllLocations: changes.accessAllLocations,
         active: changes.active,
+        mfaRequired: changes.mfaRequired,
+        reportPermissions: changes.reportPermissions,
+        actionPermissions: changes.actionPermissions,
       }),
     });
     if (!response.ok) {
-      const data = await response.json();
+      const data = (await response.json()) as ApiPayload;
       setMessage(data.error || "No se pudo guardar el cambio del usuario.");
       await loadAdminSecurityData();
     }
@@ -2073,7 +2092,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: login.trim() }),
       });
-      const data = await response.json();
+      const data = (await response.json()) as ApiPayload;
       if (!response.ok) {
         setMessage(data.error || "No se pudo iniciar la recuperación.");
         return;
@@ -2112,7 +2131,7 @@ export default function Home() {
           newPassword: recoveryPassword,
         }),
       });
-      const data = await response.json();
+      const data = (await response.json()) as ApiPayload;
       if (!response.ok) {
         setMessage(data.error || "No se pudo actualizar la contraseña.");
         return;
@@ -2140,7 +2159,7 @@ export default function Home() {
         temporaryPassword,
       }),
     });
-    const data = await response.json();
+    const data = (await response.json()) as ApiPayload;
     if (!response.ok) {
       setMessage(data.error || "No se pudo generar la contraseña temporal.");
       return;
@@ -2171,14 +2190,14 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
         },
       );
-      const data = await response.json();
+      const data = (await response.json()) as ApiPayload;
       if (!response.ok) {
         setMessage(data.error || "No se pudo restablecer la contraseña.");
         return;
       }
       setGeneratedTemporaryPassword({
         username: data.username || profile.username,
-        password: data.temporaryPassword,
+        password: data.temporaryPassword || "",
       });
       await loadAdminSecurityData();
       setMessage(`La contraseña temporal de ${profile.name} quedó lista para copiar.`);
@@ -2258,6 +2277,7 @@ export default function Home() {
     setOperationalVersion((version) => version + 1);
   };
   const submitStockRequest = () => {
+    if (!user) return;
     if (managesCentralOrders)
       return setMessage(
         "Central no realiza pedidos: revisá las solicitudes recibidas en Central de pedidos.",
@@ -2361,6 +2381,7 @@ export default function Home() {
     );
   };
   const confirmRequestReception = (request: StockRequest) => {
+    if (!user) return;
     if (
       request.status !== "Despachado" &&
       request.status !== "Despachado parcial"
@@ -2405,6 +2426,7 @@ export default function Home() {
     setMessage("Recepción confirmada: se actualizó el stock y quedó registrado el ingreso de mercadería.");
   };
   const submitExpense = () => {
+    if (!user) return;
     if (expenseAmount <= 0 || !expenseDetail.trim())
       return setMessage("Completá importe y detalle del egreso.");
     if (expenseAmount > siteLimits.maxExpense)
@@ -2432,6 +2454,7 @@ export default function Home() {
     setMessage("Egreso registrado para control administrativo.");
   };
   const submitIncident = () => {
+    if (!user) return;
     if (!incidentDetail.trim()) return setMessage("Describí la incidencia.");
     const incident: Incident = {
       id: crypto.randomUUID(),
@@ -2448,6 +2471,7 @@ export default function Home() {
     setMessage("Incidencia enviada a Administración.");
   };
   const submitStockAdjustment = () => {
+    if (!user) return;
     if (!can("stock"))
       return setMessage("Tu usuario no tiene permiso para ajustar stock.");
     const countedValue = realStock[site][adjustProductId];
@@ -2506,7 +2530,7 @@ export default function Home() {
     );
   };
   const exportAdminReport = () => {
-    const sheet = XLSX.utils.aoa_to_sheet([
+    downloadCsv(`Informe_${adminReport}_${reportFrom}_${reportTo}.csv`, [
       ["L'ARTISAN · INFORME ADMINISTRATIVO"],
       [
         "Reporte",
@@ -2525,20 +2549,6 @@ export default function Home() {
         row.status,
       ]),
     ]);
-    sheet["!merges"] = [XLSX.utils.decode_range("A1:E1")];
-    sheet["!cols"] = [
-      { wch: 24 },
-      { wch: 18 },
-      { wch: 12 },
-      { wch: 18 },
-      { wch: 18 },
-    ];
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, "Informe");
-    XLSX.writeFile(
-      workbook,
-      `Informe_${adminReport}_${reportFrom}_${reportTo}.xlsx`,
-    );
   };
   const saveOrder = () => {
     if (!cart.length)
@@ -2576,6 +2586,7 @@ export default function Home() {
     setMessage("Comanda recuperada para continuar el cobro.");
   };
   const registerCashAdjustment = () => {
+    if (!user) return;
     if (cashAdjustmentAmount <= 0 || !cashAdjustmentDetail.trim())
       return setMessage("Completá importe y motivo del movimiento de caja.");
     const adjustment: CashAdjustment = {
@@ -2607,14 +2618,20 @@ export default function Home() {
     setMessage("Movimiento de caja registrado.");
   };
   const registerStockMovement = () => {
+    if (!user) return;
     if (movementQuantity <= 0 || !movementDetail.trim())
       return setMessage("Completá cantidad y detalle del movimiento de stock.");
+    const isEntry = ["Ingreso por remito", "Recepción de pedido", "Ingreso manual"].includes(movementKind);
+    const available = stock[site]?.[movementProductId] || 0;
+    if (!isEntry && movementQuantity > available)
+      return setMessage(`No se puede retirar ${movementQuantity}: solo hay ${available} unidades disponibles.`);
+    const signedQuantity = isEntry ? movementQuantity : -movementQuantity;
     const movement: StockMovement = {
       id: crypto.randomUUID(),
       site,
       productId: movementProductId,
       kind: movementKind,
-      quantity: movementQuantity,
+      quantity: signedQuantity,
       remito: movementRemito.trim(),
       detail: movementDetail.trim(),
       at: new Date().toLocaleString("es-AR"),
@@ -2627,10 +2644,7 @@ export default function Home() {
         ...items[site],
         [movementProductId]: Math.max(
           0,
-          items[site][movementProductId] +
-            (["Ingreso por remito", "Recepción de pedido", "Ingreso manual"].includes(movementKind)
-              ? movementQuantity
-              : -movementQuantity),
+          items[site][movementProductId] + signedQuantity,
         ),
       },
     }));
@@ -2672,7 +2686,7 @@ export default function Home() {
     );
     setOscarWithdrawal(0);
   };
-  const exportRequestExcel = (request: StockRequest) => {
+  const exportRequestCsv = (request: StockRequest) => {
     const rows = request.lines.map((line) => {
       const product = PRODUCTS.find((item) => item.id === line.productId);
       return [
@@ -2682,7 +2696,7 @@ export default function Home() {
         line.quantity,
       ];
     });
-    const worksheet = XLSX.utils.aoa_to_sheet([
+    downloadCsv(`Pedido_${request.site.replaceAll(" ", "_")}_${request.id.slice(0, 8)}.csv`, [
       ["L'ARTISAN · SOLICITUD DE MERCADERÍA"],
       ["Local", request.site, "Estado", request.status],
       ["Solicitó", request.requestedBy, "Fecha", request.requestedAt],
@@ -2691,38 +2705,44 @@ export default function Home() {
       ["Categoría", "Producto", "Presentación", "Cantidad"],
       ...rows,
     ]);
-    worksheet["!merges"] = [XLSX.utils.decode_range("A1:D1")];
-    worksheet["!cols"] = [{ wch: 18 }, { wch: 32 }, { wch: 26 }, { wch: 12 }];
-    ["A1", "A6", "B6", "C6", "D6"].forEach((cell) => {
-      if (worksheet[cell])
-        worksheet[cell].s = {
-          fill: { fgColor: { rgb: "183A67" } },
-          font: { bold: true, color: { rgb: "FFFFFF" } },
-          alignment: { horizontal: "center" },
-        };
-    });
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Pedido");
-    XLSX.writeFile(
-      workbook,
-      `Pedido_${request.site.replaceAll(" ", "_")}_${request.id.slice(0, 8)}.xlsx`,
-    );
   };
   const pay = () => {
     if (!can("cobrar"))
       return setMessage("Tu usuario no tiene permiso para cobrar ventas.");
+    if (!operationalReady)
+      return setMessage("Esperá a que termine la carga de datos antes de cobrar.");
     if (!cashIsOpen)
       return setMessage("Primero tenés que abrir la caja de este local.");
     if (!cart.length) return setMessage("Agregá productos a la venta.");
-    const currentPayments = splitPayment
+    const rawPayments = splitPayment
       ? splitPayments.filter((item) => item.amount > 0)
       : [{ method: payment, amount: net }];
+    const currentPayments = Object.values(
+      rawPayments.reduce<Record<string, Payment>>((grouped, item) => {
+        grouped[item.method] = {
+          method: item.method,
+          amount: (grouped[item.method]?.amount || 0) + item.amount,
+        };
+        return grouped;
+      }, {}),
+    );
     if (!currentPayments.length || Math.round(currentPayments.reduce((sum, item) => sum + item.amount, 0)) !== net)
       return setMessage("El total de los medios de pago debe coincidir con el total de la venta.");
     if (discount > siteLimits.maxDiscount)
       return setMessage(
         `El descuento supera el máximo autorizado de ${siteLimits.maxDiscount}% para ${site}.`,
       );
+    const quantities = cart.reduce<Record<number, number>>((result, product) => {
+      result[product.id] = (result[product.id] || 0) + 1;
+      return result;
+    }, {});
+    const unavailable = Object.entries(quantities).find(
+      ([productId, quantity]) => (stock[site]?.[Number(productId)] || 0) < quantity,
+    );
+    if (unavailable) {
+      const product = PRODUCTS.find((item) => item.id === Number(unavailable[0]));
+      return setMessage(`No hay stock suficiente de ${product?.name || "ese producto"}. Actualizá la venta.`);
+    }
     const sale: Sale = {
       id: crypto.randomUUID(),
       site,
@@ -2742,10 +2762,17 @@ export default function Home() {
     };
     setPayments((x) => [
       ...x,
-      ...currentPayments.map((item) => ({ ...item, saleId: sale.id })),
+      ...currentPayments.map((item) => ({
+        ...item,
+        saleId: sale.id,
+        site,
+        shiftId: activeShift?.id,
+        createdAtISO: sale.createdAtISO,
+      })),
     ]);
     setSales((x) => [sale, ...x]);
-    setReceiptSale(sale);
+    pendingReceiptRef.current = sale;
+    setReceiptSale(null);
     currentPayments.forEach((item) =>
       appendCashLedgerEntry({
         kind: invitation ? "Invitación" : "Venta",
@@ -2757,16 +2784,12 @@ export default function Home() {
         detail: `${invoiceType} · ${customer}`,
       }),
     );
-    if (connectionMode === "Contingencia") setPendingSync((value) => value + 1);
+    setPendingSync((value) => value + 1);
     setStock((x) => {
       const a = { ...x[site] };
-      cart.forEach((p) => (a[p.id] = Math.max(0, a[p.id] - 1)));
+      cart.forEach((p) => (a[p.id] -= 1));
       return { ...x, [site]: a };
     });
-    const quantities = cart.reduce<Record<number, number>>((result, product) => {
-      result[product.id] = (result[product.id] || 0) + 1;
-      return result;
-    }, {});
     Object.entries(quantities).forEach(([productId, quantity]) =>
       recordStockMovement({
         productId: Number(productId),
@@ -2778,7 +2801,7 @@ export default function Home() {
       }),
     );
     setMessage(
-      `${invitation ? "Invitación registrada" : "Venta registrada"}: ${money.format(net)} · ${invoiceType} · ${splitPayment ? "cobro múltiple" : payment}.`,
+      `${invitation ? "Invitación" : "Venta"} pendiente de confirmación: ${money.format(net)}. No recargues hasta ver “Operación guardada”.`,
     );
     recordAudit(
       "Venta registrada",
@@ -2804,31 +2827,57 @@ export default function Home() {
       return setMessage("Tu usuario no tiene permiso para anular ventas.");
     if (sale.status === "anulada") return;
     const salePayments = payments.filter((item) => item.saleId === sale.id);
+    const priorReturns = returnsLog.filter((item) => item.saleId === sale.id);
+    let alreadyRefunded = priorReturns
+      .filter((item) => item.kind === "Devolución")
+      .reduce((sum, item) => sum + item.amount, 0);
     setSales((items) =>
       items.map((x) => (x.id === sale.id ? { ...x, status: "anulada" } : x)),
     );
     setPayments((items) => items.filter((x) => x.saleId !== sale.id));
-    salePayments.forEach((item) =>
+    salePayments.forEach((item) => {
+      const amount = Math.max(0, item.amount - Math.min(item.amount, alreadyRefunded));
+      alreadyRefunded = Math.max(0, alreadyRefunded - item.amount);
+      if (amount <= 0) return;
       appendCashLedgerEntry({
         kind: "Anulación de venta",
         direction: item.method === "Efectivo" ? "Egreso" : "Informativo",
-        amount: item.amount,
-        cashImpact: item.method === "Efectivo" ? -item.amount : 0,
+        amount,
+        cashImpact: item.method === "Efectivo" ? -amount : 0,
         paymentMethod: item.method,
         reference: sale.id,
         detail: "Reversión de cobro por venta anulada",
-      }),
-    );
+      });
+    });
+    const returnedAndRestocked = priorReturns
+      .filter((item) => item.restock)
+      .flatMap((item) => item.lines)
+      .reduce<Record<number, number>>((result, line) => {
+        result[line.productId] = (result[line.productId] || 0) + line.quantity;
+        return result;
+      }, {});
     setStock((x) => {
       const next = { ...x[site] };
-      sale.items.forEach((p) => (next[p.id] += 1));
+      const restored: Record<number, number> = {};
+      sale.items.forEach((p) => {
+        const used = restored[p.id] || 0;
+        if (used < (returnedAndRestocked[p.id] || 0)) restored[p.id] = used + 1;
+        else next[p.id] = (next[p.id] || 0) + 1;
+      });
       return { ...x, [site]: next };
     });
     const quantities = sale.items.reduce<Record<number, number>>((result, product) => {
       result[product.id] = (result[product.id] || 0) + 1;
       return result;
     }, {});
+    Object.keys(quantities).forEach((productId) => {
+      quantities[Number(productId)] = Math.max(
+        0,
+        quantities[Number(productId)] - (returnedAndRestocked[Number(productId)] || 0),
+      );
+    });
     Object.entries(quantities).forEach(([productId, quantity]) =>
+      quantity > 0 &&
       recordStockMovement({
         productId: Number(productId),
         kind: "Anulación",
@@ -2847,10 +2896,11 @@ export default function Home() {
     );
   };
   const registerReturn = () => {
+    if (!user) return;
     if (!can("anular"))
       return setMessage("Tu usuario no tiene permiso para registrar devoluciones o cambios.");
     const sale = sales.find((item) => item.id === returnSaleId && item.site === site);
-    if (!sale) return setMessage("Elegí una venta activa del local.");
+    if (!sale || sale.status !== "activa") return setMessage("Elegí una venta activa del local.");
     if (!returnReason.trim()) return setMessage("Indicá el motivo de la devolución o cambio.");
     const soldQuantities = sale.items.reduce<Record<number, number>>((result, product) => {
       result[product.id] = (result[product.id] || 0) + 1;
@@ -2870,12 +2920,23 @@ export default function Home() {
     if (!selectedLines.length) return setMessage("Seleccioná al menos un producto y cantidad para devolver o cambiar.");
     if (selectedLines.some((line) => line.quantity > (soldQuantities[line.productId] || 0) - (alreadyReturned[line.productId] || 0)))
       return setMessage("Una de las cantidades supera lo que queda disponible de la venta.");
-    const originalGross = sale.items.reduce((total, product) => total + product.price, 0);
-    const selectedGross = selectedLines.reduce((total, line) => {
+    const invitedByProduct = sale.invitedQuantities || {};
+    const paidGross = sale.items.reduce((total, product) => total + product.price, 0) -
+      Object.entries(invitedByProduct).reduce((total, [productId, quantity]) => {
+        const product = sale.items.find((item) => item.id === Number(productId));
+        return total + (product?.price || 0) * quantity;
+      }, 0);
+    const selectedPaidGross = selectedLines.reduce((total, line) => {
       const product = sale.items.find((item) => item.id === line.productId);
-      return total + (product?.price || 0) * line.quantity;
+      const invitedAlreadyReturned = Math.min(
+        invitedByProduct[line.productId] || 0,
+        alreadyReturned[line.productId] || 0,
+      );
+      const invitedRemaining = Math.max(0, (invitedByProduct[line.productId] || 0) - invitedAlreadyReturned);
+      const paidQuantity = Math.max(0, line.quantity - invitedRemaining);
+      return total + (product?.price || 0) * paidQuantity;
     }, 0);
-    const amount = Math.round(sale.net * (selectedGross / Math.max(originalGross, 1)));
+    const amount = Math.round(sale.net * (selectedPaidGross / Math.max(paidGross, 1)));
     const transaction: ReturnTransaction = {
       id: crypto.randomUUID(),
       saleId: sale.id,
@@ -2934,14 +2995,35 @@ export default function Home() {
     );
   };
   const changeSalePayment = (sale: Sale, method: string) => {
+    const originalPayments = payments.filter((item) => item.saleId === sale.id);
+    const previousCash = originalPayments
+      .filter((item) => item.method === "Efectivo")
+      .reduce((sum, item) => sum + item.amount, 0);
     setSales((items) =>
       items.map((item) => (item.id === sale.id ? { ...item, method } : item)),
     );
-    setPayments((items) =>
-      items.map((item) =>
-        item.saleId === sale.id ? { ...item, method } : item,
-      ),
-    );
+    setPayments((items) => [
+      ...items.filter((item) => item.saleId !== sale.id),
+      {
+        method,
+        amount: originalPayments.reduce((sum, item) => sum + item.amount, 0),
+        saleId: sale.id,
+        site: sale.site,
+        shiftId: activeShift?.id,
+        createdAtISO: new Date().toISOString(),
+      },
+    ]);
+    const nextCash = method === "Efectivo" ? sale.net : 0;
+    if (nextCash !== previousCash)
+      appendCashLedgerEntry({
+        kind: "Corrección de cobro",
+        direction: nextCash > previousCash ? "Ingreso" : "Egreso",
+        amount: Math.abs(nextCash - previousCash),
+        cashImpact: nextCash - previousCash,
+        paymentMethod: method,
+        reference: sale.id,
+        detail: `${sale.method} a ${method}`,
+      });
     recordAudit(
       "Forma de cobro modificada",
       `${sale.id.slice(0, 8)} · ${sale.method} a ${method}`,
@@ -2962,6 +3044,7 @@ export default function Home() {
     );
   };
   const confirmClose = () => {
+    if (!user) return;
     if (!cashIsOpen) return setMessage("No hay una caja abierta para cerrar.");
     const openOrders = savedOrders.filter((order) => order.site === site);
     if (openOrders.length)
@@ -3045,11 +3128,15 @@ export default function Home() {
     );
   };
   const openCash = () => {
-    if (cashIsOpen) return setMessage("La caja ya se encuentra abierta.");
+    if (!user) return;
+    if (cashIsOpen && activeShift)
+      return setMessage("La caja y el turno ya se encuentran abiertos.");
+    const now = new Date();
     const shift: CashShift = {
       id: crypto.randomUUID(),
       site,
-      openedAt: new Date().toLocaleString("es-AR"),
+      openedAt: now.toLocaleString("es-AR"),
+      openedAtISO: now.toISOString(),
       openedBy: user.name,
       initialFund: fund,
     };
@@ -3067,7 +3154,7 @@ export default function Home() {
         cashImpact: fund,
         detail: "Fondo inicial declarado",
         at: shift.openedAt,
-        atISO: new Date().toISOString(),
+        atISO: now.toISOString(),
         createdBy: user.name,
       },
       ...items,
@@ -3077,6 +3164,7 @@ export default function Home() {
     setMessage(`Caja abierta para ${site}. Ya se pueden registrar cobros.`);
   };
   const closeShift = () => {
+    if (!user) return;
     if (!cashIsOpen || !activeShift)
       return setMessage("Primero debe existir una caja y turno abiertos.");
     const closedShift = {
@@ -3095,6 +3183,7 @@ export default function Home() {
     setMessage("Turno cerrado y auditado. La caja permanece abierta para el siguiente turno.");
   };
   const markAttendance = (kind: AttendanceRecord["kind"]) => {
+    if (!user) return;
     const today = new Date().toLocaleDateString("en-CA");
     const todayRecords = attendanceRecords.filter((item) => item.userName === user.name && item.site === site && item.atISO.slice(0, 10) === today);
     const last = todayRecords[0];
@@ -3110,6 +3199,7 @@ export default function Home() {
     setClock(`${kind} registrada a las ${now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
   };
   const createCashTransfer = () => {
+    if (!user) return;
     if (!can("transferirCaja")) return setMessage("Tu usuario no tiene permiso para transferir efectivo.");
     if (!cashIsOpen) return setMessage("Abrí la caja antes de transferir efectivo.");
     if (transferDestination === site) return setMessage("Elegí un destino distinto al local de origen.");
@@ -3123,6 +3213,7 @@ export default function Home() {
     setMessage(`Transferencia creada. ${transfer.destination} deberá confirmar la recepción.`);
   };
   const receiveCashTransfer = (transfer: CashTransfer) => {
+    if (!user) return;
     const canReceive = user.role === "administracion" || managesCentralOrders || transfer.destination === site;
     if (!canReceive) return setMessage("Solo el destino o Central puede confirmar esta transferencia.");
     if (transfer.status !== "Pendiente de recepción") return;
@@ -3136,9 +3227,8 @@ export default function Home() {
     if (connectionMode === "Contingencia")
       return setMessage("Volvé a modo En línea antes de sincronizar.");
     if (!pendingSync) return setMessage("No hay operaciones pendientes de sincronización.");
-    recordAudit("Operaciones sincronizadas", `${pendingSync} operación(es) de contingencia.`);
-    setPendingSync(0);
-    setMessage("Operaciones de contingencia marcadas para sincronización segura.");
+    recordAudit("Sincronización solicitada", `${pendingSync} operación(es) pendientes.`);
+    setMessage("Sincronizando operaciones pendientes. Esperá la confirmación antes de recargar.");
   };
   if (authLoading && !user)
     return (
@@ -3153,7 +3243,7 @@ export default function Home() {
       <main className="grid min-h-screen place-items-center bg-[#f7f3eb] p-5 text-[#183a67]">
         <section className="w-full max-w-md rounded-2xl border border-[#d9d4c9] bg-[#fffdf8] p-7 shadow-lg">
           <p className="font-serif text-3xl font-bold tracking-[.15em]">
-            L'ARTISAN
+            L&apos;ARTISAN
           </p>
           <p className="mt-2 text-sm font-bold text-[#ec3a35]">
             {portal === "admin"
@@ -3359,7 +3449,7 @@ export default function Home() {
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
       <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b bg-[#fffdf8] px-4 py-3 sm:px-5">
         <b className="font-serif text-xl tracking-[.15em] sm:text-2xl" aria-label="L'ARTISAN sistema interno">
-          L'ARTISAN
+          L&apos;ARTISAN
         </b>
         <div className="flex items-center gap-3 text-sm sm:text-right">
           <span className={`rounded-full px-2 py-1 text-xs font-bold ${connectionMode === "En línea" ? "bg-[#eef5ef] text-green-800" : "bg-[#fff5d8] text-[#9c302a]"}`} title={connectionMode === "En línea" ? "Las operaciones se guardan en el sistema" : "Las operaciones quedan pendientes hasta recuperar conexión"}>
@@ -4047,8 +4137,10 @@ export default function Home() {
                   </label>
                   <input
                     type="number"
+                    min="0"
                     value={fund}
                     onChange={(e) => setFund(Number(e.target.value))}
+                    disabled={Boolean(activeShift)}
                     className="mt-1 w-full rounded border p-2"
                   />
                   {!cashIsOpen && (
@@ -4057,6 +4149,14 @@ export default function Home() {
                       className="mt-3 w-full rounded bg-[#183a67] py-3 font-bold text-white"
                     >
                       Abrir caja
+                    </button>
+                  )}
+                  {cashIsOpen && !activeShift && (
+                    <button
+                      onClick={openCash}
+                      className="mt-3 w-full rounded bg-[#183a67] py-3 font-bold text-white"
+                    >
+                      Abrir nuevo turno
                     </button>
                   )}
                   {cashIsOpen && activeShift && (
@@ -4869,10 +4969,10 @@ export default function Home() {
                       </button>
                       <div className="no-print mt-4 grid gap-2 sm:grid-cols-2">
                         <button
-                          onClick={() => exportRequestExcel(selectedRequest)}
+                          onClick={() => exportRequestCsv(selectedRequest)}
                           className="rounded bg-[#183a67] px-3 py-3 text-sm font-bold text-white"
                         >
-                          Descargar Excel
+                          Descargar CSV
                         </button>
                         <button
                           onClick={() => window.print()}
@@ -6598,7 +6698,7 @@ export default function Home() {
                     disabled={!can("exportar")}
                     className="rounded border px-3 py-2 text-sm font-bold disabled:opacity-40"
                   >
-                    Exportar informe Excel
+                    Exportar informe CSV
                   </button>
                   <button
                     onClick={() => window.print()}
@@ -6836,23 +6936,13 @@ export default function Home() {
                         </div>
                       </div>
                       {pnlSyncMessage && <p className={`mt-3 rounded p-3 text-sm ${pnlSyncMessage.startsWith("P&L actualizado") ? "bg-[#eef5ef] text-green-800" : "bg-[#fff1ec] text-red-800"}`}>{pnlSyncMessage}</p>}
-                      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                        <div className="rounded bg-[#183a67] p-4 text-white">
-                          <p className="text-sm">Facturación bruta · Junio</p>
-                          <b className="mt-2 block text-2xl">{money.format(156446368)}</b>
-                        </div>
-                        <div className="rounded bg-[#eef5ef] p-4">
-                          <p className="text-sm">Caja real de cierre</p>
-                          <b className="mt-2 block text-2xl">{money.format(9865000)}</b>
-                        </div>
-                        <div className="rounded bg-[#fff5d8] p-4">
-                          <p className="text-sm">Deuda al cierre</p>
-                          <b className="mt-2 block text-2xl">{money.format(96742833)}</b>
-                        </div>
-                        <div className="rounded bg-[#eef2f6] p-4">
-                          <p className="text-sm">Stock valorizado</p>
-                          <b className="mt-2 block text-2xl">{money.format(41057572)}</b>
-                        </div>
+                      <div className="mt-4 rounded border border-[#b9d8c0] bg-[#eef5ef] p-4">
+                        <b>Datos financieros protegidos</b>
+                        <p className="mt-1 text-sm text-slate-600">
+                          {pnlConnection.connected
+                            ? `Última copia autenticada: ${pnlConnection.rows.length} filas. Consultá el detalle recibido desde Drive más abajo.`
+                            : "Conectá Drive para consultar el P&L. Ningún importe queda incluido en la página pública."}
+                        </p>
                       </div>
                       <div className="mt-5 rounded border bg-white p-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -6985,11 +7075,11 @@ export default function Home() {
                         <div className="rounded border p-4">
                           <b>Proyección del mes · Septiembre 2026</b>
                           <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
-                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">FC bruta acumulada</span><b>{money.format(31624548)}</b></div>
-                            <div className="rounded bg-[#eef5ef] p-3"><span className="block text-slate-600">Proyección de cierre</span><b>{money.format(135533777)}</b></div>
-                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">Promedio diario actual</span><b>{money.format(4517793)}</b></div>
+                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">FC bruta acumulada</span><b>Consultar Drive</b></div>
+                            <div className="rounded bg-[#eef5ef] p-3"><span className="block text-slate-600">Proyección de cierre</span><b>Consultar Drive</b></div>
+                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">Promedio diario actual</span><b>Consultar Drive</b></div>
                           </div>
-                          <p className="mt-3 text-sm text-slate-600">Proyección según histórico: <b>{money.format(143659801)}</b> · Objetivo histórico acumulado: <b>{money.format(200146906)}</b>.</p>
+                          <p className="mt-3 text-sm text-slate-600">Los valores se muestran únicamente después de la lectura autenticada de Drive.</p>
                         </div>
                         <div className="rounded border p-4">
                           <b>Conciliación de caja por mes</b>
@@ -7211,13 +7301,7 @@ export default function Home() {
                           <tbody>
                             <tr className="border-t">
                               <td className="p-3 font-bold">Proyección</td>
-                              {[
-                                34823706.92,
-                                29070953.46,
-                                28606340.96,
-                                0,
-                                null,
-                              ].map((value, index) => (
+                              {[null, null, null, null, null].map((value, index) => (
                                 <td
                                   key={index}
                                   className="p-3 text-right font-bold"
@@ -7311,26 +7395,19 @@ export default function Home() {
                         <thead className="bg-[#eef2f6]">
                           <tr>
                             <th className="p-3 text-left">Medio</th>
-                            <th className="p-3 text-right">Recoleta · 25/08</th>
+                            <th className="p-3 text-right">{site} · turno actual</th>
                             <th className="p-3 text-left">Estado</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {[
-                            ["Efectivo", 50840],
-                            ["Tarjeta", 328380],
-                            ["Open Pay", 54400],
-                            ["Mercado Pago / QR", 207600],
-                            ["Banco Provincia", 218980],
-                            ["Pedidos Ya efectivo", 50200],
-                          ].map(([method, amount]) => (
-                            <tr key={String(method)} className="border-t">
+                          {totals.map(({ method, amount }) => (
+                            <tr key={method} className="border-t">
                               <td className="p-3">{method}</td>
                               <td className="p-3 text-right font-bold">
-                                {money.format(Number(amount))}
+                                {money.format(amount)}
                               </td>
                               <td className="p-3 text-green-700">
-                                Validado en copia
+                                Datos operativos
                               </td>
                             </tr>
                           ))}
