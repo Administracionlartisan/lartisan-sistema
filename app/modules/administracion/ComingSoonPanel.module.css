@@ -1,0 +1,6 @@
+.notice { max-width: 56rem; padding: 1.5rem; border: 1px solid #e7c26a; border-radius: 1rem; background: #fff5d8; }
+.noticeBody { margin-top: .5rem; color: #334155; font-size: .875rem; line-height: 1.5rem; }
+.grid { display: grid; max-width: 56rem; gap: 1rem; margin-top: 1.25rem; }
+.card { padding: 1.25rem; border: 1px solid #d9d4c9; border-radius: .75rem; background: white; }
+.muted { margin-top: .5rem; color: #64748b; font-size: .875rem; }
+@media (min-width: 768px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

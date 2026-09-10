@@ -8,6 +8,7 @@
   "scripts": {
     "test:help": "node --experimental-strip-types --test tests/assistant-help.test.mjs tests/report-guide.test.mjs",
     "test:security": "node --test tests/security.test.mjs",
+    "test:structure": "node --test tests/module-structure.test.mjs",
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
