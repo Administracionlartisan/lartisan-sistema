@@ -177,11 +177,11 @@ function expense_fetch_sheet_values(array $config): array
     return $rows;
 }
 
-function expense_money_value(mixed $value): float
+function expense_money_value($value): float
 {
     $raw = trim((string) $value);
     if ($raw === '') return 0.0;
-    $negative = str_contains($raw, '-') || str_contains($raw, '(');
+    $negative = strpos($raw, '-') !== false || strpos($raw, '(') !== false;
     $raw = preg_replace('/[^0-9,\.]/', '', $raw) ?? '';
     if ($raw === '') return 0.0;
     $lastComma = strrpos($raw, ',');
@@ -257,10 +257,17 @@ function expense_sync_snapshot(array $rows): array
         return array_slice($values, 0, 20);
     };
 
+    foreach ($totals as $key => $value) {
+        if (is_float($value)) $totals[$key] = round($value, 2);
+    }
+
     return [
         'sourceRows' => $validRows,
         'summary' => [
-            ...array_map(static fn (float|int $value): float|int => is_float($value) ? round($value, 2) : $value, $totals),
+            'totalExpenses' => $totals['totalExpenses'],
+            'totalPaid' => $totals['totalPaid'],
+            'totalPayable' => $totals['totalPayable'],
+            'openCount' => $totals['openCount'],
             'byCategory' => $sortGroups($byCategory),
             'bySupplier' => $sortGroups($bySupplier),
             'openItems' => array_slice($openItems, 0, 250),
