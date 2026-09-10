@@ -978,11 +978,9 @@ export default function Home() {
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>(
       INITIAL_MANAGED_USERS,
     ),
-    [login, setLogin] = useState(
-      portal === "admin"
-        ? "administracion@lartisantaller.com"
-        : usernameFromName("Stefany García"),
-    ),
+    // Never prefill a real account on either access page. Besides avoiding
+    // accidental logins, this keeps personal usernames out of a shared screen.
+    [login, setLogin] = useState(""),
     [password, setPassword] = useState(""),
     [showPassword, setShowPassword] = useState(false),
     [user, setUser] = useState<ManagedUser | null>(null),
@@ -3289,6 +3287,9 @@ export default function Home() {
             onChange={(e) => setLogin(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && enter()}
             type="text"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
             placeholder={portal === "admin" ? "administracion@lartisantaller.com" : "nombre.apellido"}
             className="mt-1 w-full rounded-lg border p-3"
           />
@@ -3312,9 +3313,6 @@ export default function Home() {
               {showPassword ? "Ocultar" : "Mostrar"}
             </button>
           </div>
-          <p className="mt-3 text-xs text-slate-500">
-            Administración, Betzi y Andrea tendrán doble factor al activar la autenticación segura.
-          </p>
           <button
             onClick={requestPasswordReset}
             disabled={recoverySending}
