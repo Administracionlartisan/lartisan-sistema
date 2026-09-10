@@ -25,8 +25,8 @@ Fecha: 9 de septiembre de 2026. Alcance: código local del portal, guía, búsqu
 | --- | ---: |
 | Vendedora | 59 |
 | Ventas de Central | 61 |
-| Andrea (con sus habilitaciones actuales) | 64 |
-| Betzi (con sus habilitaciones actuales) | 64 |
+| Supervisión (con permisos de reportes) | 64 |
+| Supervisión (con permisos operativos) | 64 |
 | Administración/Gerencia | 81 |
 
 El filtro utiliza los booleanos reales del portal: Central, mínimos, conteo, aprobación de stock, reportes y horarios. No concede permisos. El catálogo está en el código cliente y no contiene información confidencial: ocultar preguntas no es una barrera de seguridad. La autorización de operaciones y datos debe aplicarse en el servidor.
@@ -55,7 +55,7 @@ El filtro utiliza los booleanos reales del portal: Central, mínimos, conteo, ap
 2. **Corrección de medio de pago:** changeSalePayment cambia venta/pagos, pero no reconstruye todo el libro de caja; revisar también pagos divididos antes de prometer conciliación automática.
 3. **Comprobantes de egresos:** falta verificar/implementar carga del contenido, almacenamiento privado y recuperación, no solo el nombre.
 4. **Sincronización:** syncContingency pone el contador en cero antes de demostrar confirmación durable del servidor. Debe ligarse a un acuse real y verificarse ante desconexiones/conflictos.
-5. **Permisos por nombre:** isAndrea/isBetzi y parte de Central dependen del nombre/perfil principal. Migrar a permisos explícitos del servidor es una mejora pendiente, no realizada aquí.
+5. **Permisos explícitos:** las capacidades especiales se resuelven con permisos entregados por el servidor y no por nombres de personas.
 6. **Respaldos y salud:** la pantalla mezcla indicadores calculados con mensajes fijos o pendientes. Verificar planificador, última copia externa, restauración y pruebas efectivas; esta tarea no los certifica.
 7. **Ruta antigua de IA paga:** donweb-api/index.php todavía define POST assistant/chat, que puede llamar assistant_openai_response si su configuración lo permite. El chat gratuito no la llama (comprobado por pruebas estáticas). Revisar su retiro/deshabilitación por separado; no se inspeccionaron secretos ni se modificó DonWeb.
 8. **Otras limitaciones de operación:** el cierre y el libro de caja tienen cálculos distintos que requieren conciliación; anular una venta con devoluciones previas merece validación específica; algunas vistas administrativas incluyen datos históricos/de demostración.
@@ -149,7 +149,7 @@ Cada cambio funcional debe actualizar la respuesta afectada, su fuente, la fecha
 - **¿Cómo sé por qué cambió el stock?** — General. Fuente: app/page.tsx · recordStockMovement.
 - **¿Cómo configuro el stock mínimo?** — Habilitación: minimumStock. Fuente: app/page.tsx · canAdjustStock / minimumStock.
 - **¿Cómo cargo un conteo físico de stock?** — Habilitación: countStock. Fuente: app/page.tsx · canCountRealStock / submitStockAdjustment.
-- **¿Cómo apruebo un ajuste de stock?** — Habilitación: approveStock. Fuente: app/page.tsx · isBetzi / approveStockAdjustment.
+- **¿Cómo apruebo un ajuste de stock?** — Habilitación: approveStock. Fuente: app/page.tsx · approveStockAdjustment.
 - **¿Cómo registro un ingreso por remito o una merma?** — General. Fuente: app/page.tsx · registerStockMovement.
 
 ### Pedidos
@@ -176,11 +176,11 @@ Cada cambio funcional debe actualizar la respuesta afectada, su fuente, la fecha
 ### Personal
 
 - **¿Cómo registro mi entrada y salida?** — General. Fuente: app/page.tsx · markAttendance.
-- **¿Cómo gestiono los horarios del personal?** — Habilitación: schedules. Fuente: app/page.tsx · isBetzi / schedules / markAttendance.
+- **¿Cómo gestiono los horarios del personal?** — Habilitación: schedules. Fuente: app/page.tsx · schedules / markAttendance.
 
 ### Reportes
 
-- **¿Qué reportes puede consultar Andrea?** — Habilitación: supervisorReports. Fuente: app/page.tsx · isAndrea / Reportes.
+- **¿Qué reportes puede consultar Supervisión?** — Habilitación: supervisorReports. Fuente: app/page.tsx · Reportes.
 - **¿Qué información puedo obtener de los reportes?** — Administración/Gerencia. Fuente: app/page.tsx · ADMIN_REPORTS / ADMIN_DEMO_ROWS.
 - **¿Por qué un reporte no coincide con otro?** — Administración/Gerencia. Fuente: app/page.tsx · ADMIN_DEMO_ROWS / reports.
 - **¿Cuál es la diferencia entre vendido y cobrado?** — Administración/Gerencia. Fuente: app/page.tsx · sales / payments / cashLedger.

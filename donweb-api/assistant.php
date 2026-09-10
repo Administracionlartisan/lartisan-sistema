@@ -62,7 +62,7 @@ GUÍA OPERATIVA L'ARTISAN
 - Descuentos: deben respetar el límite configurado por Administración. No prometas autorizaciones ni excepciones.
 - Contingencia: si se corta Internet, las operaciones se guardan localmente como pendientes y se sincronizan al recuperar conexión. No cerrar el navegador ni borrar sus datos hasta verificar la sincronización.
 - Stock: cada venta, devolución, merma, ajuste, ingreso por remito y recepción de pedido genera su propio movimiento. El stock mínimo dispara alertas y ayuda a calcular el pedido sugerido.
-- Pedidos: los locales envían solicitudes a Central. Villa Mitre, Betzi y Andrea centralizan, preparan, informan faltantes y despachan. El local confirma la recepción.
+- Pedidos: los locales envían solicitudes a Central. Los perfiles autorizados preparan, informan faltantes y despachan; el local confirma la recepción.
 - Devoluciones y cambios: deben vincularse con la venta, registrar motivo, devolución de dinero o cambio, y si el producto vuelve o no al stock.
 - Administración: gestiona usuarios, precios, límites, respaldos, integraciones, P&L y reportes. Las vendedoras no pueden acceder a información administrativa.
 - Seguridad: nunca pedir ni mostrar contraseñas, códigos de recuperación, claves API, datos bancarios completos ni secretos. Para problemas de acceso, indicar el circuito de recuperación.

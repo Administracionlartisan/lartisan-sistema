@@ -106,11 +106,11 @@ export const adminReportGuides: ReportGuide[] = [
     "Es un listado de condiciones del estado cargado, no un registro histórico por fecha. No certifica sincronización completa ni atribuye responsabilidades por sí solo. El contador de Tareas administrativas corresponde a consultas/recuperaciones, no a todas estas alertas."),
 ];
 
-export const supervisionReportGuide = report("Supervision", "Reportes de Andrea", "Ventas activas de la sesión, stock bajo, pedidos pendientes y estado de cajas por sucursal.", "Operativo con límites",
-  ["resumen supervision", "reportes andrea", "ventas de cada local", "cuanto vendio cada local", "comparar sucursales", "ventas de esta sesion", "cajas abiertas", "stock bajo", "pedidos pendientes", "como van los locales"],
+export const supervisionReportGuide = report("Supervision", "Reportes de supervisión", "Ventas activas de la sesión, stock bajo, pedidos pendientes y estado de cajas por sucursal.", "Operativo con límites",
+  ["resumen supervision", "reportes supervisora", "ventas de cada local", "cuanto vendio cada local", "comparar sucursales", "ventas de esta sesion", "cajas abiertas", "stock bajo", "pedidos pendientes", "como van los locales"],
   "Entrá en Reportes y buscá la fila del local. No tiene Desde/Hasta ni selector propio de fecha/local: muestra un resumen de sesión por sucursal.",
-  "Solo aparece con la habilitación específica de Reportes de Andrea; el rol Supervisión por sí solo no alcanza. No incluye P&L, márgenes ni historial mensual completo. Usá únicamente los locales autorizados y no interpretes datos cargados como una consolidación histórica certificada.",
-  "app/page.tsx · tab === Reportes && isAndrea");
+  "Solo aparece con la habilitación específica de reportes; el rol Supervisión por sí solo no alcanza. No incluye P&L, márgenes ni historial mensual completo. Usá únicamente los locales autorizados y no interpretes datos cargados como una consolidación histórica certificada.",
+  "app/page.tsx · permiso supervisorReports");
 
 // Single source of names/IDs for the menu, guide, permissions and drift tests.
 export const ADMIN_REPORTS = adminReportGuides.map(({ id, title, detail, status }) => ({ id, title, summary: detail, status, detail: `${detail} Estado: ${status}.` }));
@@ -142,7 +142,7 @@ export function canOpenReport(access: ReportAccess, id: string) {
 export const reportQuestion = (report: ReportGuide) => `¿Dónde encuentro el informe ${report.title}?`;
 export function describeReport(report: ReportGuide, followup?: "filters" | "export" | "source") {
   const area = reportArea(report.id);
-  const path = report.id === "Supervision" ? "Menú → Reportes → Reportes de Andrea" : `Menú → Administración → Panel central → ${area ? `${area.title} → ` : ""}${report.title}`;
+  const path = report.id === "Supervision" ? "Menú → Reportes → Reportes de supervisión" : `Menú → Administración → Panel central → ${area ? `${area.title} → ` : ""}${report.title}`;
   const intro = `Dónde: ${path}.\n\nQué encontrarás: ${report.detail}\n\nEstado: ${report.status}.`;
   const filters = `Filtros y lectura: ${report.filters}`;
   const limits = `Importante: ${report.limits}`;
@@ -222,7 +222,7 @@ export function locateReport(query: string, access: ReportAccess, options: { for
   const explicit = options.force || /\b(reporte|reportes|informe|informes|tablero|estadistica|estadisticas|ranking|indicadores)\b/.test(text);
   if (access.role === "vendedora" && !explicit) return null;
   // Explanations and operational troubleshooting belong to the existing verified help.
-  if (!options.force && /^(que reportes puede consultar andrea|por que un reporte no coincide con otro|cual es la diferencia entre vendido y cobrado|que significan mrp recetas y legajos proximamente)$/.test(text)) return null;
+  if (!options.force && /^(que reportes puede consultar supervision|por que un reporte no coincide con otro|cual es la diferencia entre vendido y cobrado|que significan mrp recetas y legajos proximamente)$/.test(text)) return null;
   if (!explicit && /\b(no puedo|no me deja|no funciona|como se calcula|como elijo|como selecciono|puedo cobrar)\b/.test(text)) return null;
   if (!explicit && access.role !== "administracion" && /\b(mi pedido|mis pedidos)\b/.test(text)) return null;
   const seeking = explicit || Boolean(previous) || /\b(donde|ver|consultar|cuanto|cuanta|cuantos|cuantas|quien|cual|comparar|resultado|ganancia|perdida|margen|rentabilidad|proyeccion)\b/.test(text) || /^que (producto|productos|local|locales|sucursal|sucursales)/.test(text);

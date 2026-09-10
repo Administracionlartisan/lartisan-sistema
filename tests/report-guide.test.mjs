@@ -6,8 +6,8 @@ import { searchAssistant } from '../app/data/assistantKnowledge.ts';
 const admin = { role:'administracion', reportPermissions:ADMIN_REPORTS.map(r=>r.id), supervisorReports:false };
 const manager = { ...admin };
 const limited = { ...admin, reportPermissions:['DetalleVentas','HorariosVenta'] };
-const andrea = { role:'supervisora', reportPermissions:[], supervisorReports:true };
-const betzi = { role:'supervisora', reportPermissions:[], supervisorReports:false };
+const supervisorWithReports = { role:'supervisora', reportPermissions:[], supervisorReports:true };
+const supervisorWithoutReports = { role:'supervisora', reportPermissions:[], supervisorReports:false };
 const seller = { role:'vendedora', reportPermissions:[], supervisorReports:false };
 function expectReport(q, id, access=admin, options={}) {
   const r=locateReport(q,access,options);
@@ -26,7 +26,7 @@ test('every rendered admin report has exactly one audited entry',()=>{
   assert.match(page,/import \{ ADMIN_REPORTS, canOpenReport \}/);
   for(const r of adminReportGuides){assert.ok(r.source&&r.questions.length>=6&&r.filters&&r.limits);}
 });
-for(const [name,access] of Object.entries({admin,manager,limited,andrea,betzi,seller})){
+for(const [name,access] of Object.entries({admin,manager,limited,supervisorWithReports,supervisorWithoutReports,seller})){
   for(const r of availableReportGuides(access)){
     test(`${name} canonical ${r.id}`,()=>expectReport(reportQuestion(r),r.id,access,{force:true}));
   }
@@ -74,13 +74,13 @@ test('previous report never survives a permission denial',()=>{
   assert.notEqual(result.kind,'answer');
   assert.equal(canOpenReport(limited,'PLConsolidado'),false);
 });
-for(const q of ['cuanto vendio cada local','cajas abiertas','pedidos pendientes'])test(`supervisor route ${q}`,()=>expectReport(q,'Supervision',andrea,{force:true}));
+for(const q of ['cuanto vendio cada local','cajas abiertas','pedidos pendientes'])test(`supervisor route ${q}`,()=>expectReport(q,'Supervision',supervisorWithReports,{force:true}));
 test('no implicit admin report permissions for supervisor or seller',()=>{
-  for(const access of [andrea,betzi,seller]){
+  for(const access of [supervisorWithReports,supervisorWithoutReports,seller]){
     const r=locateReport('informe P&L',access,{force:true});assert.equal(r.kind,'unavailable');
     assert.equal(canOpenReport(access,'PLConsolidado'),false);
   }
-  assert.deepEqual(availableReportGuides(betzi),[]);
+  assert.deepEqual(availableReportGuides(supervisorWithoutReports),[]);
   assert.deepEqual(availableReportGuides({...admin,reportPermissions:[]}),[]);
   assert.deepEqual(availableReportGuides({...seller,supervisorReports:true,reportPermissions:admin.reportPermissions}),[]);
 });
@@ -105,8 +105,8 @@ test('management operational questions are not stolen by report routing',()=>{
 });
 
 test('concept explanations and specific supervision access retain the existing FAQ',()=>{
-  for(const q of ['¿Qué reportes puede consultar Andrea?','¿Por qué un reporte no coincide con otro?','¿Cuál es la diferencia entre vendido y cobrado?','¿Qué significan MRP, Recetas y Legajos (Próximamente)?'])assert.equal(locateReport(q,admin),null,q);
-  assert.equal(locateReport('¿Dónde veo en qué estado está mi pedido?',andrea),null);
+  for(const q of ['¿Qué reportes puede consultar Supervisión?','¿Por qué un reporte no coincide con otro?','¿Cuál es la diferencia entre vendido y cobrado?','¿Qué significan MRP, Recetas y Legajos (Próximamente)?'])assert.equal(locateReport(q,admin),null,q);
+  assert.equal(locateReport('¿Dónde veo en qué estado está mi pedido?',supervisorWithReports),null);
 });
 
 test('direct export questions explain actual export limitations',()=>{

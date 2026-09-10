@@ -345,20 +345,6 @@ const defaultActionPermissions = (role: Role) =>
           "exportar",
         ]
       : ["cobrar", "egresos", "pedidos", "incidencias", "transferirCaja"];
-const workEmail = (name: string) =>
-  `${name
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ".")
-    .replace(/^\.|\.$/g, "")}@lartisantaller.com`;
-const usernameFromName = (name: string) =>
-  name
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ".")
-    .replace(/^\.|\.$/g, "");
 const API_BASE = "https://www.lartisantaller.com/sistema-api";
 const downloadCsv = (filename: string, rows: Array<Array<string | number | null>>) => {
   const escapeCell = (value: string | number | null) => {
@@ -395,6 +381,7 @@ type ApiUser = {
   report_permissions?: string | null;
   actionPermissions?: string[];
   action_permissions?: string | null;
+  primary?: boolean;
 };
 type ApiPayload = {
   error?: string;
@@ -457,23 +444,16 @@ const managedUserFromApi = (profile: ApiUser): ManagedUser => {
           : [],
     accessAllLocations,
     active: profile.active === undefined ? true : Boolean(profile.active),
-    mfaRequired:
-      profile.mfaRequired != null || profile.mfa_required != null
-        ? Boolean(profile.mfaRequired ?? profile.mfa_required)
-        : profile.role === "administracion" ||
-          profile.username === "andrea.fernandez" ||
-          profile.username === "betzi.avila",
+    mfaRequired: Boolean(profile.mfaRequired ?? profile.mfa_required),
     reportPermissions:
       profile.reportPermissions != null || profile.report_permissions != null
         ? parseStringArray(profile.reportPermissions ?? profile.report_permissions)
-        : profile.role === "administracion"
-          ? ADMIN_REPORTS.map((report) => report.id)
-          : [],
+        : [],
     actionPermissions:
       profile.actionPermissions != null || profile.action_permissions != null
         ? parseStringArray(profile.actionPermissions ?? profile.action_permissions)
         : defaultActionPermissions(profile.role),
-    primary: profile.username === "administracion@lartisantaller.com",
+    primary: Boolean(profile.primary),
     mustChangePassword: Boolean(
       profile.mustChangePassword ?? profile.must_change_password,
     ),
@@ -587,47 +567,8 @@ const PL_SECTIONS: Record<string, { title: string; rows: PLRow[] }> = {
   resultados: { title: "Resultados, caja y punto de equilibrio", rows: [] },
   rentabilidad: { title: "Rentabilidad, deuda e inventario", rows: [] },
 };
-const USERS: Record<string, User> = {
-  "Stefany García": { name: "Stefany García", role: "vendedora", location: "Congreso" },
-  "Jessica Vivas": { name: "Jessica Vivas", role: "vendedora", accessAllLocations: true },
-  "Anni Lai Muñoz": { name: "Anni Lai Muñoz", role: "vendedora", location: "Maure" },
-  "Gabriela Florez": { name: "Gabriela Florez", role: "vendedora", location: "Maure" },
-  "Ezequiel Bonasegla": { name: "Ezequiel Bonasegla", role: "vendedora", location: "Recoleta" },
-  "Dante Mandelbaum": { name: "Dante Mandelbaum", role: "vendedora", location: "Recoleta" },
-  "Yamila Palavecino": { name: "Yamila Palavecino", role: "vendedora", location: "Villa Mitre" },
-  "Valentina Parra": { name: "Valentina Parra", role: "vendedora", location: "Villa Mitre" },
-  "Andrea Fernandez": { name: "Andrea Fernandez", role: "supervisora" },
-  "Betzi Avila": { name: "Betzi Avila", role: "supervisora" },
-  Administración: { name: "Administración", role: "administracion" },
-};
-const INITIAL_MANAGED_USERS: ManagedUser[] = Object.values(USERS).map(
-  (profile, index) => ({
-    ...profile,
-    id: profile.role === "administracion" ? "primary-admin" : `demo-${index}`,
-    active: true,
-    username:
-      profile.name === "Administración"
-        ? "administracion@lartisantaller.com"
-        : usernameFromName(profile.name),
-    email:
-      profile.role === "administracion" ||
-      profile.name.startsWith("Andrea") ||
-      profile.name.startsWith("Betzi")
-        ? workEmail(profile.name)
-        : undefined,
-    password: "",
-    mfaRequired:
-      profile.role === "administracion" ||
-      profile.name.startsWith("Andrea") ||
-      profile.name.startsWith("Betzi"),
-    reportPermissions:
-      profile.role === "administracion"
-        ? ADMIN_REPORTS.map((report) => report.id)
-        : [],
-    actionPermissions: defaultActionPermissions(profile.role),
-    primary: profile.name === "Administración",
-  }),
-);
+// Nunca incluir identidades reales en el bundle público: se obtienen de la API.
+const INITIAL_MANAGED_USERS: ManagedUser[] = [];
 const raw: [string, string, string, number][] = [
   ["Chocotorta", "250 g", "Postres", 8000],
   ["Tiramisú", "250 g", "Postres", 8000],
@@ -737,12 +678,10 @@ const METHODS: Record<string, string[]> = {
 };
 const SHEET_CONFIG: Record<
   string,
-  { sheet: string; testUrl?: string; fields: Record<string, string> }
+  { sheet: string; fields: Record<string, string> }
 > = {
   Recoleta: {
     sheet: "INGRESOS",
-    testUrl:
-      "https://docs.google.com/spreadsheets/d/1IBPVCNqquO1LsE19oiMq8x6gNyD5_VEfYV2pNhoZ5Hg/edit",
     fields: {
       Efectivo: "EFECT",
       Tarjeta: "TRJE",
@@ -828,35 +767,30 @@ const SHEET_CONFIG: Record<
 const DRIVE_INTEGRATIONS = [
   {
     site: "Recoleta",
-    url: "https://docs.google.com/spreadsheets/d/131eexo3o0ALWmrOhu0HfUnTLTVH33aHTGQ2sEMlwHtk/edit",
     incomeSheet: "INGRESOS",
     expenseSheet: "GASTOS OPERATIVOS",
     incomeStatus: "Encabezados verificados",
   },
   {
     site: "Villa Mitre",
-    url: "https://docs.google.com/spreadsheets/d/1Tkd2Mhe28OsCzOl9-TAEEFyFAczFrCbe3b08Vf2oF2k/edit",
     incomeSheet: "INGRESOS",
     expenseSheet: "GASTOS OPERATIVOS",
     incomeStatus: "Encabezados verificados",
   },
   {
     site: "Congreso",
-    url: "https://docs.google.com/spreadsheets/d/14BEXikqLBuiGeBKyIqwSRkCRAFfopPYM7ZhnjKdrPBk/edit",
     incomeSheet: "ingresos",
     expenseSheet: "GASTOS OPERATIVOS",
     incomeStatus: "Encabezados verificados",
   },
   {
     site: "Maure",
-    url: "https://docs.google.com/spreadsheets/d/10RKMEItTwD1Dw_T671cLT1QcS1qCUvm1ZhcjlsoYGU0/edit",
     incomeSheet: "ingresos",
     expenseSheet: "GASTOS OPERATIVOS",
     incomeStatus: "Encabezados verificados",
   },
   {
     site: "Novo Pacheco",
-    url: "https://docs.google.com/spreadsheets/d/1hdJVqIgwAGMcIu_peu6TSYvPg2JapUt2romE9mTzR2o/edit",
     incomeSheet: "INGRESOS",
     expenseSheet: "GASTOS OPERATIVOS",
     incomeStatus: "Encabezados verificados",
@@ -1737,16 +1671,19 @@ export default function Home() {
     setStockMovements((items) => [entry, ...items]);
     return entry;
   };
-  const isAndrea = user?.name.startsWith("Andrea") || false;
-  const isBetzi = user?.name.startsWith("Betzi") || false;
-  const canAdjustStock = isAndrea || isBetzi;
-  const canCountRealStock = isAndrea;
-  const managesCentralOrders =
-    isBetzi ||
-    isAndrea ||
-    (user?.role === "vendedora" && user.location === "Villa Mitre");
   const can = (permission: string) =>
     Boolean(user?.actionPermissions.includes(permission));
+  const canAdjustStock = can("stock");
+  const canCountRealStock = can("stock");
+  const canApproveStockAdjustments =
+    user?.role === "supervisora" && can("stock");
+  const canManageSchedules =
+    user?.role === "supervisora" && user.reportPermissions.includes("Personal");
+  const canViewSupervisorReports =
+    user?.role === "supervisora" && user.reportPermissions.length > 0;
+  const managesCentralOrders =
+    can("pedidos") &&
+    (user?.role === "supervisora" || user.location === "Villa Mitre");
   const pendingResetFor = (profile: ManagedUser) =>
     resetRequests.find(
       (request) =>
@@ -1811,7 +1748,7 @@ export default function Home() {
           .filter((request) => request.status === "Pendiente" || request.status === "En preparación")
           .map((request) => ({ title: "Preparar pedido", detail: `${request.site} · ${request.status}.`, action: "Central de pedidos" }))
       : []),
-    ...(isBetzi
+    ...(canApproveStockAdjustments
       ? stockAdjustments
           .filter((adjustment) => adjustment.status === "Pendiente")
           .map((adjustment) => ({ title: "Aprobar ajuste", detail: `${adjustment.site} · ajuste de inventario.`, action: "Central de pedidos" }))
@@ -1893,7 +1830,7 @@ export default function Home() {
       .filter((adjustment) => adjustment.status === "Pendiente")
       .map((adjustment) => ({
         label: `Ajuste de stock pendiente · ${adjustment.site}`,
-        detail: "Requiere aprobación de Betzi.",
+        detail: "Requiere aprobación de un perfil autorizado.",
         tone: "bg-[#fff1ec]",
       })),
     ...incidents
@@ -2329,7 +2266,7 @@ export default function Home() {
       "Pedido de mercadería enviado",
       `${site} · ${request.lines.reduce((total, line) => total + line.quantity, 0)} unidades · ${request.id.slice(0, 8)}`,
     );
-    setMessage("Solicitud enviada a Betzi para su preparación.");
+    setMessage("Solicitud enviada a Central para su preparación.");
   };
   const updateRequestStatus = (
     request: StockRequest,
@@ -2517,14 +2454,14 @@ export default function Home() {
     setStockAdjustments((items) => [adjustment, ...items]);
     setAdjustReason("");
     recordAudit("Ajuste de stock solicitado", `${site} · ${adjustment.reason}`);
-    setMessage("Ajuste enviado a Betzi para aprobación.");
+    setMessage("Ajuste enviado para aprobación.");
   };
   const approveStockAdjustment = (
     adjustment: StockAdjustment,
     approve: boolean,
   ) => {
-    if (!isBetzi)
-      return setMessage("Solo Betzi puede aprobar o rechazar ajustes de stock.");
+    if (!canApproveStockAdjustments)
+      return setMessage("Tu perfil no puede aprobar ni rechazar ajustes de stock.");
     setStockAdjustments((items) =>
       items.map((item) =>
         item.id === adjustment.id
@@ -3142,12 +3079,7 @@ export default function Home() {
       cashImpact: 0,
       detail: `Esperado ${money.format(expected)} · Diferencia ${money.format(cashVariance)}`,
     });
-    const test = SHEET_CONFIG[site]?.testUrl;
-    setSyncStatus(
-      test
-        ? "Prueba lista para Recoleta: el envío quedará habilitado al conectar el backend seguro."
-        : "Pendiente: primero se creará la copia de prueba de este local.",
-    );
+    setSyncStatus("Cierre listo para sincronizar mediante la integración segura del servidor.");
     recordAudit(
       "Cierre confirmado",
       `Cobros ${money.format(totals.reduce((a, x) => a + x.amount, 0))} · Sobre ${money.format(envelope)}`,
@@ -3290,7 +3222,7 @@ export default function Home() {
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}
-            placeholder={portal === "admin" ? "administracion@lartisantaller.com" : "nombre.apellido"}
+            placeholder={portal === "admin" ? "usuario administrativo" : "nombre.apellido"}
             className="mt-1 w-full rounded-lg border p-3"
           />
           <label className="mt-4 block text-sm font-bold">Contraseña</label>
@@ -3328,7 +3260,7 @@ export default function Home() {
             <div className="mt-5 rounded-xl border border-[#d9d4c9] bg-white p-4">
               <p className="text-sm font-bold">Recuperar acceso</p>
               <p className="mt-1 text-xs text-slate-500">
-                Revisá administracion@lartisantaller.com. El código vence en 15 minutos.
+                Si la cuenta está habilitada, el código llegará al canal de recuperación configurado y vencerá en 15 minutos.
               </p>
               <label className="mt-4 block text-sm font-bold">Código de 6 dígitos</label>
               <input
@@ -3458,8 +3390,8 @@ export default function Home() {
   const tabs = [
     ...baseTabs,
     ...(managesCentralOrders ? ["Central de pedidos"] : []),
-    ...(isBetzi ? ["Horarios"] : []),
-    ...(isAndrea ? ["Reportes"] : []),
+    ...(canManageSchedules ? ["Horarios"] : []),
+    ...(canViewSupervisorReports ? ["Reportes"] : []),
   ];
   const adminTaskAlertCount = user.role === "administracion"
     ? aiSupportRequests.filter((request) => request.status === "pendiente").length +
@@ -3547,11 +3479,11 @@ export default function Home() {
         </aside>
         <section className="p-4 sm:p-5 md:p-8">
           {message && <div role="status" aria-live="polite" className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm font-semibold shadow-sm"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="shrink-0 underline">Cerrar</button></div>}
-          {tab === "Reportes" && isAndrea ? (
+          {tab === "Reportes" && canViewSupervisorReports ? (
             <>
               <Heading
                 k="SUPERVISIÓN · TODOS LOS LOCALES"
-                h="Reportes de Andrea"
+                h="Reportes de supervisión"
                 p="Seguimiento operativo de ventas, stock, pedidos y cajas por sucursal."
               />
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -3602,7 +3534,7 @@ export default function Home() {
                 </table>
               </div>
               <p className="mt-4 rounded bg-[#eef2f6] p-4 text-sm">
-                Andrea puede operar ventas en cualquier sucursal desde el selector de sucursal. Estos reportes son de consulta y seguimiento; los permisos de Administración permanecen separados.
+                El perfil autorizado puede consultar los locales asignados. Estos reportes son de seguimiento; los permisos de Administración permanecen separados.
               </p>
             </>
           ) : tab === "Tareas" ? (
@@ -4339,20 +4271,9 @@ export default function Home() {
                       Hoja destino: {SHEET_CONFIG[site].sheet}. Cada medio de
                       pago se mapeará contra el encabezado propio del local.
                     </p>
-                    {SHEET_CONFIG[site].testUrl ? (
-                      <a
-                        className="mt-2 inline-block font-bold underline"
-                        href={SHEET_CONFIG[site].testUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Abrir copia de prueba de Recoleta
-                      </a>
-                    ) : (
-                      <p className="mt-1 text-slate-500">
-                        Copia de prueba pendiente para este local.
-                      </p>
-                    )}
+                    <p className="mt-1 text-slate-500">
+                      La fuente y sus credenciales se administran únicamente en el servidor.
+                    </p>
                     <p className="mt-2 text-slate-500">{syncStatus}</p>
                   </div>
                 </div>
@@ -4468,14 +4389,13 @@ export default function Home() {
                 </table>
               </div>
               <p className="mt-3 text-sm text-slate-500">
-                El conteo real se carga únicamente con el perfil de Andrea. Los
-                mínimos de reposición y ajustes de stock quedan reservados a Andrea y Betzi.
+                El conteo real, los mínimos y los ajustes quedan reservados a perfiles autorizados.
               </p>
               {canCountRealStock && (
                 <div className="mt-5 rounded-2xl border bg-white p-5">
                   <b>Solicitar ajuste de inventario</b>
                   <p className="mt-1 text-sm text-slate-500">
-                    Betzi debe aprobar el ajuste antes de modificar el stock
+                    Un perfil autorizado debe aprobar el ajuste antes de modificar el stock
                     teórico.
                   </p>
                   <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1.5fr_auto] md:items-end">
@@ -4511,7 +4431,7 @@ export default function Home() {
                       onClick={submitStockAdjustment}
                       className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white"
                     >
-                      Enviar a Betzi
+                      Enviar a aprobación
                     </button>
                   </div>
                 </div>
@@ -4665,7 +4585,7 @@ export default function Home() {
               <Heading
                 k={`CENTRAL · ${site.toUpperCase()}`}
                 h="Solicitud de mercadería"
-                p="Armá el pedido del local y envialo a Betzi para preparación y despacho."
+                p="Armá el pedido del local y envialo a Central para preparación y despacho."
               />
               <div className="grid gap-6 xl:grid-cols-[1fr_350px]">
                 <div className="rounded-2xl border bg-white p-4 sm:p-5">
@@ -5020,7 +4940,7 @@ export default function Home() {
                   <div>
                     <b>Ajustes de inventario pendientes</b>
                     <p className="mt-1 text-sm text-slate-500">
-                      Andrea carga el conteo y motivo; Betzi autoriza el cambio
+                      Un perfil autorizado carga el conteo y otro confirma el cambio
                       definitivo.
                     </p>
                   </div>
@@ -5067,7 +4987,7 @@ export default function Home() {
                             <td className="p-3">{adjustment.reason}</td>
                             <td className="p-3 text-center">
                               {adjustment.status === "Pendiente" ? (
-                                isBetzi ? (
+                                canApproveStockAdjustments ? (
                                   <div className="flex justify-center gap-2">
                                     <button
                                       onClick={() =>
@@ -5088,7 +5008,7 @@ export default function Home() {
                                   </div>
                                 ) : (
                                   <span className="text-xs text-slate-500">
-                                    Revisión de Betzi
+                                    Revisión autorizada
                                   </span>
                                 )
                               ) : (
@@ -5662,7 +5582,6 @@ export default function Home() {
                       <th className="p-3 text-left">Egresos</th>
                       <th className="p-3 text-left">Medios de pago</th>
                       <th className="p-3 text-center">Estado</th>
-                      <th className="p-3 text-center">Drive</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -5682,16 +5601,6 @@ export default function Home() {
                           <span className="font-bold text-green-700">
                             {integration.incomeStatus}
                           </span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <a
-                            href={integration.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-bold underline"
-                          >
-                            Abrir
-                          </a>
                         </td>
                       </tr>
                     ))}
@@ -6154,11 +6063,11 @@ export default function Home() {
                   <label className="flex items-center gap-2 text-sm font-bold xl:pb-3">
                     <input
                       type="checkbox"
-                      checked={newUserMfaRequired || newUserRole === "administracion"}
-                      disabled={newUserRole === "administracion"}
-                      onChange={(e) => setNewUserMfaRequired(e.target.checked)}
+                      checked={false}
+                      disabled
+                      onChange={() => undefined}
                     />
-                    Requiere doble factor
+                    Doble factor (pendiente de implementación)
                   </label>
                   <button
                     onClick={createManagedUser}
@@ -6298,10 +6207,7 @@ export default function Home() {
                                     : [],
                                 actionPermissions:
                                   defaultActionPermissions(role),
-                                mfaRequired:
-                                  role === "administracion"
-                                    ? true
-                                    : profile.mfaRequired,
+                                mfaRequired: false,
                               });
                             }}
                             className="rounded border p-2 disabled:bg-slate-100"
@@ -6348,15 +6254,11 @@ export default function Home() {
                           <label className="inline-flex items-center gap-2">
                             <input
                               type="checkbox"
-                              checked={profile.mfaRequired}
-                              disabled={profile.primary || profile.name.startsWith("Andrea") || profile.name.startsWith("Betzi")}
-                              onChange={(e) =>
-                                updateManagedUser(profile.id, {
-                                  mfaRequired: e.target.checked,
-                                })
-                              }
+                              checked={false}
+                              disabled
+                              onChange={() => undefined}
                             />
-                            {profile.mfaRequired ? "Requerido" : "No requerido"}
+                            Pendiente
                           </label>
                         </td>
                         <td className="p-3 text-center">
@@ -6563,10 +6465,10 @@ export default function Home() {
                 })}
               </div>
             </>
-          ) : tab === "Horarios" && isBetzi ? (
+          ) : tab === "Horarios" && canManageSchedules ? (
             <>
               <Heading
-                k="BETZI · CONFIGURACIÓN DE PERSONAL"
+                k="SUPERVISIÓN · CONFIGURACIÓN DE PERSONAL"
                 h="Horarios de empleados"
                 p="Estos horarios serán la fuente de las alertas de llegada tarde y de los futuros reportes de fichaje."
               />
@@ -6828,7 +6730,7 @@ export default function Home() {
                         <p className="rounded bg-[#fff1ec] p-3">
                           <b>Stock a controlar</b>
                           <br />
-                          El conteo físico se completa desde Andrea.
+                          El conteo físico se completa desde un perfil autorizado.
                         </p>
                         <p className="rounded bg-[#eef2f6] p-3">
                           <b>Fichajes</b>
@@ -6959,7 +6861,6 @@ export default function Home() {
                           ) : (
                             <button onClick={connectPnlGoogle} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Conectar lectura de Drive</button>
                           )}
-                          <a href="https://docs.google.com/spreadsheets/d/1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA/edit?gid=730661199#gid=730661199" target="_blank" rel="noreferrer" className="rounded border border-[#183a67] bg-white px-3 py-2 font-bold">Ver fuente en Drive</a>
                         </div>
                       </div>
                       {pnlSyncMessage && <p className={`mt-3 rounded p-3 text-sm ${pnlSyncMessage.startsWith("P&L actualizado") ? "bg-[#eef5ef] text-green-800" : "bg-[#fff1ec] text-red-800"}`}>{pnlSyncMessage}</p>}
@@ -7683,7 +7584,7 @@ export default function Home() {
                         <b>Conteo físico</b>
                         <p className="mt-2 text-sm">
                           Comparativo entre stock teórico y real cargado por
-                          Andrea.
+                          un perfil autorizado.
                         </p>
                       </div>
                       <div className="rounded bg-[#eef2f6] p-4">
@@ -7974,7 +7875,7 @@ export default function Home() {
                       <div className="rounded bg-[#fff5d8] p-4">
                         <b>Tardanzas</b>
                         <p className="mt-2 text-sm">
-                          Se calcularán con los horarios y tolerancias de Betzi.
+                          Se calcularán con los horarios y tolerancias configurados.
                         </p>
                       </div>
                       <div className="rounded bg-[#eef2f6] p-4">
@@ -8184,7 +8085,7 @@ export default function Home() {
                       <b>Fichajes y horarios</b>
                       <p className="mt-2 text-sm">
                         El futuro reporte filtrará por fecha, empleado y local,
-                        usando los horarios configurados por Betzi.
+                        usando los horarios configurados por Supervisión.
                       </p>
                     </div>
                     <div className="rounded-xl border bg-white p-5">
@@ -8315,7 +8216,7 @@ export default function Home() {
         userName={user.name}
         reportPermissions={user.reportPermissions}
         onOpenReport={(reportId) => {
-          const access = { role: user.role, reportPermissions: user.reportPermissions, supervisorReports: isAndrea };
+          const access = { role: user.role, reportPermissions: user.reportPermissions, supervisorReports: canViewSupervisorReports };
           if (!canOpenReport(access, reportId)) return;
           if (reportId === "Supervision") setTab("Reportes");
           else { setAdminReport(reportId); setTab("Administración"); }
@@ -8325,9 +8226,9 @@ export default function Home() {
           central: managesCentralOrders,
           minimumStock: canAdjustStock,
           countStock: canCountRealStock,
-          approveStock: isBetzi,
-          supervisorReports: isAndrea,
-          schedules: isBetzi,
+          approveStock: canApproveStockAdjustments,
+          supervisorReports: canViewSupervisorReports,
+          schedules: canManageSchedules,
         }}
         diagnosticContext={{
           site,

@@ -99,8 +99,9 @@ if ($method === 'POST' && $route === 'admin/pnl/sync') {
     ensure_pnl_sync_schema($pdo);
     $last = $pdo->query("SELECT started_at FROM pnl_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
     if ($last) json_response(['ok' => false, 'error' => 'Esperá un minuto antes de volver a sincronizar.'], 429);
-    $sheetId = (string) ($config['pnl_sync']['spreadsheet_id'] ?? '1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA');
+    $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
     $range = (string) ($config['pnl_sync']['range'] ?? "'P&L Consolidado 2026 COPIA'!A1:AN220");
+    if ($sheetId === '') json_response(['ok' => false, 'error' => 'La fuente financiera no está configurada en el servidor'], 503);
     $pdo->prepare("INSERT INTO pnl_sync_runs (status, source_spreadsheet_id, source_range, triggered_by, started_at) VALUES ('running', ?, ?, ?, NOW())")
         ->execute([$sheetId, $range, $admin['id']]);
     $runId = (int) $pdo->lastInsertId();
@@ -148,7 +149,7 @@ if ($method === 'POST' && $route === 'auth/login') {
     $pdo->prepare('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?')->execute([$user['id']]);
     create_session($pdo, (int) $user['id'], $config);
     audit($pdo, (int) $user['id'], 'login_success');
-    json_response(['ok' => true, 'user' => public_user($user)]);
+    json_response(['ok' => true, 'user' => public_user($user, $config)]);
 }
 
 if ($method === 'POST' && $route === 'auth/logout') {
@@ -160,7 +161,7 @@ if ($method === 'POST' && $route === 'auth/logout') {
 
 if ($method === 'GET' && $route === 'auth/me') {
     $user = require_user($pdo);
-    json_response(['ok' => true, 'user' => public_user($user)]);
+    json_response(['ok' => true, 'user' => public_user($user, $config)]);
 }
 
 if ($method === 'POST' && $route === 'assistant/chat') {
@@ -309,8 +310,17 @@ if ($method === 'POST' && $route === 'auth/request-reset') {
              (user_id, code_hash, expires_at, requested_ip) VALUES (?, ?, ?, ?)'
         )->execute([$userId, password_hash($code, PASSWORD_DEFAULT), $expiresAt, client_ip()]);
         $recoveryId = (int) $pdo->lastInsertId();
-        $destination = (string) ($config['admin_recovery_email'] ?? 'administracion@lartisantaller.com');
-        $from = (string) ($config['recovery_from_email'] ?? 'no-reply@lartisantaller.com');
+        $destination = trim((string) ($config['admin_recovery_email'] ?? ''));
+        if ($destination === '') {
+            audit($pdo, (int) $user['id'], 'password_recovery_not_configured');
+            json_response(['ok' => false, 'error' => 'La recuperación no está configurada'], 503);
+        }
+        $from = trim((string) ($config['recovery_from_email'] ?? ''));
+        if ($from === '') {
+            $pdo->prepare('DELETE FROM password_recovery_codes WHERE id = ?')->execute([$recoveryId]);
+            audit($pdo, $userId, 'password_recovery_sender_not_configured');
+            json_response(['ok' => false, 'error' => 'La recuperación no está configurada'], 503);
+        }
         $subject = "Codigo de recuperacion - L'ARTISAN";
         $emailBody = "Se solicito recuperar el acceso de Administracion.\n\n"
             . "Codigo: {$code}\n\n"
@@ -425,7 +435,7 @@ if ($method === 'GET' && $route === 'operations/states') {
         $state = json_decode((string) $row['state_json'], true);
         if (is_array($state)) {
             $states[$row['site']] = [
-                'state' => $state,
+                'state' => operational_snapshot_for_user($user, $state),
                 'revision' => (int) $row['revision'],
                 'updatedAt' => $row['updated_at'],
             ];
@@ -447,22 +457,27 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
     $body = request_body();
     $baseRevision = max(0, (int) ($body['baseRevision'] ?? 0));
     $state = $body['state'] ?? null;
-    $eventType = trim((string) ($body['eventType'] ?? 'actualizacion_operativa'));
-    $event = $body['event'] ?? [];
-    if (!is_array($state) || !is_array($event) || $eventType === '' || strlen($eventType) > 80) {
+    if (!is_array($state)) {
         json_response(['ok' => false, 'error' => 'Datos operativos inválidos'], 422);
-    }
-    $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    $eventJson = json_encode($event, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($stateJson === false || $eventJson === false || strlen($stateJson) > 4_000_000) {
-        json_response(['ok' => false, 'error' => 'La operación supera el tamaño permitido'], 422);
     }
     $pdo->beginTransaction();
     try {
-        $revisionStatement = $pdo->prepare('SELECT revision FROM operation_site_states WHERE site = ? FOR UPDATE');
+        $revisionStatement = $pdo->prepare('SELECT revision, state_json FROM operation_site_states WHERE site = ? FOR UPDATE');
         $revisionStatement->execute([$site]);
-        $currentRevision = $revisionStatement->fetchColumn();
-        if ($currentRevision === false) {
+        $currentRow = $revisionStatement->fetch();
+        $currentRevision = $currentRow === false ? false : (int) $currentRow['revision'];
+        $previousState = $currentRow === false ? [] : (json_decode((string) $currentRow['state_json'], true) ?: []);
+        $state = authorize_operational_snapshot($user, $previousState, $state);
+        $changedKeys = array_values(array_filter(array_unique(array_merge(array_keys($previousState), array_keys($state))), static function ($key) use ($previousState, $state): bool {
+            return ($previousState[$key] ?? null) !== ($state[$key] ?? null);
+        }));
+        $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $eventJson = json_encode(['changedKeys' => $changedKeys, 'recordedAt' => gmdate('c')], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($stateJson === false || $eventJson === false || strlen($stateJson) > 4_000_000) {
+            $pdo->rollBack();
+            json_response(['ok' => false, 'error' => 'La operación supera el tamaño permitido'], 422);
+        }
+        if ($currentRow === false) {
             if ($baseRevision !== 0) {
                 $pdo->rollBack();
                 json_response(['ok' => false, 'error' => 'La versión del local cambió', 'currentRevision' => 0], 409);
@@ -479,9 +494,9 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
         }
         $pdo->prepare(
             'INSERT INTO operation_events (site, user_id, event_type, event_json) VALUES (?, ?, ?, ?)'
-        )->execute([$site, $user['id'], $eventType, $eventJson]);
+        )->execute([$site, $user['id'], 'operacion_actualizada', $eventJson]);
         sync_normalized_operations($pdo, $site, $state, (int) $user['id']);
-        audit($pdo, (int) $user['id'], 'operational_' . substr($eventType, 0, 48), $site);
+        audit($pdo, (int) $user['id'], 'operational_state_updated', $site);
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();
@@ -543,7 +558,7 @@ if ($method === 'POST' && preg_match('#^admin/users/(\d+)/reset-password$#', $ro
     if (!$target) {
         json_response(['ok' => false, 'error' => 'Usuario no encontrado'], 404);
     }
-    if (in_array($target['username'], ['administracion', 'administracion@lartisantaller.com'], true)) {
+    if (is_primary_user($target, $config)) {
         json_response(['ok' => false, 'error' => 'La cuenta principal se recupera desde el acceso administrativo'], 422);
     }
 
@@ -615,8 +630,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!valid_username($username)) {
         json_response(['ok' => false, 'error' => 'Usuario o correo laboral inválido'], 422);
     }
-    if (in_array($existing['username'], ['administracion', 'administracion@lartisantaller.com'], true)
-        && ($role !== 'administracion' || !$active)) {
+    if (is_primary_user($existing, $config) && ($role !== 'administracion' || !$active)) {
         json_response(['ok' => false, 'error' => 'La cuenta principal no puede bloquearse ni cambiar de cargo'], 422);
     }
     if ($allLocations) {
@@ -638,7 +652,11 @@ if ($method === 'GET' && $route === 'admin/users') {
         'SELECT id, username, full_name, role, assigned_location, assigned_locations, access_all_locations, active, must_change_password, report_permissions, action_permissions, mfa_required, created_at
          FROM users ORDER BY full_name'
     )->fetchAll();
-    json_response(['ok' => true, 'users' => $rows]);
+    $users = array_map(static fn (array $row): array => public_user($row, $config) + [
+        'active' => (bool) $row['active'],
+        'created_at' => $row['created_at'],
+    ], $rows);
+    json_response(['ok' => true, 'users' => $users]);
 }
 
 if ($method === 'GET' && $route === 'admin/health') {

@@ -127,7 +127,7 @@ function pnl_access_token(array $config): string
 
 function pnl_fetch_sheet_values(array $config): array
 {
-    $sheetId = (string) ($config['pnl_sync']['spreadsheet_id'] ?? '1K-MQnFGyr1MN_HRtTyXdDrjai8l2-gAPetSmPx11viA');
+    $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
     $range = (string) ($config['pnl_sync']['range'] ?? "'P&L Consolidado 2026 COPIA'!A1:AN220");
     if ($sheetId === '' || $range === '') throw new RuntimeException('Falta identificar la hoja del P&L.');
     $accessToken = pnl_access_token($config);

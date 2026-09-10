@@ -8,8 +8,8 @@ const allCapabilities = { central: true, minimumStock: true, countStock: true, a
 const admin = { role: 'administracion', capabilities: allCapabilities };
 const seller = { role: 'vendedora' };
 const central = { role: 'vendedora', capabilities: { central: true } };
-const andrea = { role: 'supervisora', capabilities: { central: true, minimumStock: true, countStock: true, supervisorReports: true } };
-const betzi = { role: 'supervisora', capabilities: { central: true, minimumStock: true, approveStock: true, schedules: true } };
+const supervisorReports = { role: 'supervisora', capabilities: { central: true, minimumStock: true, countStock: true, supervisorReports: true } };
+const supervisorOperations = { role: 'supervisora', capabilities: { central: true, minimumStock: true, approveStock: true, schedules: true } };
 const answer = (query, expected, access = seller) => {
   const result = searchAssistant(query, access);
   assert.equal(result.kind, 'answer', `${query}: ${JSON.stringify(result)}`);
@@ -26,7 +26,7 @@ test('catalog has unique IDs, sources and three consistent presentations', () =>
   }
 });
 
-for (const [profile, access] of Object.entries({ seller, central, andrea, betzi, admin })) {
+for (const [profile, access] of Object.entries({ seller, central, supervisorReports, supervisorOperations, admin })) {
   for (const item of topicsForRole(access.role, access.capabilities)) {
     test(`${profile}: canonical ${item.id}`, () => answer(item.question, item.id, access));
     test(`${profile}: casing/accent ${item.id}`, () => answer(item.question.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase(), item.id, access));
@@ -92,8 +92,8 @@ for (const id of ['create-user', 'limits', 'prices', 'pnl', 'admin-recovery', 'b
 }
 test('seller cannot change product prices', () => assert.equal(searchAssistant('como cambio el precio de un producto', seller).kind, 'restricted'));
 test('capabilities are explicit, not inferred from broad role', () => {
-  assert.equal(searchAssistant('¿Cómo apruebo un ajuste de stock?', andrea).kind, 'restricted');
-  assert.equal(searchAssistant('¿Cómo cargo un conteo físico de stock?', betzi).kind, 'restricted');
+  assert.equal(searchAssistant('¿Cómo apruebo un ajuste de stock?', supervisorReports).kind, 'restricted');
+  assert.equal(searchAssistant('¿Cómo cargo un conteo físico de stock?', supervisorOperations).kind, 'restricted');
   answer('¿Cómo gestiono un pedido que llegó a Central?', 'central-order', central);
 });
 test('follow-ups use only an allowed, recent topic', () => {

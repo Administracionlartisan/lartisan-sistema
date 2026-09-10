@@ -102,7 +102,13 @@ function audit(PDO $pdo, ?int $userId, string $type, ?string $detail = null): vo
     $stmt->execute([$userId, $type, $detail, client_ip()]);
 }
 
-function public_user(array $user): array
+function is_primary_user(array $user, array $config): bool
+{
+    $primary = mb_strtolower(trim((string) ($config['primary_admin_username'] ?? $config['admin_recovery_email'] ?? '')), 'UTF-8');
+    return $primary !== '' && hash_equals($primary, mb_strtolower((string) ($user['username'] ?? ''), 'UTF-8'));
+}
+
+function public_user(array $user, array $config): array
 {
     $result = [
         'id' => (int) $user['id'],
@@ -113,15 +119,13 @@ function public_user(array $user): array
         'assignedLocations' => assigned_locations($user),
         'accessAllLocations' => (bool) $user['access_all_locations'],
         'mustChangePassword' => (bool) $user['must_change_password'],
+        'primary' => is_primary_user($user, $config),
     ];
     if (($user['report_permissions'] ?? null) !== null) {
         $result['reportPermissions'] = json_decode((string) $user['report_permissions'], true) ?: [];
     }
     if (($user['action_permissions'] ?? null) !== null) {
         $result['actionPermissions'] = json_decode((string) $user['action_permissions'], true) ?: [];
-    }
-    if (($user['mfa_required'] ?? null) !== null) {
-        $result['mfaRequired'] = (bool) $user['mfa_required'];
     }
     return $result;
 }
@@ -257,6 +261,97 @@ function user_can_access_site(array $user, string $site): bool
     }
     return (bool) $user['access_all_locations']
         || in_array($site, assigned_locations($user), true);
+}
+
+function user_action_permissions(array $user): array
+{
+    if (($user['action_permissions'] ?? null) === null) {
+        return $user['role'] === 'supervisora'
+            ? ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar']
+            : ['cobrar', 'egresos', 'pedidos', 'incidencias', 'transferirCaja'];
+    }
+    $decoded = json_decode((string) ($user['action_permissions'] ?? '[]'), true);
+    return is_array($decoded) ? array_values(array_filter($decoded, 'is_string')) : [];
+}
+
+function user_can_action(array $user, string $permission): bool
+{
+    return $user['role'] === 'administracion' || in_array($permission, user_action_permissions($user), true);
+}
+
+function user_can_report(array $user, string $report): bool
+{
+    if ($user['role'] === 'administracion') return true;
+    $decoded = json_decode((string) ($user['report_permissions'] ?? '[]'), true);
+    return is_array($decoded) && in_array($report, $decoded, true);
+}
+
+/**
+ * A browser always sends a complete snapshot. The server accepts only the
+ * portions authorized for the authenticated account and preserves everything
+ * else, so a forged request cannot bypass a hidden/disabled control.
+ */
+function authorize_operational_snapshot(array $user, array $previous, array $incoming): array
+{
+    if ($user['role'] === 'administracion') {
+        unset($incoming['audit']);
+        $incoming['audit'] = $previous['audit'] ?? [];
+        return $incoming;
+    }
+
+    $rules = [
+        'sales' => ['cobrar', 'anular'],
+        'payments' => ['cobrar', 'anular'],
+        'savedOrders' => ['cobrar'],
+        'returnsLog' => ['anular'],
+        'expensesLog' => ['egresos'],
+        'cashAdjustments' => ['egresos'],
+        'stockRequests' => ['pedidos'],
+        'incidents' => ['incidencias'],
+        'stockAdjustments' => ['stock'],
+        'realStock' => ['stock'],
+        'minimumStock' => ['stock'],
+        'cashTransfers' => ['transferirCaja'],
+        'stock' => ['cobrar', 'anular', 'pedidos', 'stock'],
+        'stockMovements' => ['cobrar', 'anular', 'pedidos', 'stock'],
+        'cash' => ['cobrar', 'egresos', 'transferirCaja'],
+        'cashOpen' => ['cobrar'],
+        'activeShift' => ['cobrar'],
+        'shiftLog' => ['cobrar'],
+        'envelopeRecords' => ['cobrar'],
+        'cashLedger' => ['cobrar', 'egresos', 'transferirCaja'],
+        'attendanceRecords' => ['cobrar', 'pedidos', 'incidencias'],
+    ];
+    $serverOnly = ['prices', 'onlinePrices', 'limitsBySite', 'priceChanges', 'audit'];
+    $result = $previous;
+    foreach ($incoming as $key => $value) {
+        if (!is_string($key) || in_array($key, $serverOnly, true)) continue;
+        $required = $rules[$key] ?? [];
+        if (!$required) continue;
+        foreach ($required as $permission) {
+            if (user_can_action($user, $permission)) {
+                $result[$key] = $value;
+                break;
+            }
+        }
+    }
+    if (array_key_exists('schedules', $incoming) && user_can_report($user, 'Personal')) {
+        $result['schedules'] = $incoming['schedules'];
+    }
+    return $result;
+}
+
+function operational_snapshot_for_user(array $user, array $state): array
+{
+    if ($user['role'] === 'administracion') return $state;
+    unset($state['audit'], $state['priceChanges'], $state['limitsBySite']);
+    if (!user_can_report($user, 'Personal')) unset($state['schedules']);
+    if (!user_can_action($user, 'egresos')) unset($state['expensesLog'], $state['cashAdjustments']);
+    if (!user_can_action($user, 'transferirCaja')) unset($state['cashTransfers']);
+    if (!user_can_action($user, 'stock')) unset($state['realStock'], $state['stockAdjustments']);
+    if (!user_can_action($user, 'anular')) unset($state['returnsLog']);
+    if (!user_can_action($user, 'incidencias')) unset($state['incidents']);
+    return $state;
 }
 
 function ensure_operations_schema(PDO $pdo): void

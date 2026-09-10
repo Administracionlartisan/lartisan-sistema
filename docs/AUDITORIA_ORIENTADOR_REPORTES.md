@@ -2,15 +2,15 @@
 
 ## Alcance y resultado
 
-Se contrastaron los 28 bloques administrativos realmente renderizados y Reportes de Andrea con su código, no solo con los títulos del menú. Se amplió la guía gratuita con 288 frases de consulta de referencia, sinónimos, normalización de mayúsculas/tildes y tolerancia limitada a errores de escritura. No se afirma cubrir literalmente toda posible pregunta.
+Se contrastaron los 28 bloques administrativos realmente renderizados y Reportes de supervisión con su código, no solo con los títulos del menú. Se amplió la guía gratuita con frases de consulta de referencia, sinónimos, normalización de mayúsculas/tildes y tolerancia limitada a errores de escritura. No se afirma cubrir literalmente toda posible pregunta.
 
 Esta entrega modifica la ayuda, sus textos y la navegación voluntaria a reportes; no implementa los informes pendientes, no corrige sus cálculos, no consulta cifras en vivo y no modifica operaciones ni bases de datos.
 
 ## Perfiles y seguridad
 
 - Administración y Gerencia comparten rol administrativo, pero el catálogo y los botones respetan reportPermissions de cada cuenta.
-- Supervisión no hereda automáticamente informes administrativos. Solo la habilitación específica existente permite Reportes de Andrea.
-- Betzi u otra supervisora sin esa habilitación conserva la ayuda operativa y recibe orientación para pedir un informe, no un enlace restringido.
+- Supervisión no hereda automáticamente informes administrativos. Solo la habilitación específica permite Reportes de supervisión.
+- Un perfil de supervisión sin esa habilitación conserva la ayuda operativa y recibe orientación para pedir un informe, no un enlace restringido.
 - Vendedoras mantienen la guía operativa anterior. Una consulta explícita sobre reportes no amplía sus permisos.
 - La navegación se revalida tanto al mostrar/pulsar el botón como en el componente principal. Es una protección de navegación, no sustituye la autorización del servidor.
 - El motor de reportes es puro y local: sin API de IA, tokens, red, acceso a almacenamiento ni lectura financiera.
@@ -61,7 +61,7 @@ Esta entrega modifica la ayuda, sus textos y la navegación voluntaria a reporte
 | Auditoria | Auditoría | Operativo con límites |
 | Incidencias | Incidencias | Operativo con límites |
 | Alertas | Alertas operativas | Operativo con límites |
-| Supervision | Reportes de Andrea | Operativo con límites |
+| Supervision | Reportes de supervisión | Operativo con límites |
 
 ## Catálogo de preguntas, filtros y límites
 
@@ -681,19 +681,19 @@ Consultas de referencia:
 - pendientes operativos
 - quien falta cerrar caja
 
-### Reportes de Andrea
+### Reportes de supervisión
 
-- Ruta: Menú → Reportes → Reportes de Andrea.
+- Ruta: Menú → Reportes → Reportes de supervisión.
 - Estado: Operativo con límites.
 - Alcance: Ventas activas de la sesión, stock bajo, pedidos pendientes y estado de cajas por sucursal.
 - Filtros: Entrá en Reportes y buscá la fila del local. No tiene Desde/Hasta ni selector propio de fecha/local: muestra un resumen de sesión por sucursal.
-- Límites: Solo aparece con la habilitación específica de Reportes de Andrea; el rol Supervisión por sí solo no alcanza. No incluye P&L, márgenes ni historial mensual completo. Usá únicamente los locales autorizados y no interpretes datos cargados como una consolidación histórica certificada.
-- Evidencia: app/page.tsx · tab === Reportes && isAndrea.
+- Límites: Solo aparece con la habilitación específica de reportes; el rol Supervisión por sí solo no alcanza. No incluye P&L, márgenes ni historial mensual completo. Usá únicamente los locales autorizados y no interpretes datos cargados como una consolidación histórica certificada.
+- Evidencia: app/page.tsx · permiso supervisorReports.
 
 Consultas de referencia:
 
 - resumen supervision
-- reportes andrea
+- reportes supervisora
 - ventas de cada local
 - cuanto vendio cada local
 - comparar sucursales
@@ -713,4 +713,3 @@ Consultas de referencia:
 - La auditoría fue de código y pruebas programáticas; no certifica que todas las fuentes de producción estén completas ni sustituye pruebas con cada usuario real.
 - Fuente única del catálogo y textos: `app/data/reportGuide.ts`; integración: `app/components/AiHelpChat.tsx` y `app/page.tsx`.
 - Al completar un reporte, actualizar su estado, filtros, límites, preguntas y pruebas en la misma entrega. Si cambian permisos, revisar ambos puntos de autorización de la navegación.
-

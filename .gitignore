@@ -36,3 +36,10 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# private server configuration and generated release archives
+/donweb-api/config.local.php
+/donweb-api/*.local.php
+/*.zip
+/*.tar.gz
+/tsconfig.tsbuildinfo
