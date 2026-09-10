@@ -17,6 +17,7 @@ import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent,
   CashAdjustment, CashFields, CashLedgerEntry, CashShift, CashTransfer,
   EmployeeSchedule, EnvelopeRecord, Expense, Incident, ManagedUser,
+  ExpenseSyncSnapshot,
   OperationalLimits, OperationalSnapshot, PasswordResetRequest, Payment,
   PriceChange, Product, ReturnTransaction, Role, Sale, SavedOrder,
   StockAdjustment, StockMovement, StockRequest, SystemHealth,
@@ -98,6 +99,9 @@ export default function Home() {
     [pnlConnection, setPnlConnection] = useState<{ connected: boolean; rows: string[][]; updatedAt: string | null }>({ connected: false, rows: [], updatedAt: null }),
     [pnlSyncing, setPnlSyncing] = useState(false),
     [pnlSyncMessage, setPnlSyncMessage] = useState(""),
+    [expenseSync, setExpenseSync] = useState<ExpenseSyncSnapshot>({ connected: false, data: null, updatedAt: null }),
+    [expenseSyncing, setExpenseSyncing] = useState(false),
+    [expenseSyncMessage, setExpenseSyncMessage] = useState(""),
     [hourInterval, setHourInterval] = useState(1),
     [newUserName, setNewUserName] = useState(""),
     [newUserRole, setNewUserRole] = useState<Role>("vendedora"),
@@ -460,6 +464,23 @@ export default function Home() {
       .catch(() => undefined);
     return () => { active = false; };
   }, [user?.id, user?.role]);
+  useEffect(() => {
+    if (user?.role !== "administracion") return;
+    let active = true;
+    fetch(`${API_BASE}/admin/expenses/latest`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = (await response.json()) as ApiPayload;
+        if (!active) return;
+        setExpenseSync({
+          connected: Boolean(data.connected),
+          data: data.snapshot?.data || null,
+          updatedAt: data.snapshot?.updatedAt || null,
+        });
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [user?.id, user?.role]);
   const connectPnlGoogle = async () => {
     setPnlSyncMessage("");
     const response = await fetch(`${API_BASE}/admin/pnl/authorization-url`, { credentials: "include" });
@@ -484,6 +505,22 @@ export default function Home() {
       setPnlSyncMessage(error instanceof Error ? error.message : "No se pudo actualizar el P&L.");
     } finally {
       setPnlSyncing(false);
+    }
+  };
+  const syncExpensesFromGoogle = async () => {
+    setExpenseSyncing(true);
+    setExpenseSyncMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/expenses/sync`, { method: "POST", credentials: "include" });
+      const data = (await response.json()) as ApiPayload;
+      if (!response.ok) throw new Error(data.error || "No se pudieron actualizar gastos y cuentas por pagar.");
+      if (!data.snapshot?.data) throw new Error("Drive no devolvió una copia válida de gastos.");
+      setExpenseSync({ connected: true, data: data.snapshot.data, updatedAt: data.snapshot.updatedAt || new Date().toISOString() });
+      setExpenseSyncMessage(`Gastos actualizados desde Drive: ${data.snapshot.rowsImported || 0} registros verificados.`);
+    } catch (error) {
+      setExpenseSyncMessage(error instanceof Error ? error.message : "No se pudieron actualizar gastos y cuentas por pagar.");
+    } finally {
+      setExpenseSyncing(false);
     }
   };
   const loadOperationalData = async () => {
@@ -5858,12 +5895,12 @@ export default function Home() {
                             </p>
                           </div>
                           <div className="rounded bg-[#fff5d8] p-4 text-sm">
-                            <b>Próximo paso de integración</b>
+                            <b>Integración de gastos disponible</b>
                             <p className="mt-2">
-                              Al confirmar la estructura final de P&amp;L, los datos de
-                              ventas, cobros, cajas y stock pasarán a actualizar esta
-                              vista automáticamente; gastos y cuentas por pagar quedan
-                              para la segunda etapa.
+                              En Egresos ya podés actualizar una copia de solo lectura de
+                              GASTOS OPERATIVOS para consultar gastos y cuentas por pagar.
+                              Las ventas, cobros, cajas y stock seguirán requiriendo su propia
+                              integración antes de actualizar esta vista automáticamente.
                             </p>
                           </div>
                           <div className="rounded bg-[#fff1ec] p-4 text-sm">
@@ -6385,6 +6422,38 @@ export default function Home() {
                   )}
                   {adminReport === "Egresos" && (
                     <div className="mt-5">
+                      <div className="rounded-lg border border-[#b9d8c0] bg-[#eef5ef] p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <b>Gastos y cuentas por pagar de Drive</b>
+                            <p className="mt-1 text-sm text-slate-600">
+                              Consulta de solo lectura desde GASTOS OPERATIVOS. La hoja sigue siendo la fuente y no se modifica desde este sistema.
+                            </p>
+                          </div>
+                          <button onClick={syncExpensesFromGoogle} disabled={!expenseSync.connected || expenseSyncing} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
+                            {expenseSyncing ? "Actualizando…" : "Actualizar gastos desde Drive"}
+                          </button>
+                        </div>
+                        {expenseSyncMessage && <p className={`mt-3 rounded p-3 text-sm ${expenseSyncMessage.startsWith("Gastos actualizados") ? "bg-white text-green-800" : "bg-[#fff1ec] text-red-800"}`}>{expenseSyncMessage}</p>}
+                        {!expenseSync.connected && <p className="mt-3 rounded bg-[#fff5d8] p-3 text-sm">Primero conectá la lectura de Google desde P&amp;L consolidado. Es la misma autorización de solo lectura.</p>}
+                      </div>
+                      {expenseSync.data && (
+                        <>
+                          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="rounded bg-[#183a67] p-4 text-white"><p className="text-sm">Cuentas por pagar</p><b className="mt-2 block text-2xl">{money.format(expenseSync.data.summary.totalPayable)}</b><p className="mt-1 text-xs">Saldo pendiente informado</p></div>
+                            <div className="rounded bg-[#fff1ec] p-4"><p className="text-sm">Documentos pendientes</p><b className="mt-2 block text-2xl">{expenseSync.data.summary.openCount}</b><p className="mt-1 text-xs">Con importe a pagar mayor a cero</p></div>
+                            <div className="rounded bg-[#eef2f6] p-4"><p className="text-sm">Gasto histórico importado</p><b className="mt-2 block text-2xl">{money.format(expenseSync.data.summary.totalExpenses)}</b><p className="mt-1 text-xs">No equivale a resultado mensual</p></div>
+                            <div className="rounded bg-[#eef5ef] p-4"><p className="text-sm">Última lectura</p><b className="mt-2 block text-sm">{expenseSync.updatedAt ? new Date(expenseSync.updatedAt.replace(" ", "T")).toLocaleString("es-AR") : "Sin lectura"}</b><p className="mt-1 text-xs">{expenseSync.data.sourceRows} registros válidos</p></div>
+                          </div>
+                          <div className="mt-4 grid gap-4 xl:grid-cols-[1.35fr_.65fr]">
+                            <div className="overflow-auto rounded border">
+                              <div className="border-b bg-[#eef2f6] p-4"><b>Cuentas pendientes por proveedor</b><p className="mt-1 text-sm text-slate-600">Se muestran los mayores saldos pendientes informados en la hoja.</p></div>
+                              <table className="w-full min-w-[720px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Fecha</th><th className="p-3 text-left">Proveedor</th><th className="p-3 text-left">Concepto</th><th className="p-3 text-right">Total</th><th className="p-3 text-right">A pagar</th><th className="p-3 text-left">Estado</th></tr></thead><tbody>{expenseSync.data.summary.openItems.length ? expenseSync.data.summary.openItems.map((item, index) => <tr key={`${item.supplier}-${item.document}-${index}`} className="border-t"><td className="p-3">{item.date || "—"}</td><td className="p-3 font-bold">{item.supplier}</td><td className="p-3">{item.category}</td><td className="p-3 text-right">{money.format(item.total)}</td><td className="p-3 text-right font-bold text-[#9c302a]">{money.format(item.amountDue)}</td><td className="p-3">{item.status || "Pendiente"}</td></tr>) : <tr><td colSpan={6} className="p-4 text-slate-500">No hay cuentas con saldo pendiente en la última lectura.</td></tr>}</tbody></table>
+                            </div>
+                            <div className="rounded border p-4"><b>Mayor saldo por proveedor</b><div className="mt-3 space-y-2 text-sm">{expenseSync.data.summary.bySupplier.filter((item) => item.outstanding > 0).slice(0, 8).map((item) => <div key={item.label} className="rounded bg-[#eef2f6] p-3"><div className="flex justify-between gap-3"><b>{item.label}</b><b className="text-[#9c302a]">{money.format(item.outstanding)}</b></div><p className="mt-1 text-xs text-slate-600">{item.count} comprobantes · Total histórico {money.format(item.total)}</p></div>)}{!expenseSync.data.summary.bySupplier.some((item) => item.outstanding > 0) && <p className="rounded bg-[#eef5ef] p-3 text-sm">Sin proveedores con saldo pendiente.</p>}</div></div>
+                          </div>
+                        </>
+                      )}
                       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <div className="rounded bg-[#183a67] p-4 text-white">
                           <p className="text-sm">Resultado operativo</p>

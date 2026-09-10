@@ -98,6 +98,10 @@ export type StockRequest = {
 };
 
 export type Expense = { id: string; site: string; category: string; amount: number; detail: string; receiptName: string; createdAt: string; createdBy: string };
+export type ExpenseSyncItem = { date: string; supplier: string; category: string; document: string; total: number; amountDue: number; paid: boolean; paymentMethod: string; status: string; responsible: string };
+export type ExpenseSyncGroup = { label: string; total: number; outstanding: number; count: number };
+export type ExpenseSyncSummary = { totalExpenses: number; totalPaid: number; totalPayable: number; openCount: number; byCategory: ExpenseSyncGroup[]; bySupplier: ExpenseSyncGroup[]; openItems: ExpenseSyncItem[] };
+export type ExpenseSyncSnapshot = { connected: boolean; data: { sourceRows: number; summary: ExpenseSyncSummary } | null; updatedAt: string | null };
 export type ReturnTransaction = { id: string; saleId: string; site: string; kind: "Devolución" | "Cambio"; amount: number; refundMethod: string; reason: string; restock: boolean; creditNoteNumber: string; lines: { productId: number; quantity: number }[]; createdAt: string; createdBy: string };
 export type CashTransfer = { id: string; originSite: string; destination: string; amount: number; reason: string; status: "Pendiente de recepción" | "Recibida" | "Anulada"; createdAt: string; createdBy: string; receivedAt?: string; receivedBy?: string };
 export type AttendanceRecord = { id: string; userName: string; site: string; kind: "Entrada" | "Salida"; at: string; atISO: string; lateMinutes?: number };
@@ -172,7 +176,12 @@ export type ApiPayload = {
   delivery?: string;
   username?: string;
   temporaryPassword?: string;
-  snapshot?: { rows?: string[][]; updatedAt?: string | null; rowsImported?: number };
+  snapshot?: {
+    rows?: string[][];
+    data?: { sourceRows: number; summary: ExpenseSyncSummary };
+    updatedAt?: string | null;
+    rowsImported?: number;
+  };
 };
 
 export type PLRow = { label: string; financial: number[]; economic?: number[]; format?: "money" | "percent" | "times" | "days" };

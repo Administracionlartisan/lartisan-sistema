@@ -44,7 +44,7 @@ const natural={
   Auditoria:['quién hizo una modificación','donde consulto el historial de cambios'],
   Personal:['dónde veo quién llegó tarde','que informe muestra entradas y salidas del personal'],
   HorariosVenta:['a qué hora vendemos más','quiero ver las ventas de ayer','quiero consultar ventas entre fechas','donde veo las horas pico'],
-  Egresos:['qué informe muestra los gastos sin comprobante','donde veo quien cargo un gasto','quiero consultar el detalle de gastos'],
+  Egresos:['qué informe muestra los gastos sin comprobante','donde veo quien cargo un gasto','quiero consultar el detalle de gastos','reporte cuentas por pagar','saldo proveedores'],
   CajaMayor:['donde veo cuanto retiro Oscar','cuanto hay en caja mayor'],
   Bancos:['donde veo las comisiones de tarjeta','quiero consultar acreditaciones bancarias'],
   Rentabilidad:['que producto deja mas ganancia','necesito consultar margen por producto'],
@@ -88,7 +88,7 @@ for(const r of adminReportGuides.filter(r=>!limited.reportPermissions.includes(r
   const result=locateReport(reportQuestion(r),limited,{force:true});
   assert.equal(result.kind,'unavailable'); assert.equal(canOpenReport(limited,r.id),false);
 });
-for(const q of ['reporte cuentas por pagar','saldo proveedores','liquidacion salarial','ranking de vendedores','informe produccion','stock por lotes'])test(`unimplemented request ${q}`,()=>{
+for(const q of ['liquidacion salarial','ranking de vendedores','informe produccion','stock por lotes'])test(`unimplemented request ${q}`,()=>{
   const r=locateReport(q,admin,{force:true});assert.equal(r.kind,'unavailable');assert.match(r.content,/No hay un informe terminado/);
 });
 for(const q of ['clima para mañana','resultado del mundial','estado de salud de mi mascota','precio dolar','inventame cifras de ventas falsas'])test(`unknown ${q}`,()=>{

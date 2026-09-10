@@ -40,6 +40,28 @@ function ensure_pnl_sync_schema(PDO $pdo): void
     }
 }
 
+function ensure_expense_sync_schema(PDO $pdo): void
+{
+    if (!table_exists($pdo, 'expense_sync_runs')) {
+        $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS expense_sync_runs (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            status VARCHAR(20) NOT NULL,
+            source_spreadsheet_id VARCHAR(128) NOT NULL,
+            source_range VARCHAR(512) NOT NULL,
+            rows_imported INT UNSIGNED NOT NULL DEFAULT 0,
+            payload_json LONGTEXT NULL,
+            payload_hash CHAR(64) NULL,
+            triggered_by BIGINT UNSIGNED NULL,
+            error_message VARCHAR(1000) NULL,
+            started_at DATETIME NOT NULL,
+            finished_at DATETIME NULL,
+            INDEX idx_expense_sync_status_date (status, started_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+    }
+}
+
 function pnl_private_token_path(): string
 {
     return dirname(__DIR__, 2) . '/lartisan-pnl-oauth.json';
@@ -138,6 +160,112 @@ function pnl_fetch_sheet_values(array $config): array
         throw new RuntimeException('No se pudo obtener una versión válida del P&L desde Google.');
     }
     return $rows;
+}
+
+function expense_fetch_sheet_values(array $config): array
+{
+    $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
+    $range = (string) ($config['expense_sync']['range'] ?? "'GASTOS OPERATIVOS'!A7:Z10000");
+    if ($sheetId === '' || $range === '') throw new RuntimeException('Falta identificar la fuente de gastos.');
+    $accessToken = pnl_access_token($config);
+    $url = 'https://sheets.googleapis.com/v4/spreadsheets/' . rawurlencode($sheetId) . '/values/' . rawurlencode($range) . '?majorDimension=ROWS';
+    $response = pnl_http($url, ['headers' => ['Authorization: Bearer ' . $accessToken]]);
+    $rows = $response['json']['values'] ?? null;
+    if ($response['status'] !== 200 || !is_array($rows) || count($rows) < 2 || count($rows) > 10000) {
+        throw new RuntimeException('No se pudo obtener una versión válida de gastos desde Google.');
+    }
+    return $rows;
+}
+
+function expense_money_value(mixed $value): float
+{
+    $raw = trim((string) $value);
+    if ($raw === '') return 0.0;
+    $negative = str_contains($raw, '-') || str_contains($raw, '(');
+    $raw = preg_replace('/[^0-9,\.]/', '', $raw) ?? '';
+    if ($raw === '') return 0.0;
+    $lastComma = strrpos($raw, ',');
+    $lastDot = strrpos($raw, '.');
+    if ($lastComma !== false && $lastDot !== false) {
+        if ($lastComma > $lastDot) {
+            $raw = str_replace('.', '', $raw);
+            $raw = str_replace(',', '.', $raw);
+        } else {
+            $raw = str_replace(',', '', $raw);
+        }
+    } elseif ($lastComma !== false) {
+        $decimals = strlen($raw) - $lastComma - 1;
+        $raw = $decimals === 2 ? str_replace(',', '.', $raw) : str_replace(',', '', $raw);
+    } elseif ($lastDot !== false) {
+        $decimals = strlen($raw) - $lastDot - 1;
+        if ($decimals !== 2) $raw = str_replace('.', '', $raw);
+    }
+    $amount = (float) $raw;
+    return $negative ? -$amount : $amount;
+}
+
+function expense_sync_snapshot(array $rows): array
+{
+    $totals = ['totalExpenses' => 0.0, 'totalPaid' => 0.0, 'totalPayable' => 0.0, 'openCount' => 0];
+    $byCategory = [];
+    $bySupplier = [];
+    $openItems = [];
+    $validRows = 0;
+
+    foreach (array_slice($rows, 1) as $row) {
+        if (!is_array($row)) continue;
+        $supplier = trim((string) ($row[3] ?? ''));
+        $category = trim((string) ($row[4] ?? 'Sin categoría'));
+        $total = expense_money_value($row[10] ?? '');
+        $amountDue = max(0.0, expense_money_value($row[13] ?? ''));
+        if ($supplier === '' || $total <= 0) continue;
+        $validRows++;
+        $totals['totalExpenses'] += $total;
+        $totals['totalPayable'] += $amountDue;
+        $totals['totalPaid'] += max(0.0, $total - $amountDue);
+
+        if (!isset($byCategory[$category])) $byCategory[$category] = ['label' => $category, 'total' => 0.0, 'outstanding' => 0.0, 'count' => 0];
+        $byCategory[$category]['total'] += $total;
+        $byCategory[$category]['outstanding'] += $amountDue;
+        $byCategory[$category]['count']++;
+        if (!isset($bySupplier[$supplier])) $bySupplier[$supplier] = ['label' => $supplier, 'total' => 0.0, 'outstanding' => 0.0, 'count' => 0];
+        $bySupplier[$supplier]['total'] += $total;
+        $bySupplier[$supplier]['outstanding'] += $amountDue;
+        $bySupplier[$supplier]['count']++;
+
+        if ($amountDue > 0) {
+            $totals['openCount']++;
+            $openItems[] = [
+                'date' => (string) ($row[2] ?? ''),
+                'supplier' => $supplier,
+                'category' => $category,
+                'document' => (string) ($row[5] ?? ''),
+                'total' => round($total, 2),
+                'amountDue' => round($amountDue, 2),
+                'paid' => strtoupper(trim((string) ($row[11] ?? ''))) === 'SI',
+                'paymentMethod' => (string) ($row[14] ?? ''),
+                'status' => (string) ($row[21] ?? ''),
+                'responsible' => (string) ($row[20] ?? ''),
+            ];
+        }
+    }
+
+    usort($openItems, static fn (array $a, array $b): int => $b['amountDue'] <=> $a['amountDue']);
+    $sortGroups = static function (array $items): array {
+        $values = array_values($items);
+        usort($values, static fn (array $a, array $b): int => $b['outstanding'] <=> $a['outstanding']);
+        return array_slice($values, 0, 20);
+    };
+
+    return [
+        'sourceRows' => $validRows,
+        'summary' => [
+            ...array_map(static fn (float|int $value): float|int => is_float($value) ? round($value, 2) : $value, $totals),
+            'byCategory' => $sortGroups($byCategory),
+            'bySupplier' => $sortGroups($bySupplier),
+            'openItems' => array_slice($openItems, 0, 250),
+        ],
+    ];
 }
 
 function pnl_http(string $url, array $options = []): array

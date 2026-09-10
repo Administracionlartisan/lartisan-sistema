@@ -30,6 +30,10 @@ return [
         'range' => "'P&L Consolidado 2026 COPIA'!A1:AN220",
         'redirect_uri' => 'https://www.lartisantaller.com/sistema-api/admin/pnl/google-callback',
     ],
+    // Usa la misma autorización de lectura de Google que P&L. No escribe en Drive.
+    'expense_sync' => [
+        'range' => "'GASTOS OPERATIVOS'!A7:Z10000",
+    ],
     // En producción esta sección se guarda fuera de public_html en
     // lartisan-ai-config.php.
     'openai' => [
