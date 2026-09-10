@@ -6075,7 +6075,7 @@ export default function Home() {
                 p="Creá accesos, asigná cargos y locales, bloqueá usuarios y definí qué reportes puede consultar cada administrativo."
               />
               <p className="mb-5 rounded border border-[#e7c26a] bg-[#fff5d8] p-4 text-sm">
-                Cada acceso es individual y se identifica con nombre de usuario y contraseña. Las claves se guardan cifradas en el servidor y las solicitudes de recuperación llegan directamente a esta sección. El doble factor para Administración, Betzi y Andrea se activará en una etapa posterior.
+                Cada acceso es individual y se identifica con nombre de usuario y contraseña. Las claves se guardan cifradas en el servidor y las solicitudes de recuperación llegan directamente a esta sección.
               </p>
               <div className="rounded-2xl border bg-white p-5">
                 <h2 className="font-bold">Crear nuevo usuario</h2>
