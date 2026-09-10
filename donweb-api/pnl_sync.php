@@ -275,6 +275,36 @@ function expense_sync_snapshot(array $rows): array
     ];
 }
 
+/**
+ * Guarda una copia de consulta de gastos. La fuente de Google conserva el
+ * control: este proceso no modifica celdas, pagos ni comprobantes originales.
+ */
+function expense_sync_from_google(PDO $pdo, array $config, int $userId): array
+{
+    ensure_expense_sync_schema($pdo);
+    $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
+    $range = (string) ($config['expense_sync']['range'] ?? "'GASTOS OPERATIVOS'!A7:Z10000");
+    if ($sheetId === '') throw new RuntimeException('La fuente de gastos no está configurada en el servidor');
+    $pdo->prepare("INSERT INTO expense_sync_runs (status, source_spreadsheet_id, source_range, triggered_by, started_at) VALUES ('running', ?, ?, ?, NOW())")
+        ->execute([$sheetId, $range, $userId]);
+    $runId = (int) $pdo->lastInsertId();
+    try {
+        $rows = expense_fetch_sheet_values($config);
+        $snapshot = expense_sync_snapshot($rows);
+        $payload = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($payload === false) throw new RuntimeException('No se pudo guardar la copia de gastos.');
+        $pdo->prepare("UPDATE expense_sync_runs SET status = 'verified', rows_imported = ?, payload_json = ?, payload_hash = ?, finished_at = NOW() WHERE id = ?")
+            ->execute([(int) $snapshot['sourceRows'], $payload, hash('sha256', $payload), $runId]);
+        audit($pdo, $userId, 'expenses_synced_from_google', 'filas=' . $snapshot['sourceRows']);
+        return ['data' => $snapshot, 'rowsImported' => $snapshot['sourceRows'], 'updatedAt' => date('Y-m-d H:i:s')];
+    } catch (Throwable $error) {
+        $pdo->prepare("UPDATE expense_sync_runs SET status = 'failed', error_message = ?, finished_at = NOW() WHERE id = ?")
+            ->execute([substr($error->getMessage(), 0, 1000), $runId]);
+        audit($pdo, $userId, 'expenses_sync_failed');
+        throw $error;
+    }
+}
+
 function pnl_http(string $url, array $options = []): array
 {
     if (!function_exists('curl_init')) throw new RuntimeException('El hosting no tiene disponible cURL.');

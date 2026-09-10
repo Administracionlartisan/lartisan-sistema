@@ -6427,11 +6427,11 @@ export default function Home() {
                           <div>
                             <b>Gastos y cuentas por pagar de Drive</b>
                             <p className="mt-1 text-sm text-slate-600">
-                              Consulta de solo lectura desde GASTOS OPERATIVOS. La hoja sigue siendo la fuente y no se modifica desde este sistema.
+                              Consulta de solo lectura desde GASTOS OPERATIVOS. Se actualiza al abrir si la última copia tiene más de 15 minutos; la hoja nunca se modifica desde este sistema.
                             </p>
                           </div>
                           <button onClick={syncExpensesFromGoogle} disabled={!expenseSync.connected || expenseSyncing} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
-                            {expenseSyncing ? "Actualizando…" : "Actualizar gastos desde Drive"}
+                            {expenseSyncing ? "Actualizando…" : "Actualizar ahora"}
                           </button>
                         </div>
                         {expenseSyncMessage && <p className={`mt-3 rounded p-3 text-sm ${expenseSyncMessage.startsWith("Gastos actualizados") ? "bg-white text-green-800" : "bg-[#fff1ec] text-red-800"}`}>{expenseSyncMessage}</p>}

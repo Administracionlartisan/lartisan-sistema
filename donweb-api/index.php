@@ -122,12 +122,26 @@ if ($method === 'POST' && $route === 'admin/pnl/sync') {
 }
 
 if ($method === 'GET' && $route === 'admin/expenses/latest') {
-    require_user($pdo, ['administracion']);
+    $admin = require_user($pdo, ['administracion']);
     ensure_expense_sync_schema($pdo);
     $latest = $pdo->query("SELECT rows_imported, payload_json, started_at, finished_at FROM expense_sync_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetch();
+    $connected = is_file(pnl_private_token_path());
+    $lastUpdate = $latest ? ($latest['finished_at'] ?: $latest['started_at']) : null;
+    $stale = !$lastUpdate || strtotime((string) $lastUpdate) < (time() - 15 * 60);
+    // Evita lecturas simultáneas desde varias pestañas y reintentos continuos
+    // si Drive devuelve un error. Administración conserva "Actualizar ahora".
+    $recentAttempt = $pdo->query("SELECT started_at FROM expense_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
+    if ($connected && $stale && !$recentAttempt) {
+        try {
+            expense_sync_from_google($pdo, $config, (int) $admin['id']);
+            $latest = $pdo->query("SELECT rows_imported, payload_json, started_at, finished_at FROM expense_sync_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetch();
+        } catch (Throwable $error) {
+            error_log('LARTISAN automatic expense sync failed: ' . $error->getMessage());
+        }
+    }
     json_response([
         'ok' => true,
-        'connected' => is_file(pnl_private_token_path()),
+        'connected' => $connected,
         'snapshot' => $latest ? [
             'data' => json_decode((string) $latest['payload_json'], true) ?: [],
             'rowsImported' => (int) $latest['rows_imported'],
@@ -141,25 +155,9 @@ if ($method === 'POST' && $route === 'admin/expenses/sync') {
     ensure_expense_sync_schema($pdo);
     $last = $pdo->query("SELECT started_at FROM expense_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
     if ($last) json_response(['ok' => false, 'error' => 'Esperá un minuto antes de volver a sincronizar.'], 429);
-    $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
-    $range = (string) ($config['expense_sync']['range'] ?? "'GASTOS OPERATIVOS'!A7:Z10000");
-    if ($sheetId === '') json_response(['ok' => false, 'error' => 'La fuente de gastos no está configurada en el servidor'], 503);
-    $pdo->prepare("INSERT INTO expense_sync_runs (status, source_spreadsheet_id, source_range, triggered_by, started_at) VALUES ('running', ?, ?, ?, NOW())")
-        ->execute([$sheetId, $range, $admin['id']]);
-    $runId = (int) $pdo->lastInsertId();
     try {
-        $rows = expense_fetch_sheet_values($config);
-        $snapshot = expense_sync_snapshot($rows);
-        $payload = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        if ($payload === false) throw new RuntimeException('No se pudo guardar la copia de gastos.');
-        $pdo->prepare("UPDATE expense_sync_runs SET status = 'verified', rows_imported = ?, payload_json = ?, payload_hash = ?, finished_at = NOW() WHERE id = ?")
-            ->execute([(int) $snapshot['sourceRows'], $payload, hash('sha256', $payload), $runId]);
-        audit($pdo, (int) $admin['id'], 'expenses_synced_from_google', 'filas=' . $snapshot['sourceRows']);
-        json_response(['ok' => true, 'snapshot' => ['data' => $snapshot, 'rowsImported' => $snapshot['sourceRows'], 'updatedAt' => date('Y-m-d H:i:s')]]);
+        json_response(['ok' => true, 'snapshot' => expense_sync_from_google($pdo, $config, (int) $admin['id'])]);
     } catch (Throwable $error) {
-        $pdo->prepare("UPDATE expense_sync_runs SET status = 'failed', error_message = ?, finished_at = NOW() WHERE id = ?")
-            ->execute([substr($error->getMessage(), 0, 1000), $runId]);
-        audit($pdo, (int) $admin['id'], 'expenses_sync_failed');
         json_response(['ok' => false, 'error' => 'No se pudieron actualizar gastos y cuentas por pagar. Se conserva la última versión válida.'], 502);
     }
 }
