@@ -1,11 +1,10 @@
 Options -Indexes
 RewriteEngine On
 
-<FilesMatch "^(config\.local\.php|config\.example\.php|bootstrap\.php)$">
+<FilesMatch "^(config\.local\.php|config\.example\.php|bootstrap\.php|assistant\.php|pnl_sync\.php|README\.md|.*\.(?:zip|tar|tar\.gz|tgz|bak|sql))$">
   Require all denied
 </FilesMatch>
 
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^(.+)$ index.php?route=$1 [QSA,L]
-
