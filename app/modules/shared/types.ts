@@ -139,7 +139,20 @@ export type OperationalSnapshot = {
   priceChanges?: PriceChange[];
 };
 
-export type SystemHealth = { api: "Verificando" | "Disponible" | "Sin respuesta"; checkedAt: string; database?: string; activeUsers?: number; totalUsers?: number; freeSpaceMb?: number | null };
+export type SystemHealth = {
+  api: "Verificando" | "Disponible" | "Sin respuesta";
+  checkedAt: string;
+  database?: string;
+  activeUsers?: number;
+  totalUsers?: number;
+  freeSpaceMb?: number | null;
+  databaseLatencyMs?: number;
+  events24h?: number;
+  failedSyncs24h?: number;
+  driveConnected?: boolean;
+  lastBackup?: { finished_at?: string | null; status?: string | null } | null;
+  alerts?: Array<{ level: "atencion" | "critico"; message: string }>;
+};
 export type AiSupportRequest = { id: string; userName: string; role: Role; site?: string; section?: string; question: string; status: "pendiente" | "resuelta"; createdAt: string };
 
 export type ApiUser = {

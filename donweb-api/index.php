@@ -714,6 +714,56 @@ if ($method === 'GET' && $route === 'admin/health') {
     ]);
 }
 
+if ($method === 'GET' && $route === 'admin/monitoring') {
+    require_user($pdo, ['administracion']);
+    ensure_pnl_sync_schema($pdo);
+    ensure_expense_sync_schema($pdo);
+
+    $startedAt = microtime(true);
+    $pdo->query('SELECT 1');
+    $databaseLatencyMs = (int) round((microtime(true) - $startedAt) * 1000);
+    $freeBytes = function_exists('disk_free_space') ? @disk_free_space(__DIR__) : false;
+    $totalUsers = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+    $activeUsers = (int) $pdo->query('SELECT COUNT(*) FROM users WHERE active = 1')->fetchColumn();
+    $events24h = (int) $pdo->query("SELECT COUNT(*) FROM operation_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+    $failedPnl = (int) $pdo->query("SELECT COUNT(*) FROM pnl_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+    $failedExpenses = (int) $pdo->query("SELECT COUNT(*) FROM expense_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+    $lastPnl = $pdo->query("SELECT finished_at, status FROM pnl_sync_runs ORDER BY id DESC LIMIT 1")->fetch();
+    $lastExpenses = $pdo->query("SELECT finished_at, status FROM expense_sync_runs ORDER BY id DESC LIMIT 1")->fetch();
+    $lastBackup = null;
+    if (table_exists($pdo, 'backup_runs')) {
+        $lastBackup = $pdo->query('SELECT finished_at, status FROM backup_runs ORDER BY id DESC LIMIT 1')->fetch();
+    }
+
+    $alerts = [];
+    if (($failedPnl + $failedExpenses) > 0) {
+        $alerts[] = ['level' => 'atencion', 'message' => 'Hubo sincronizaciones que no se completaron en las últimas 24 horas.'];
+    }
+    if (!$lastBackup || ($lastBackup['status'] ?? '') !== 'verified') {
+        $alerts[] = ['level' => 'atencion', 'message' => 'No hay un respaldo externo verificado recientemente.'];
+    }
+    if ($freeBytes !== false && $freeBytes < 512 * 1024 * 1024) {
+        $alerts[] = ['level' => 'critico', 'message' => 'El espacio disponible del servidor está por debajo de 512 MB.'];
+    }
+
+    json_response([
+        'ok' => true,
+        'api' => 'Disponible',
+        'database' => 'Disponible',
+        'database_latency_ms' => $databaseLatencyMs,
+        'users' => ['total' => $totalUsers, 'active' => $activeUsers],
+        'space' => $freeBytes === false ? null : (int) $freeBytes,
+        'events_24h' => $events24h,
+        'failed_syncs_24h' => $failedPnl + $failedExpenses,
+        'drive_connected' => is_file(pnl_private_token_path()),
+        'last_pnl_sync' => $lastPnl ?: null,
+        'last_expense_sync' => $lastExpenses ?: null,
+        'last_backup' => $lastBackup ?: null,
+        'alerts' => $alerts,
+        'checked_at' => gmdate('c'),
+    ]);
+}
+
 if ($method === 'GET' && $route === 'admin/backups/latest') {
     require_user($pdo, ['administracion']);
     $pdo->exec("CREATE TABLE IF NOT EXISTS backup_runs (

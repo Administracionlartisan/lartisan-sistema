@@ -421,8 +421,19 @@ export default function Home() {
     let active = true;
     const check = async () => {
       try {
-        let response = await fetch(`${API_BASE}/admin/health`, { credentials: "include", cache: "no-store" });
-        let data: { database?: string; users?: { active?: number; total?: number }; space?: number };
+        let response = await fetch(`${API_BASE}/admin/monitoring`, { credentials: "include", cache: "no-store" });
+        let data: {
+          api?: "Disponible";
+          database?: string;
+          users?: { active?: number; total?: number };
+          space?: number;
+          database_latency_ms?: number;
+          events_24h?: number;
+          failed_syncs_24h?: number;
+          drive_connected?: boolean;
+          last_backup?: { finished_at?: string | null; status?: string | null } | null;
+          alerts?: Array<{ level: "atencion" | "critico"; message: string }>;
+        };
         if (response.ok) {
           data = await response.json();
         } else {
@@ -437,6 +448,12 @@ export default function Home() {
           activeUsers: data.users?.active,
           totalUsers: data.users?.total,
           freeSpaceMb: typeof data.space === "number" ? Math.round(data.space / 1024 / 1024) : null,
+          databaseLatencyMs: data.database_latency_ms,
+          events24h: data.events_24h,
+          failedSyncs24h: data.failed_syncs_24h,
+          driveConnected: data.drive_connected,
+          lastBackup: data.last_backup,
+          alerts: data.alerts || [],
           checkedAt: new Date().toLocaleString("es-AR"),
         });
       } catch {
@@ -4448,18 +4465,20 @@ export default function Home() {
                 </div>
                 <div className="rounded-2xl border bg-white p-5 lg:col-span-2">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <b>Chequeo técnico automático</b>
+                    <b>Monitoreo de errores y rendimiento</b>
                     <button onClick={() => setHealthRefreshKey((value) => value + 1)} className="rounded border px-3 py-1.5 text-sm font-bold">Revisar ahora</button>
                   </div>
-                  <p className="mt-2 text-sm text-slate-600">Verifica automáticamente cada cinco minutos y permite una revisión manual.</p>
+                  <p className="mt-2 text-sm text-slate-600">Verifica API, base de datos, espacio, sincronizaciones y actividad cada cinco minutos. No modifica ventas, cajas ni datos de Drive.</p>
                   <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {[
                       ["API y base de datos", systemHealth.api === "Disponible" ? `Correcto · ${systemHealth.database || "Disponible"}` : systemHealth.api, systemHealth.api === "Disponible"],
                       ["Usuarios", systemHealth.activeUsers === undefined ? "Verificando" : `${systemHealth.activeUsers} activos de ${systemHealth.totalUsers}`, systemHealth.activeUsers !== undefined],
                       ["Espacio disponible", systemHealth.freeSpaceMb === undefined ? "Verificando" : systemHealth.freeSpaceMb === null ? "No informado por hosting" : `${systemHealth.freeSpaceMb.toLocaleString("es-AR")} MB libres`, systemHealth.freeSpaceMb !== undefined && systemHealth.freeSpaceMb !== null],
-                      ["Respaldo externo", "Pendiente de conectar Drive", false],
-                      ["Google Drive", "Sin configurar", false],
-                      ["Correo de alertas", "Sin configurar", false],
+                      ["Respuesta de base", systemHealth.databaseLatencyMs === undefined ? "Verificando" : `${systemHealth.databaseLatencyMs} ms`, systemHealth.databaseLatencyMs !== undefined && systemHealth.databaseLatencyMs < 800],
+                      ["Actividad operativa", systemHealth.events24h === undefined ? "Verificando" : `${systemHealth.events24h} eventos en 24 h`, systemHealth.events24h !== undefined],
+                      ["Sincronizaciones", systemHealth.failedSyncs24h === undefined ? "Verificando" : systemHealth.failedSyncs24h === 0 ? "Sin errores en 24 h" : `${systemHealth.failedSyncs24h} con error en 24 h`, systemHealth.failedSyncs24h === 0],
+                      ["Respaldo externo", systemHealth.lastBackup?.status === "verified" ? "Copia verificada" : "Sin copia verificada", systemHealth.lastBackup?.status === "verified"],
+                      ["Google Drive", systemHealth.driveConnected === undefined ? "Verificando" : systemHealth.driveConnected ? "Conectado · solo lectura" : "Sin conectar", systemHealth.driveConnected === true],
                       ["ARCA", "Pendiente de integración", false],
                     ].map(([label, status, ok]) => (
                       <div key={String(label)} className={`rounded border p-3 text-sm ${ok ? "border-emerald-200 bg-[#e7f4e8]" : "border-[#e7c26a] bg-[#fff5d8]"}`}>
@@ -4467,6 +4486,17 @@ export default function Home() {
                       </div>
                     ))}
                   </div>
+                  {systemHealth.alerts && systemHealth.alerts.length > 0 ? (
+                    <div className="mt-4 space-y-2">
+                      {systemHealth.alerts.map((alert) => (
+                        <p key={alert.message} className={`rounded border p-3 text-sm ${alert.level === "critico" ? "border-red-300 bg-red-50 text-red-900" : "border-[#e7c26a] bg-[#fff5d8] text-[#714f00]"}`}>
+                          <b>{alert.level === "critico" ? "Alerta crítica:" : "Atención:"}</b> {alert.message}
+                        </p>
+                      ))}
+                    </div>
+                  ) : systemHealth.api === "Disponible" ? (
+                    <p className="mt-4 rounded border border-emerald-200 bg-[#e7f4e8] p-3 text-sm text-emerald-900"><b>Sin alertas activas.</b> Los controles técnicos no detectaron problemas críticos.</p>
+                  ) : null}
                   {systemHealth.checkedAt && <p className="mt-3 text-xs text-slate-500">Última revisión: {systemHealth.checkedAt}.</p>}
                 </div>
               </div>
