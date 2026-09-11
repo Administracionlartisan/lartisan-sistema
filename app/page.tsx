@@ -267,12 +267,12 @@ export default function Home() {
   const setClosed = (value: boolean) => updateCashField("closed", value);
   const applyAuthenticatedUser = (profile: ApiUser) => {
     const next = managedUserFromApi(profile);
-    if (portal === "admin" && next.role !== "administracion") {
-      setMessage("Este acceso es exclusivo para Administración.");
+    if (portal === "admin" && !["administracion", "compras"].includes(next.role)) {
+      setMessage("Este acceso es exclusivo para Administración y Compras.");
       return false;
     }
-    if (portal === "ventas" && next.role === "administracion") {
-      setMessage("Administración debe ingresar desde admin.lartisantaller.com.");
+    if (portal === "ventas" && ["administracion", "compras"].includes(next.role)) {
+      setMessage("Este usuario debe ingresar desde admin.lartisantaller.com.");
       return false;
     }
     setOperationalReady(false);
@@ -284,7 +284,7 @@ export default function Home() {
       : allowedSites[0] || next.location || "Recoleta";
     setSite(initialSite);
     setPayment(METHODS[initialSite][0]);
-    setTab(next.role === "administracion" ? "Administración" : "Ventas");
+    setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : "Ventas");
     setMessage("");
     return true;
   };
@@ -2389,7 +2389,9 @@ export default function Home() {
           "Actualizaciones",
           "Integraciones",
         ]
-      : [
+      : user.role === "compras"
+        ? ["MRP"]
+        : [
           "Ventas",
           "Tareas",
           "Caja",
@@ -2439,7 +2441,7 @@ export default function Home() {
       </header>
       <div className="grid lg:grid-cols-[230px_1fr]">
         <aside id="menu-principal" className={`${navOpen ? "block" : "hidden"} border-b bg-[#fffdf8] p-4 lg:block lg:min-h-[calc(100vh-65px)] lg:border-r`}>
-          {user.role !== "administracion" && (
+          {!(["administracion", "compras"] as Role[]).includes(user.role) && (
             <>
               <label className="text-xs font-bold text-slate-500">
                 SUCURSAL ACTIVA
@@ -2474,8 +2476,10 @@ export default function Home() {
               >
                 <span className="flex items-center justify-between gap-2">
                   <span>
-                    {t === "Recetas y costos" || t === "Legajos" || t === "MRP"
+                    {t === "Recetas y costos" || t === "Legajos"
                       ? `${t} (Próximamente)`
+                      : t === "MRP"
+                        ? `${t} (En preparación)`
                       : t}
                   </span>
                   {t === "Tareas" && adminTaskAlertCount > 0 && (
@@ -4399,8 +4403,10 @@ export default function Home() {
                 Registrar cliente
               </button>
             </>
-          ) : (["Recetas y costos", "Legajos", "MRP"].includes(tab) && user.role === "administracion") ? (
+          ) : (["Recetas y costos", "Legajos"].includes(tab) && user.role === "administracion") ? (
             <ComingSoonPanel section={tab as ComingSoonSection} />
+          ) : tab === "MRP" && (user.role === "administracion" || (user.role === "compras" && can("mrp"))) ? (
+            <ComingSoonPanel section="MRP" />
           ) : tab === "Protección de datos" && user.role === "administracion" ? (
             <>
               <Heading
@@ -4973,6 +4979,7 @@ export default function Home() {
                     >
                       <option value="vendedora">Vendedora</option>
                       <option value="supervisora">Supervisora</option>
+                      <option value="compras">Compras</option>
                       <option value="administracion">Administración</option>
                     </select>
                   </label>
@@ -5171,6 +5178,7 @@ export default function Home() {
                           >
                             <option value="vendedora">Vendedora</option>
                             <option value="supervisora">Supervisora</option>
+                            <option value="compras">Compras</option>
                             <option value="administracion">
                               Administración
                             </option>

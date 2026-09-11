@@ -10,11 +10,13 @@ const API_BASE = "https://www.lartisantaller.com/sistema-api";
 const roleNames: Record<AssistantRole, string> = {
   vendedora: "Vendedora",
   supervisora: "Supervisión",
+  compras: "Compras",
   administracion: "Administración / Gerencia",
 };
 const suggestions: Record<AssistantRole, string[]> = {
   vendedora: ["¿Cómo registro una venta?", "¿Cómo envío solo una unidad de invitación?", "¿Cómo cierro mi turno?"],
   supervisora: ["¿Cómo elijo el local donde voy a trabajar?", "¿Cómo indico que falta un producto del pedido?", "¿Dónde veo los productos con stock bajo?"],
+  compras: ["¿Qué significa MRP?", "¿La web modifica la planilla MRP?", "¿Qué puede consultar Compras?"],
   administracion: ["¿Cómo creo un usuario y su clave temporal?", "¿Cómo sincronizo el P&L con Google Drive?", "¿Dónde reviso la salud del sistema?"],
 };
 
@@ -156,7 +158,7 @@ export default function AiHelpChat({
             <button type="button" onClick={diagnose} className="rounded-full bg-[#eef3f8] px-3 py-2 text-xs font-black text-[#183a67] hover:bg-[#dfe9f3]">
               Revisar qué está fallando
             </button>
-            {role !== "vendedora" && <button type="button" onClick={() => { setShowReports(value => !value); setShowCatalog(false); }}
+            {(role === "supervisora" || role === "administracion") && <button type="button" onClick={() => { setShowReports(value => !value); setShowCatalog(false); }}
               aria-expanded={showReports} className="rounded-full bg-[#eef3f8] px-3 py-2 text-sm font-bold text-[#183a67] hover:bg-[#dfe9f3]">Encontrar un informe</button>}
             <button type="button" onClick={() => { setShowCatalog((value) => !value); setShowReports(false); }}
               className="px-1 py-2 text-xs font-bold text-[#183a67] underline" aria-expanded={showCatalog}>

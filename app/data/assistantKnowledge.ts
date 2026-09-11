@@ -1,5 +1,5 @@
 /** Source-reviewed help, not generative AI. Update the guide and its tests with each workflow change. */
-export type AssistantRole = "vendedora" | "supervisora" | "administracion";
+export type AssistantRole = "vendedora" | "supervisora" | "compras" | "administracion";
 export type HelpCapability = "central" | "minimumStock" | "countStock" | "approveStock" | "supervisorReports" | "schedules";
 export type HelpAccess = { role: AssistantRole; capabilities?: Partial<Record<HelpCapability, boolean>> };
 export type AssistantTopic = {
@@ -10,6 +10,7 @@ export type AssistantTopic = {
 export const HELP_REVIEW_DATE = "2026-09-09";
 const ALL: AssistantRole[] = ["vendedora", "supervisora", "administracion"];
 const ADMIN: AssistantRole[] = ["administracion"];
+const ADMIN_AND_PURCHASES: AssistantRole[] = ["administracion", "compras"];
 const page = (functionName: string) => `app/page.tsx · ${functionName}`;
 // All three presentations share the same reviewed instructions: variation must not change a procedure.
 function topic(id: string, category: string, question: string, keywords: string[], body: string,
@@ -196,7 +197,9 @@ export const assistantTopics: AssistantTopic[] = [
   topic("updates", "Protección", "¿Cómo se publica una actualización segura?", ["actualizar sistema", "publicar version", "actualizacion segura", "version anterior sistema"],
     "El responsable técnico debe revisar cambios, pruebas y respaldo previo, publicar una versión identificada y comprobar el resultado. Si falla, evalúa volver al código anterior sin sobrescribir operaciones nuevas. La pantalla Actualizaciones no sustituye esas verificaciones; el chat no publica ni restaura nada.", "deploy/ACTUALIZACIONES_SEGURAS.md; app/page.tsx · Actualizaciones", { roles: ADMIN }),
   topic("upcoming", "Próximamente", "¿Qué significan MRP, Recetas y Legajos (Próximamente)?", ["mrp", "recetas", "legajos", "proximamente", "produccion futura"],
-    "MRP, Recetas y costos y Legajos están señalados como Próximamente. No deben usarse como procesos operativos terminados ni suponerse que ya planifican producción, calculan recetas o administran legajos.", page("MRP / Recetas y costos / Legajos"), { roles: ADMIN }),
+    "MRP está en preparación con una conexión de solo lectura a la planilla operativa: la web no debe cambiar ninguna celda. Recetas y costos y Legajos continúan como módulos próximos. Hasta completar y validar la migración, el cálculo oficial sigue siendo el de la planilla MRP autorizada.", page("MRP / Recetas y costos / Legajos"), { roles: ADMIN_AND_PURCHASES }),
+  topic("purchases-access", "MRP", "¿Qué puede consultar Compras en MRP?", ["acceso compras", "usuario compras", "que puede consultar compras", "web modifica planilla mrp", "solo lectura mrp"],
+    "El perfil Compras entra desde admin.lartisantaller.com y únicamente accede a MRP. La integración utilizará la planilla operativa como fuente de solo lectura: no editará celdas, fórmulas, protecciones ni Apps Script. A medida que se habiliten las etapas podrá trabajar con listas de compra, órdenes, recepciones y control semanal dentro de los permisos definidos.", page("baseTabs / MRP / defaultActionPermissions"), { roles: ["compras", "administracion"] }),
 
   topic("free-help", "Ayuda", "¿Esta ayuda consume tokens o tiene costo?", ["consume tokens", "costo ia", "ayuda gratis", "usa api", "inteligencia artificial", "es gratuita"],
     "La ayuda actual busca en un catálogo local de respuestas verificadas, sin enviar consultas a una API de IA ni consumir tokens. Reconoce variantes y errores de escritura, pero no sabe todo ni aprende automáticamente. La guía debe actualizarse cuando cambia el sistema.", "app/components/AiHelpChat.tsx · ask"),

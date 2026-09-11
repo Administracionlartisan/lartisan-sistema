@@ -266,6 +266,7 @@ function user_can_access_site(array $user, string $site): bool
 function user_action_permissions(array $user): array
 {
     if (($user['action_permissions'] ?? null) === null) {
+        if ($user['role'] === 'compras') return ['mrp'];
         return $user['role'] === 'supervisora'
             ? ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar']
             : ['cobrar', 'egresos', 'pedidos', 'incidencias', 'transferirCaja'];

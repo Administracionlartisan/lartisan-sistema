@@ -19,10 +19,11 @@ const CONTENT: Record<ComingSoonSection, { eyebrow: string; title: string; descr
     cards: ["Datos y documentación", "Historial y observaciones", "Vencimientos y alertas"],
   },
   MRP: {
-    eyebrow: "ADMINISTRACIÓN · PRODUCCIÓN",
+    eyebrow: "PRODUCCIÓN Y COMPRAS",
     title: "MRP",
     description: "Planificación de requerimientos de materiales para producción y abastecimiento.",
-    body: "Este módulo se utilizará más adelante para planificar qué materias primas comprar o producir según las recetas, el stock disponible, los pedidos de los locales y la proyección de ventas.",
+    body: "La migración está en preparación a partir del MRP operativo validado por Gerencia. La planilla original se consulta únicamente en modo lectura: esta web no modificará celdas, fórmulas, protecciones ni scripts. Hasta completar las pruebas de equivalencia, la planificación oficial continúa en la planilla.",
+    cards: ["Plan semanal y explosión de recetas", "Lista de COMPRAR / PREPARAR", "Órdenes, recepción y control semanal"],
   },
 };
 

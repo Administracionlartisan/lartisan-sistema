@@ -79,6 +79,9 @@ function assistant_role_rules(array $user): string
     if ($role === 'supervisora') {
         return 'Puede recibir orientación operativa, de Central y reportes de supervisión. No revelar P&L, credenciales, configuración técnica ni datos exclusivos de Administración.';
     }
+    if ($role === 'compras') {
+        return 'Puede recibir orientación sobre compras y MRP. La planilla MRP es una fuente de solo lectura: no indicar cambios de celdas, fórmulas, protecciones ni scripts. No revelar P&L, credenciales, usuarios ni configuración de Administración.';
+    }
     return 'Solo puede recibir orientación operativa de ventas, caja, stock, pedidos, devoluciones, egresos, incidencias, fichaje, clientes y guía de sus locales autorizados. No revelar reportes consolidados, P&L, usuarios, límites de otros locales ni configuración administrativa.';
 }
 

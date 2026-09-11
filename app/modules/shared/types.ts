@@ -6,7 +6,7 @@ export type Product = {
   price: number;
 };
 
-export type Role = "vendedora" | "supervisora" | "administracion";
+export type Role = "vendedora" | "supervisora" | "compras" | "administracion";
 
 export type User = {
   name: string;

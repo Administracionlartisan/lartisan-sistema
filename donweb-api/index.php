@@ -663,9 +663,9 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar', 'mrp'], true))));
     $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : $existing['mfa_required'];
-    if (!in_array($role, ['vendedora', 'supervisora', 'administracion'], true)) {
+    if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
     }
     if (!valid_username($username)) {
@@ -816,7 +816,7 @@ if ($method === 'POST' && $route === 'admin/users') {
     $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : null;
     if (!valid_username($username)
         || $fullName === ''
-        || !in_array($role, ['vendedora', 'supervisora', 'administracion'], true)
+        || !in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)
         || !valid_password($temporaryPassword) || !$locations) {
         json_response(['ok' => false, 'error' => 'Los datos del usuario no son válidos'], 422);
     }

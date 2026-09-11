@@ -22,11 +22,14 @@ export const ACTION_PERMISSIONS = [
   { id: "stock", label: "Ajustar / aprobar stock" },
   { id: "transferirCaja", label: "Transferir efectivo entre cajas" },
   { id: "exportar", label: "Exportar informes" },
+  { id: "mrp", label: "Operar compras y MRP" },
 ];
 
 export const defaultActionPermissions = (role: Role) =>
   role === "administracion"
     ? ACTION_PERMISSIONS.map((permission) => permission.id)
+    : role === "compras"
+      ? ["mrp"]
     : role === "supervisora"
       ? ["cobrar", "anular", "egresos", "pedidos", "incidencias", "stock", "transferirCaja", "exportar"]
       : ["cobrar", "egresos", "pedidos", "incidencias", "transferirCaja"];
