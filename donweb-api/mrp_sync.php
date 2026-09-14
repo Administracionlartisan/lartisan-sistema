@@ -84,6 +84,8 @@ function mrp_fetch_ranges(array $config): array
         "'04_Plan_Produccion_Semanal'!A1:L500",
         "'05_Resumen_Compras_y_Produccion'!A1:U500",
         "'09_Lista_Compras_Operativa'!A1:U500",
+        "'01_Diccionario_Insumos'!A1:U1015",
+        "'02_Recetario_Maestro'!A1:J1000",
     ];
     $query = implode('&', array_map(static fn (string $range): string => 'ranges=' . rawurlencode($range), $ranges));
     $url = 'https://sheets.googleapis.com/v4/spreadsheets/' . rawurlencode(MRP_SPREADSHEET_ID) . '/values:batchGet?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE&' . $query;
@@ -93,6 +95,117 @@ function mrp_fetch_ranges(array $config): array
         throw new RuntimeException('Google no devolvió una copia válida del MRP.');
     }
     return array_map(static fn (array $range): array => is_array($range['values'] ?? null) ? $range['values'] : [], $valueRanges);
+}
+
+function mrp_key($value): string
+{
+    $text = mb_strtolower(trim((string) $value), 'UTF-8');
+    $text = strtr($text, ['á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u']);
+    return preg_replace('/\s+/', ' ', $text) ?? '';
+}
+
+function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): array
+{
+    $dictionary = mrp_rows($dictionaryValues, 0, [
+        'code' => 'Código', 'item' => 'Nombre', 'category' => 'Categoría', 'unit' => 'Unidad stock/compra',
+        'unitCost' => 'Costo Unitario', 'provider' => 'Proveedor',
+    ], 1100);
+    $costs = [];
+    foreach ($dictionary as $row) {
+        $key = mrp_key($row['item'] ?? '');
+        if ($key === '') continue;
+        $cost = mrp_number($row['unitCost'] ?? 0);
+        $costs[$key] = [
+            'item' => trim((string) ($row['item'] ?? '')),
+            'unit' => trim((string) ($row['unit'] ?? '')),
+            'unitCost' => $cost > 0 ? $cost : null,
+            'provider' => trim((string) ($row['provider'] ?? '')),
+        ];
+    }
+    $recipeRows = mrp_rows($recipeValues, 0, [
+        'recipe' => 'Artículo o Subreceta', 'ingredient' => 'Insumo', 'batchQuantity' => 'Cantidad Lote',
+        'unit' => 'Unidad', 'yield' => 'Rendimiento', 'perUnit' => 'Cantidad x Unidad Final',
+        'type' => 'Tipo', 'status' => 'Estado / Alerta', 'dictionaryCheck' => 'Control Diccionario', 'unitCheck' => 'Control Unidad',
+    ], 1100);
+    $recipes = [];
+    foreach ($recipeRows as $row) {
+        $recipe = trim((string) ($row['recipe'] ?? ''));
+        $ingredient = trim((string) ($row['ingredient'] ?? ''));
+        if ($recipe === '' || $ingredient === '') continue;
+        $batch = mrp_number($row['batchQuantity'] ?? 0);
+        $yield = mrp_number($row['yield'] ?? 0);
+        $perUnit = mrp_number($row['perUnit'] ?? 0);
+        $expectedPerUnit = $yield > 0 ? $batch / $yield : $batch;
+        $key = mrp_key($recipe);
+        $recipes[$key] ??= ['recipe' => $recipe, 'yield' => $yield ?: null, 'items' => []];
+        if (($recipes[$key]['yield'] ?? null) === null && $yield > 0) $recipes[$key]['yield'] = $yield;
+        $recipes[$key]['items'][] = [
+            'ingredient' => $ingredient,
+            'quantity' => $batch,
+            'unit' => trim((string) ($row['unit'] ?? '')),
+            'yield' => $yield ?: null,
+            'perUnit' => $perUnit,
+            'expectedPerUnit' => $expectedPerUnit,
+            'type' => trim((string) ($row['type'] ?? '')),
+            'dictionaryCheck' => trim((string) ($row['dictionaryCheck'] ?? '')),
+            'unitCheck' => trim((string) ($row['unitCheck'] ?? '')),
+        ];
+    }
+    $memo = [];
+    $calculate = function (string $recipeKey, array $stack = []) use (&$calculate, &$memo, $recipes, $costs): array {
+        if (isset($memo[$recipeKey])) return $memo[$recipeKey];
+        if (isset($stack[$recipeKey])) return ['cost' => null, 'missing' => ['Ciclo de subrecetas'], 'cycle' => true];
+        $recipe = $recipes[$recipeKey] ?? null;
+        if (!$recipe) return ['cost' => null, 'missing' => ['Receta no encontrada'], 'cycle' => false];
+        $stack[$recipeKey] = true;
+        $cost = 0.0; $missing = [];
+        foreach ($recipe['items'] as $item) {
+            $ingredientKey = mrp_key($item['ingredient']);
+            $isSubrecipe = str_contains(mb_strtolower((string) $item['type'], 'UTF-8'), 'subreceta');
+            if ($isSubrecipe) {
+                $child = $calculate($ingredientKey, $stack);
+                if ($child['cost'] === null) { $missing = array_merge($missing, $child['missing']); continue; }
+                $cost += $item['perUnit'] * $child['cost'];
+                continue;
+            }
+            $unitCost = $costs[$ingredientKey]['unitCost'] ?? null;
+            if ($unitCost === null) { $missing[] = $item['ingredient']; continue; }
+            $cost += $item['perUnit'] * $unitCost;
+        }
+        return $memo[$recipeKey] = ['cost' => $missing ? null : round($cost, 4), 'missing' => array_values(array_unique($missing)), 'cycle' => false];
+    };
+    $summary = []; $lineDifferences = []; $missingCosts = [];
+    foreach ($recipes as $recipeKey => $recipe) {
+        $result = $calculate($recipeKey);
+        foreach ($recipe['items'] as $item) {
+            if (abs($item['perUnit'] - $item['expectedPerUnit']) > 0.0001) {
+                $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => $item['expectedPerUnit'], 'actual' => $item['perUnit'], 'reason' => 'La cantidad por unidad no coincide con lote/rendimiento'];
+            }
+            if ($item['dictionaryCheck'] !== '' && !str_starts_with(mb_strtoupper($item['dictionaryCheck'], 'UTF-8'), 'OK')) {
+                $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => 'En diccionario', 'actual' => $item['dictionaryCheck'], 'reason' => 'Control de diccionario'];
+            }
+            if ($item['unitCheck'] !== '' && !str_starts_with(mb_strtoupper($item['unitCheck'], 'UTF-8'), 'OK')) {
+                $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => 'Unidad válida', 'actual' => $item['unitCheck'], 'reason' => 'Control de unidad'];
+            }
+        }
+        foreach ($result['missing'] as $missing) $missingCosts[$missing] = true;
+        $summary[] = [
+            'recipe' => $recipe['recipe'], 'yield' => $recipe['yield'], 'components' => count($recipe['items']),
+            'costPerUnit' => $result['cost'], 'costStatus' => $result['cost'] === null ? 'Pendiente de costo' : 'Calculado',
+            'missingCosts' => $result['missing'], 'items' => $recipe['items'],
+        ];
+    }
+    usort($summary, static fn (array $a, array $b): int => strnatcasecmp($a['recipe'], $b['recipe']));
+    return [
+        'recipes' => $summary,
+        'inputs' => array_values($costs),
+        'recipeValidation' => [
+            'status' => count($lineDifferences) === 0 ? 'ok' : 'differences',
+            'checkedLines' => count($recipeRows), 'checkedRecipes' => count($summary),
+            'costedRecipes' => count(array_filter($summary, static fn (array $recipe): bool => $recipe['costPerUnit'] !== null)),
+            'missingCostInputs' => array_values(array_keys($missingCosts)), 'differences' => array_slice($lineDifferences, 0, 100),
+        ],
+    ];
 }
 
 function mrp_rows(array $values, int $headerIndex, array $fields, int $limit = 300): array
@@ -118,7 +231,7 @@ function mrp_rows(array $values, int $headerIndex, array $fields, int $limit = 3
 
 function mrp_build_snapshot(array $ranges): array
 {
-    [$guide, $planValues, $summaryValues, $listValues] = $ranges;
+    [$guide, $planValues, $summaryValues, $listValues, $dictionaryValues, $recipeValues] = $ranges;
     $plan = mrp_rows($planValues, 6, [
         'product' => 'Producto terminado', 'unit' => 'Unidad', 'stock' => 'Stock actual PT',
         'safetyStock' => 'Stock seguridad PT', 'confirmedOrder' => 'Pedido semanal confirmado',
@@ -148,12 +261,14 @@ function mrp_build_snapshot(array $ranges): array
         $actual = mrp_number($row['suggestedProduction'] ?? 0);
         if (abs($expected - $actual) > 0.001) $technicalChecks[] = ['item' => $row['product'] ?? '', 'expected' => $expected, 'actual' => $actual];
     }
+    $recipeSnapshot = mrp_recipe_snapshot($dictionaryValues, $recipeValues);
     return [
         'source' => ['spreadsheetId' => MRP_SPREADSHEET_ID, 'title' => 'MRP LArtisan - OPERATIVO OPTIMIZADO', 'mode' => 'read_only'],
         'kpis' => ['estimatedNetCost' => mrp_number($summaryValues[2][1] ?? 0), 'buyItems' => count($buy), 'prepareItems' => count($prepare), 'alerts' => (int) mrp_number($summaryValues[2][7] ?? 0)],
         'weeklyGuide' => array_slice(array_values(array_filter(array_slice($guide, 4), static fn ($row): bool => is_array($row) && isset($row[0]) && is_numeric((string) $row[0]))), 0, 10),
         'plan' => $plan, 'requirements' => $requirements, 'buy' => $buy, 'prepare' => $prepare,
         'validation' => ['status' => count($technicalChecks) === 0 ? 'ok' : 'differences', 'checkedLines' => count($plan), 'differences' => array_slice($technicalChecks, 0, 20), 'managementApproval' => 'pending'],
+        ...$recipeSnapshot,
     ];
 }
 
@@ -167,7 +282,7 @@ function mrp_sync_from_google(PDO $pdo, array $config, int $userId): array
         $snapshot = mrp_build_snapshot(mrp_fetch_ranges($config));
         $payload = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payload === false) throw new RuntimeException('No se pudo guardar la copia MRP.');
-        $rows = count($snapshot['plan']) + count($snapshot['requirements']);
+        $rows = count($snapshot['plan']) + count($snapshot['requirements']) + count($snapshot['recipes']) + count($snapshot['inputs']);
         $pdo->prepare("UPDATE mrp_sync_runs SET status='verified', payload_json=?, payload_hash=?, rows_imported=?, finished_at=NOW() WHERE id=?")
             ->execute([$payload, hash('sha256', $payload), $rows, $runId]);
         audit($pdo, $userId, 'mrp_synced_read_only', 'filas=' . $rows);

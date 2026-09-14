@@ -15,7 +15,11 @@ type MrpSnapshot = {
   buy: MrpRow[];
   prepare: MrpRow[];
   validation: { status: string; checkedLines: number; differences: MrpRow[]; managementApproval: string };
+  recipes: Recipe[];
+  inputs: MrpRow[];
+  recipeValidation: { status: string; checkedLines: number; checkedRecipes: number; costedRecipes: number; missingCostInputs: string[]; differences: MrpRow[] };
 };
+type Recipe = { recipe: string; yield: number | null; components: number; costPerUnit: number | null; costStatus: string; missingCosts: string[]; items: MrpRow[] };
 type Order = { id: string; item_name: string; provider_name?: string; unit: string; quantity: string; received_quantity: string; status: string; row_version: string };
 
 const number = (value: unknown) => {
@@ -102,8 +106,8 @@ export default function MrpPanel() {
       <Metric label="Subrecetas a preparar" value={snapshot?.kpis.prepareItems ?? "—"} />
       <Metric label="Alertas operativas" value={snapshot?.kpis.alerts ?? "—"} />
     </div>
-    <div className={styles.tabs}>{["Plan semanal", "Comprar", "Preparar", "Explosión y requerimientos", "Operación", "Validación"].map((item) => <button key={item} onClick={() => setView(item)} className={`${styles.tab} ${view === item ? styles.tabActive : ""}`}>{item}</button>)}</div>
-    {view === "Operación" ? <OperationPanel {...{ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${rows?.length ?? 0} registros visibles`}</p></div></div>{table}</section>}
+    <div className={styles.tabs}>{["Plan semanal", "Comprar", "Preparar", "Explosión y requerimientos", "Recetas y costos", "Operación", "Validación"].map((item) => <button key={item} onClick={() => setView(item)} className={`${styles.tab} ${view === item ? styles.tabActive : ""}`}>{item}</button>)}</div>
+    {view === "Operación" ? <OperationPanel {...{ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Recetas y costos" ? <RecipesPanel snapshot={snapshot} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${rows?.length ?? 0} registros visibles`}</p></div></div>{table}</section>}
   </div>;
 }
 
@@ -133,5 +137,16 @@ function OperationPanel({ orders, controls, orderForm, setOrderForm, controlForm
 }
 function ValidationPanel({ snapshot }: { snapshot: MrpSnapshot | null }) {
   const validation = snapshot?.validation;
-  return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Comparación técnica con la planilla</strong><p>Se recalcula la regla del plan semanal y se compara línea por línea con el resultado visible en Google Sheets.</p></div></div><div className={styles.forms}><div className={styles.form}><strong>{validation?.status === "ok" ? "Validación técnica correcta" : "Hay diferencias para revisar"}</strong><p>{validation?.checkedLines ?? 0} líneas verificadas. Diferencias: {validation?.differences.length ?? 0}.</p></div><div className={styles.form}><strong>Aprobación de Gerencia: pendiente</strong><p>La publicación técnica no reemplaza la conformidad funcional de Gerencia con una corrida real.</p></div></div>{validation?.differences.length ? <DataTable rows={validation.differences} columns={[["item", "Producto"], ["expected", "Esperado"], ["actual", "Planilla"]]} /> : null}</section>;
+  const recipes = snapshot?.recipeValidation;
+  const differences = [...(validation?.differences ?? []), ...(recipes?.differences ?? [])];
+  return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Comparación técnica con la planilla</strong><p>Se recalculan el plan semanal y las cantidades por unidad de cada receta, sin modificar Google Sheets.</p></div></div><div className={styles.forms}><div className={styles.form}><strong>{validation?.status === "ok" && recipes?.status === "ok" ? "Validación técnica correcta" : "Hay diferencias para revisar"}</strong><p>Plan: {validation?.checkedLines ?? 0} líneas. Recetas: {recipes?.checkedLines ?? 0} componentes en {recipes?.checkedRecipes ?? 0} recetas.</p></div><div className={styles.form}><strong>Costos disponibles</strong><p>{recipes?.costedRecipes ?? 0} recetas tienen costo completo. {recipes?.missingCostInputs.length ?? 0} insumos requieren precio o revisión en la planilla.</p><strong className={styles.inlineTitle}>Aprobación de Gerencia: pendiente</strong><p>La validación técnica confirma fórmulas y referencias; Gerencia debe aprobar una corrida real antes de tomar decisiones de costo.</p></div></div>{differences.length ? <DataTable rows={differences} columns={[["recipe", "Receta / producto"], ["ingredient", "Insumo"], ["expected", "Esperado"], ["actual", "Planilla"], ["reason", "Motivo"]]} /> : null}</section>;
+}
+
+function RecipesPanel({ snapshot }: { snapshot: MrpSnapshot | null }) {
+  const [selected, setSelected] = useState("");
+  const recipes = snapshot?.recipes ?? [];
+  const recipe = recipes.find((item) => item.recipe === selected) ?? recipes[0];
+  useEffect(() => { if (!selected && recipes[0]) setSelected(recipes[0].recipe); }, [recipes, selected]);
+  if (!recipes.length) return <section className={styles.card}><div className={styles.empty}>No hay recetario disponible todavía. Actualizá el MRP cuando exista una conexión autorizada con la planilla.</div></section>;
+  return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Recetas y costos</strong><p>Lectura protegida del recetario maestro. Un costo solo se calcula cuando todos sus insumos y subrecetas tienen un precio válido en la fuente.</p></div><label className={styles.recipePicker}>Receta<select value={recipe?.recipe ?? ""} onChange={(event) => setSelected(event.target.value)}>{recipes.map((item) => <option key={item.recipe}>{item.recipe}</option>)}</select></label></div>{recipe && <><div className={styles.recipeMetrics}><Metric label="Rendimiento" value={recipe.yield ?? "—"} /><Metric label="Componentes" value={recipe.components} /><Metric label="Costo por unidad" value={recipe.costPerUnit === null ? "Pendiente" : money.format(recipe.costPerUnit)} /><Metric label="Estado" value={recipe.costStatus} /></div>{recipe.missingCosts.length > 0 && <div className={styles.warning}><strong>Faltan costos en la fuente:</strong> {recipe.missingCosts.join(", ")}</div>}<DataTable rows={recipe.items} columns={[["ingredient", "Insumo / subreceta"], ["type", "Tipo"], ["quantity", "Cantidad lote"], ["unit", "Unidad"], ["yield", "Rendimiento"], ["perUnit", "Cantidad por unidad"], ["dictionaryCheck", "Control"]]} /></>}</section>;
 }
