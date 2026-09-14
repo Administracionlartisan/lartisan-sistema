@@ -1951,10 +1951,36 @@ export default function Home() {
     setHistoryImporting(true);
     try {
       const rows = parseHistoryCsv(await file.text());
-      const response = await fetch(`${API_BASE}/admin/history/import`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: historyImportKind, rows }) });
-      const data = (await response.json()) as { imported?: number; rejected?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "No se pudo importar el historial.");
-      setMessage(`Historial importado: ${data.imported || 0} filas aceptadas y ${data.rejected || 0} rechazadas.`);
+      const batchSize = 250;
+      let imported = 0;
+      let rejected = 0;
+      for (let start = 0; start < rows.length; start += batchSize) {
+        const batch = rows.slice(start, start + batchSize);
+        let data: { imported?: number; rejected?: number; error?: string } | null = null;
+        let lastError: unknown = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            const response = await fetch(`${API_BASE}/admin/history/import`, {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ kind: historyImportKind, rows: batch }),
+            });
+            data = (await response.json()) as { imported?: number; rejected?: number; error?: string };
+            if (!response.ok) throw new Error(data.error || "No se pudo importar el historial.");
+            lastError = null;
+            break;
+          } catch (error) {
+            lastError = error;
+            if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 800));
+          }
+        }
+        if (lastError || !data) throw lastError instanceof Error ? lastError : new Error("No se pudo importar el historial.");
+        imported += data.imported || 0;
+        rejected += data.rejected || 0;
+        setMessage(`Importando historial: ${Math.min(start + batch.length, rows.length)} de ${rows.length} filas procesadas.`);
+      }
+      setMessage(`Historial importado: ${imported} filas aceptadas y ${rejected} rechazadas.`);
       setOperationalVersion((version) => version + 1);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "No se pudo importar el historial.");

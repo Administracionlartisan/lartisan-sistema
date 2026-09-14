@@ -37,6 +37,8 @@ test("administration exposes filtered audit, cash and historical report endpoint
   assert.match(page, /auditUserFilter/);
   assert.match(page, /auditActionFilter/);
   assert.match(page, /exportAdminReport/);
+  assert.match(page, /const batchSize = 250/);
+  assert.match(page, /Importando historial:/);
   assert.match(bootstrap, /historical_datetime/);
   assert.match(bootstrap, /historical_number/);
 });
