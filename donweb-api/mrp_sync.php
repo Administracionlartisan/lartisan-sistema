@@ -57,6 +57,57 @@ function ensure_mrp_schema(PDO $pdo): void
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY uq_mrp_control_week_item (week_key, item_name)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // Catálogo propio del sistema. Google Sheets se utiliza únicamente como fuente
+    // de importación; la operación diaria y los informes no dependen de editarla.
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_input_catalog (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        source_key VARCHAR(190) NOT NULL,
+        source_code VARCHAR(100) NULL,
+        item_name VARCHAR(190) NOT NULL,
+        category_name VARCHAR(190) NULL,
+        stock_unit VARCHAR(40) NULL,
+        unit_cost DECIMAL(16,4) NULL,
+        provider_name VARCHAR(190) NULL,
+        source_run_id BIGINT UNSIGNED NOT NULL,
+        imported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_mrp_input_catalog_key (source_key),
+        INDEX idx_mrp_input_catalog_run (source_run_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_recipe_catalog (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        source_key VARCHAR(190) NOT NULL,
+        recipe_name VARCHAR(190) NOT NULL,
+        yield_quantity DECIMAL(16,4) NULL,
+        component_count INT UNSIGNED NOT NULL DEFAULT 0,
+        cost_per_unit DECIMAL(16,4) NULL,
+        cost_status VARCHAR(60) NOT NULL,
+        missing_costs_json TEXT NULL,
+        source_run_id BIGINT UNSIGNED NOT NULL,
+        imported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_mrp_recipe_catalog_key (source_key),
+        INDEX idx_mrp_recipe_catalog_run (source_run_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_recipe_components (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        recipe_id BIGINT UNSIGNED NOT NULL,
+        source_line INT UNSIGNED NOT NULL,
+        component_name VARCHAR(190) NOT NULL,
+        component_key VARCHAR(190) NOT NULL,
+        component_type VARCHAR(80) NULL,
+        batch_quantity DECIMAL(16,4) NOT NULL DEFAULT 0,
+        unit_name VARCHAR(40) NULL,
+        yield_quantity DECIMAL(16,4) NULL,
+        quantity_per_unit DECIMAL(16,6) NOT NULL DEFAULT 0,
+        expected_per_unit DECIMAL(16,6) NOT NULL DEFAULT 0,
+        dictionary_check VARCHAR(120) NULL,
+        unit_check VARCHAR(120) NULL,
+        source_run_id BIGINT UNSIGNED NOT NULL,
+        imported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_mrp_recipe_component_line (recipe_id, source_line),
+        INDEX idx_mrp_recipe_component_key (component_key),
+        INDEX idx_mrp_recipe_component_run (source_run_id),
+        CONSTRAINT fk_mrp_recipe_components_recipe FOREIGN KEY (recipe_id) REFERENCES mrp_recipe_catalog(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 function require_mrp_user(PDO $pdo): array
@@ -116,7 +167,10 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
         if ($key === '') continue;
         $cost = mrp_number($row['unitCost'] ?? 0);
         $costs[$key] = [
+            'sourceKey' => $key,
+            'code' => trim((string) ($row['code'] ?? '')),
             'item' => trim((string) ($row['item'] ?? '')),
+            'category' => trim((string) ($row['category'] ?? '')),
             'unit' => trim((string) ($row['unit'] ?? '')),
             'unitCost' => $cost > 0 ? $cost : null,
             'provider' => trim((string) ($row['provider'] ?? '')),
@@ -140,6 +194,7 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
         $recipes[$key] ??= ['recipe' => $recipe, 'yield' => $yield ?: null, 'items' => []];
         if (($recipes[$key]['yield'] ?? null) === null && $yield > 0) $recipes[$key]['yield'] = $yield;
         $recipes[$key]['items'][] = [
+            'sourceLine' => count($recipes[$key]['items']) + 1,
             'ingredient' => $ingredient,
             'quantity' => $batch,
             'unit' => trim((string) ($row['unit'] ?? '')),
@@ -190,6 +245,7 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
         }
         foreach ($result['missing'] as $missing) $missingCosts[$missing] = true;
         $summary[] = [
+            'sourceKey' => $recipeKey,
             'recipe' => $recipe['recipe'], 'yield' => $recipe['yield'], 'components' => count($recipe['items']),
             'costPerUnit' => $result['cost'], 'costStatus' => $result['cost'] === null ? 'Pendiente de costo' : 'Calculado',
             'missingCosts' => $result['missing'], 'items' => $recipe['items'],
@@ -206,6 +262,67 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
             'missingCostInputs' => array_values(array_keys($missingCosts)), 'differences' => array_slice($lineDifferences, 0, 100),
         ],
     ];
+}
+
+/**
+ * Persiste una copia normalizada e independiente del recetario. Esta rutina no
+ * escribe en Google Sheets: sólo recibe el snapshot ya validado en memoria.
+ */
+function mrp_persist_master_data(PDO $pdo, array $snapshot, int $runId): void
+{
+    $pdo->beginTransaction();
+    try {
+        // El catálogo refleja exactamente la última importación verificada. Las
+        // corridas completas anteriores permanecen auditables en mrp_sync_runs.
+        $pdo->exec('DELETE FROM mrp_recipe_components');
+        $pdo->exec('DELETE FROM mrp_recipe_catalog');
+        $pdo->exec('DELETE FROM mrp_input_catalog');
+
+        $input = $pdo->prepare('INSERT INTO mrp_input_catalog (source_key, source_code, item_name, category_name, stock_unit, unit_cost, provider_name, source_run_id, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+        foreach (($snapshot['inputs'] ?? []) as $row) {
+            $input->execute([
+                mrp_clean_text($row['sourceKey'] ?? mrp_key($row['item'] ?? ''), 190),
+                mrp_clean_text($row['code'] ?? '', 100) ?: null,
+                mrp_clean_text($row['item'] ?? '', 190),
+                mrp_clean_text($row['category'] ?? '', 190) ?: null,
+                mrp_clean_text($row['unit'] ?? '', 40) ?: null,
+                isset($row['unitCost']) && $row['unitCost'] !== null ? (float) $row['unitCost'] : null,
+                mrp_clean_text($row['provider'] ?? '', 190) ?: null,
+                $runId,
+            ]);
+        }
+        $recipe = $pdo->prepare('INSERT INTO mrp_recipe_catalog (source_key, recipe_name, yield_quantity, component_count, cost_per_unit, cost_status, missing_costs_json, source_run_id, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+        $component = $pdo->prepare('INSERT INTO mrp_recipe_components (recipe_id, source_line, component_name, component_key, component_type, batch_quantity, unit_name, yield_quantity, quantity_per_unit, expected_per_unit, dictionary_check, unit_check, source_run_id, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+        foreach (($snapshot['recipes'] ?? []) as $row) {
+            $recipe->execute([
+                mrp_clean_text($row['sourceKey'] ?? mrp_key($row['recipe'] ?? ''), 190),
+                mrp_clean_text($row['recipe'] ?? '', 190),
+                isset($row['yield']) && $row['yield'] !== null ? (float) $row['yield'] : null,
+                (int) ($row['components'] ?? 0),
+                isset($row['costPerUnit']) && $row['costPerUnit'] !== null ? (float) $row['costPerUnit'] : null,
+                mrp_clean_text($row['costStatus'] ?? 'Pendiente de costo', 60),
+                json_encode($row['missingCosts'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                $runId,
+            ]);
+            $recipeId = (int) $pdo->lastInsertId();
+            foreach (($row['items'] ?? []) as $item) {
+                $component->execute([
+                    $recipeId, max(1, (int) ($item['sourceLine'] ?? 1)),
+                    mrp_clean_text($item['ingredient'] ?? '', 190), mrp_clean_text(mrp_key($item['ingredient'] ?? ''), 190),
+                    mrp_clean_text($item['type'] ?? '', 80) ?: null, (float) ($item['quantity'] ?? 0),
+                    mrp_clean_text($item['unit'] ?? '', 40) ?: null,
+                    isset($item['yield']) && $item['yield'] !== null ? (float) $item['yield'] : null,
+                    (float) ($item['perUnit'] ?? 0), (float) ($item['expectedPerUnit'] ?? 0),
+                    mrp_clean_text($item['dictionaryCheck'] ?? '', 120) ?: null,
+                    mrp_clean_text($item['unitCheck'] ?? '', 120) ?: null, $runId,
+                ]);
+            }
+        }
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
 }
 
 function mrp_rows(array $values, int $headerIndex, array $fields, int $limit = 300): array
@@ -282,6 +399,7 @@ function mrp_sync_from_google(PDO $pdo, array $config, int $userId): array
         $snapshot = mrp_build_snapshot(mrp_fetch_ranges($config));
         $payload = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payload === false) throw new RuntimeException('No se pudo guardar la copia MRP.');
+        mrp_persist_master_data($pdo, $snapshot, $runId);
         $rows = count($snapshot['plan']) + count($snapshot['requirements']) + count($snapshot['recipes']) + count($snapshot['inputs']);
         $pdo->prepare("UPDATE mrp_sync_runs SET status='verified', payload_json=?, payload_hash=?, rows_imported=?, finished_at=NOW() WHERE id=?")
             ->execute([$payload, hash('sha256', $payload), $rows, $runId]);
