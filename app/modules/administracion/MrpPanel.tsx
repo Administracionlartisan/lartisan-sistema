@@ -33,6 +33,7 @@ export default function MrpPanel() {
   const [view, setView] = useState("Plan semanal");
   const [snapshot, setSnapshot] = useState<MrpSnapshot | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
+  const [googleConnected, setGoogleConnected] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [controls, setControls] = useState<MrpRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,12 +50,13 @@ export default function MrpPanel() {
         fetch(`${API_BASE}/mrp/latest`, { credentials: "include", cache: "no-store" }),
         fetch(`${API_BASE}/mrp/operations`, { credentials: "include", cache: "no-store" }),
       ]);
-      const source = await sourceResponse.json() as { error?: string; snapshot?: { data?: MrpSnapshot; updatedAt?: string } };
+      const source = await sourceResponse.json() as { error?: string; connected?: boolean; snapshot?: { data?: MrpSnapshot; updatedAt?: string } };
       const operations = await operationsResponse.json() as { error?: string; orders?: Order[]; controls?: MrpRow[] };
       if (!sourceResponse.ok) throw new Error(source.error || "No se pudo leer el MRP.");
       if (!operationsResponse.ok) throw new Error(operations.error || "No se pudo leer la operación MRP.");
       setSnapshot(source.snapshot?.data ?? null);
       setUpdatedAt(source.snapshot?.updatedAt ?? "");
+      setGoogleConnected(source.connected === true);
       setOrders(operations.orders ?? []);
       setControls(operations.controls ?? []);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo cargar el MRP."); }
@@ -64,6 +66,18 @@ export default function MrpPanel() {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  const connectGoogleReadOnly = async () => {
+    setNotice("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/pnl/authorization-url`, { credentials: "include", cache: "no-store" });
+      const body = await response.json() as { error?: string; authorizationUrl?: string };
+      if (!response.ok || !body.authorizationUrl) throw new Error(body.error || "No se pudo preparar la conexión con Google.");
+      window.location.assign(body.authorizationUrl);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "No se pudo preparar la conexión con Google.");
+    }
+  };
 
   const submitOrder = async (event: FormEvent) => {
     event.preventDefault(); setNotice("");
@@ -97,7 +111,7 @@ export default function MrpPanel() {
 
   return <div className={styles.panel}>
     <Heading k="ADMINISTRACIÓN · ABASTECIMIENTO" h="MRP semanal" p="Planificación, requerimientos y seguimiento de compras desde la base operativa del sistema." />
-    <div className={styles.notice}><div><strong>Recetario importado a la base del sistema</strong><p>La sincronización guarda insumos, recetas, componentes, rendimientos y costos en la base propia. Google Sheets queda protegida como fuente de lectura y nunca recibe cambios desde esta pantalla.</p></div><span className={styles.status}><span className={styles.dot} />{updatedAt ? `Importado ${updatedAt}` : loading ? "Actualizando…" : "Sin copia disponible"}</span></div>
+    <div className={styles.notice}><div><strong>Recetario importado a la base del sistema</strong><p>La sincronización guarda insumos, recetas, componentes, rendimientos y costos en la base propia. Google Sheets queda protegida como fuente de lectura y nunca recibe cambios desde esta pantalla.</p>{!googleConnected && <button type="button" className={styles.button} onClick={() => void connectGoogleReadOnly()}>Conectar lectura de Google</button>}</div><span className={styles.status}><span className={styles.dot} />{updatedAt ? `Importado ${updatedAt}` : loading ? "Actualizando…" : googleConnected ? "Preparando importación…" : "Conexión de Google pendiente"}</span></div>
     {error && <div className={styles.error}>{error}</div>}
     {notice && <div className={styles.notice}><strong>{notice}</strong></div>}
     <div className={styles.metrics}>
