@@ -1951,9 +1951,13 @@ export default function Home() {
     setHistoryImporting(true);
     try {
       const rows = parseHistoryCsv(await file.text());
-      const batchSize = 250;
+      // Shared hosting can terminate long JSON requests before returning a
+      // response. Small batches keep every transaction short, while using a
+      // simple content type avoids an unnecessary CORS preflight per batch.
+      const batchSize = 25;
       let imported = 0;
       let rejected = 0;
+      setMessage(`Preparando ${rows.length} filas para importar…`);
       for (let start = 0; start < rows.length; start += batchSize) {
         const batch = rows.slice(start, start + batchSize);
         let data: { imported?: number; rejected?: number; error?: string } | null = null;
@@ -1963,7 +1967,7 @@ export default function Home() {
             const response = await fetch(`${API_BASE}/admin/history/import`, {
               method: "POST",
               credentials: "include",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "text/plain;charset=UTF-8" },
               body: JSON.stringify({ kind: historyImportKind, rows: batch }),
             });
             data = (await response.json()) as { imported?: number; rejected?: number; error?: string };
