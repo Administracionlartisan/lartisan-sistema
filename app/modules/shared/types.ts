@@ -137,6 +137,7 @@ export type OperationalSnapshot = {
   limitsBySite?: Record<string, OperationalLimits>;
   schedules?: EmployeeSchedule[];
   priceChanges?: PriceChange[];
+  monthlyTargets?: Record<string, number>;
 };
 
 export type SystemHealth = {

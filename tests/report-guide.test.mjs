@@ -116,9 +116,11 @@ test('direct export questions explain actual export limitations',()=>{
 });
 test('audit facts remain in guide, not only in a separate document',()=>{
   const byId=id=>describeReport(adminReportGuides.find(r=>r.id===id));
-  assert.match(byId('Productos'),/todavía no presenta ranking/);
+  assert.match(byId('Productos'),/ranking de productos por unidades y venta bruta/i);
+  assert.match(byId('Productos'),/no distribuye descuentos entre productos/i);
   assert.match(byId('Rentabilidad'),/costos vigentes/);
-  assert.match(byId('PLConsolidado'),/Actualizar Drive no recalcula/);
+  assert.match(byId('PLConsolidado'),/lectura autenticada más reciente de Drive/i);
+  assert.match(byId('PLConsolidado'),/modo de solo lectura/i);
   assert.match(byId('Reposicion'),/umbral fijo de 8/);
   assert.match(byId('Auditoria'),/solo cinco eventos/);
   assert.match(byId('Personal'),/30 registros/);

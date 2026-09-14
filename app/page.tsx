@@ -7,7 +7,7 @@ import Heading from "./modules/shared/components/Heading";
 import { buildThermalReceipt } from "./modules/ventas/thermalReceipt";
 import {
   ACTION_PERMISSIONS, API_BASE, defaultActionPermissions, EMPTY_CASH_FIELDS,
-  INITIAL_MANAGED_USERS, money, money2, SITES,
+  INITIAL_MANAGED_USERS, money, SITES,
 } from "./modules/shared/constants";
 import { downloadCsv } from "./modules/shared/downloadCsv";
 import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
@@ -24,10 +24,23 @@ import type {
   StockAdjustment, StockMovement, StockRequest, SystemHealth,
 } from "./modules/shared/types";
 import {
-  ADMIN_DEMO_ROWS, DRIVE_INTEGRATIONS, GUIDE_UPDATES, INITIAL_SCHEDULES,
-  METHODS, PL_CONSOLIDATED_REFERENCE, PL_MONTHS, PL_SECTIONS, PRODUCTS,
-  SHEET_CONFIG, SOLD_COLLECTED_REFERENCE,
+  DRIVE_INTEGRATIONS, GUIDE_UPDATES, INITIAL_SCHEDULES,
+  METHODS, PRODUCTS, SHEET_CONFIG,
 } from "./modules/config/operationalCatalog";
+
+const dateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+const initialReportRange = () => {
+  const today = new Date();
+  return {
+    from: dateKey(new Date(today.getFullYear(), today.getMonth(), 1)),
+    to: dateKey(today),
+  };
+};
 export default function Home() {
   // En producción el portal se determina por el subdominio. El parámetro
   // ?portal=admin o ?portal=ventas permite revisar ambos accesos localmente.
@@ -89,14 +102,12 @@ export default function Home() {
     [syncStatus, setSyncStatus] = useState("Sin cierre enviado"),
     [schedules, setSchedules] = useState<EmployeeSchedule[]>(INITIAL_SCHEDULES),
     [guideUpdates, setGuideUpdates] = useState(GUIDE_UPDATES),
-    [reportSite, setReportSite] = useState("Recoleta"),
-    [reportFrom, setReportFrom] = useState("2026-08-01"),
-    [reportTo, setReportTo] = useState("2026-08-25"),
+    [reportSite, setReportSite] = useState("Todos los locales"),
+    [reportFrom, setReportFrom] = useState(() => initialReportRange().from),
+    [reportTo, setReportTo] = useState(() => initialReportRange().to),
     [newGuideTitle, setNewGuideTitle] = useState(""),
     [newGuideDetail, setNewGuideDetail] = useState(""),
     [adminReport, setAdminReport] = useState("Resumen"),
-    [plSection, setPlSection] = useState("ingresos"),
-    [plPerspective, setPlPerspective] = useState<"financial" | "economic">("financial"),
     [pnlConnection, setPnlConnection] = useState<{ connected: boolean; rows: string[][]; updatedAt: string | null }>({ connected: false, rows: [], updatedAt: null }),
     [pnlSyncing, setPnlSyncing] = useState(false),
     [pnlSyncMessage, setPnlSyncMessage] = useState(""),
@@ -205,6 +216,12 @@ export default function Home() {
   const [incidentDetail, setIncidentDetail] = useState("");
   const [stockAdjustments, setStockAdjustments] = useState<StockAdjustment[]>(
     [],
+  );
+  const [monthlyTargets, setMonthlyTargets] = useState<Record<string, number>>(
+    () => Object.fromEntries(SITES.map((local) => [local, 0])),
+  );
+  const [monthlyTargetDrafts, setMonthlyTargetDrafts] = useState<Record<string, number>>(
+    () => Object.fromEntries(SITES.map((local) => [local, 0])),
   );
   const [adjustProductId, setAdjustProductId] = useState(PRODUCTS[0].id);
   const [adjustReason, setAdjustReason] = useState("");
@@ -625,6 +642,10 @@ export default function Home() {
       if (configuration?.limitsBySite) setLimitsBySite(configuration.limitsBySite);
       if (configuration?.schedules) setSchedules(configuration.schedules);
       if (configuration?.priceChanges) setPriceChanges(configuration.priceChanges);
+      if (configuration?.monthlyTargets) {
+        setMonthlyTargets((targets) => ({ ...targets, ...configuration.monthlyTargets }));
+        setMonthlyTargetDrafts((targets) => ({ ...targets, ...configuration.monthlyTargets }));
+      }
     }
     setOperationalReady(true);
   };
@@ -674,6 +695,7 @@ export default function Home() {
       limitsBySite,
       schedules,
       priceChanges,
+      monthlyTargets,
     };
   };
   useEffect(() => {
@@ -756,6 +778,7 @@ export default function Home() {
     limitsBySite,
     schedules,
     priceChanges,
+    monthlyTargets,
   ]);
   useEffect(() => {
     if (user) window.localStorage.setItem(`lartisan:last-site:${user.id}`, site);
@@ -950,13 +973,26 @@ export default function Home() {
   const selectedRequest = stockRequests.find(
     (request) => request.id === selectedRequestId,
   );
-  const adminRows = SITES
-    .filter((local) => reportSite === "Todos los locales" || local === reportSite)
+  const reportSites = SITES.filter(
+    (local) => reportSite === "Todos los locales" || local === reportSite,
+  );
+  const reportSales = sales.filter((sale) => {
+    const day = sale.createdAtISO?.slice(0, 10);
+    return Boolean(
+      day &&
+        sale.status === "activa" &&
+        reportSites.includes(sale.site) &&
+        day >= reportFrom &&
+        day <= reportTo,
+    );
+  });
+  const reportSaleIds = new Set(reportSales.map((sale) => sale.id));
+  const reportPayments = payments.filter(
+    (paymentItem) => paymentItem.saleId && reportSaleIds.has(paymentItem.saleId),
+  );
+  const adminRows = reportSites
     .map((local) => {
-      const matching = sales.filter((sale) => {
-        const day = sale.createdAtISO?.slice(0, 10);
-        return sale.site === local && sale.status === "activa" && day >= reportFrom && day <= reportTo;
-      });
+      const matching = reportSales.filter((sale) => sale.site === local);
       return {
         site: local,
         gross: matching.reduce((sum, sale) => sum + sale.gross, 0),
@@ -974,7 +1010,101 @@ export default function Home() {
     }),
     { gross: 0, net: 0, tickets: 0 },
   );
-  const hasDemoData = false;
+  const paymentReportRows = Array.from(
+    reportPayments.reduce((summary, paymentItem) => {
+      summary.set(
+        paymentItem.method,
+        (summary.get(paymentItem.method) || 0) + paymentItem.amount,
+      );
+      return summary;
+    }, new Map<string, number>()),
+    ([method, amount]) => ({ method, amount }),
+  ).sort((a, b) => b.amount - a.amount);
+  const soldCollectedRows = reportSites.map((local) => {
+    const localSales = reportSales.filter((sale) => sale.site === local);
+    const ids = new Set(localSales.map((sale) => sale.id));
+    const sold = localSales.reduce((total, sale) => total + sale.net, 0);
+    const collected = payments
+      .filter((paymentItem) => paymentItem.saleId && ids.has(paymentItem.saleId))
+      .reduce((total, paymentItem) => total + paymentItem.amount, 0);
+    return { site: local, sold, collected, difference: collected - sold };
+  });
+  const rangeStart = new Date(`${reportFrom}T12:00:00`);
+  const rangeEnd = new Date(`${reportTo}T12:00:00`);
+  const reportDays = Math.max(
+    1,
+    Math.floor((rangeEnd.getTime() - rangeStart.getTime()) / 86400000) + 1,
+  );
+  const previousEnd = new Date(rangeStart);
+  previousEnd.setDate(previousEnd.getDate() - 1);
+  const previousStart = new Date(previousEnd);
+  previousStart.setDate(previousStart.getDate() - reportDays + 1);
+  const previousFrom = dateKey(previousStart);
+  const previousTo = dateKey(previousEnd);
+  const previousSales = sales.filter((sale) => {
+    const day = sale.createdAtISO?.slice(0, 10);
+    return Boolean(
+      day &&
+        sale.status === "activa" &&
+        reportSites.includes(sale.site) &&
+        day >= previousFrom &&
+        day <= previousTo,
+    );
+  });
+  const evolutionRows = reportSites.map((local) => {
+    const current = reportSales
+      .filter((sale) => sale.site === local)
+      .reduce((total, sale) => total + sale.net, 0);
+    const previous = previousSales
+      .filter((sale) => sale.site === local)
+      .reduce((total, sale) => total + sale.net, 0);
+    const change = previous > 0 ? ((current - previous) / previous) * 100 : null;
+    return { site: local, current, previous, change };
+  });
+  const today = new Date();
+  const currentMonthFrom = dateKey(new Date(today.getFullYear(), today.getMonth(), 1));
+  const isCurrentMonthToDate = reportFrom === currentMonthFrom && reportTo === dateKey(today);
+  const daysInCurrentMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const projectedNet = isCurrentMonthToDate && today.getDate() > 0
+    ? Math.round((adminTotals.net / today.getDate()) * daysInCurrentMonth)
+    : null;
+  const selectedTarget = reportSites.reduce(
+    (total, local) => total + (monthlyTargets[local] || 0),
+    0,
+  );
+  const targetProgress = selectedTarget > 0
+    ? Math.round((adminTotals.net / selectedTarget) * 100)
+    : null;
+  const productPerformance = Array.from(
+    reportSales.reduce((summary, sale) => {
+      sale.items.forEach((product) => {
+        const current = summary.get(product.id) || {
+          id: product.id,
+          name: product.name,
+          category: product.category,
+          units: 0,
+          gross: 0,
+        };
+        current.units += 1;
+        current.gross += product.price;
+        summary.set(product.id, current);
+      });
+      return summary;
+    }, new Map<number, { id: number; name: string; category: string; units: number; gross: number }>()),
+    ([, row]) => row,
+  ).sort((a, b) => b.units - a.units || b.gross - a.gross);
+  const cashReportRows = reportSites.map((local) => {
+    const active = activeShiftBySite[local];
+    const lastClosed = shiftLog.find((shift) => shift.site === local && shift.closedAt);
+    return {
+      site: local,
+      status: cashOpenBySite[local] ? "Abierta" : "Cerrada",
+      openedBy: active?.openedBy || "—",
+      openedAt: active?.openedAt || "—",
+      lastClosedAt: lastClosed?.closedAt || "Sin cierre registrado",
+      lastClosedBy: lastClosed?.closedBy || "—",
+    };
+  });
   const operationalAlerts = [
     ...SITES.filter((local) => cashOpenBySite[local]).map((local) => ({
       label: `Caja abierta en ${local}`,
@@ -1696,6 +1826,16 @@ export default function Home() {
         row.status,
       ]),
     ]);
+  };
+  const saveMonthlyTarget = (local: string) => {
+    const value = Math.max(0, Number(monthlyTargetDrafts[local]) || 0);
+    setMonthlyTargets((targets) => ({ ...targets, [local]: value }));
+    setMonthlyTargetDrafts((targets) => ({ ...targets, [local]: value }));
+    recordAudit(
+      "Meta mensual actualizada",
+      `${local} · ${value > 0 ? money.format(value) : "sin meta configurada"}`,
+    );
+    setMessage(`Meta mensual de ${local} guardada.`);
   };
   const saveOrder = () => {
     if (!cart.length)
@@ -5584,9 +5724,7 @@ export default function Home() {
                   </button>
                 </div>
                 <p className="mt-3 text-xs text-slate-500">
-                  {hasDemoData
-                    ? "Recoleta proviene de la copia de prueba; los demás locales aún se muestran como demostración."
-                    : "Fuente validada: copia de prueba de Recoleta, hoja INGRESOS."}
+                  Fuente operativa: ventas, cobros, cajas y movimientos guardados por los locales en la base del sistema.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
@@ -5689,22 +5827,13 @@ export default function Home() {
                     <div className="rounded-xl border bg-white p-5">
                       <b>Alertas operativas</b>
                       <div className="mt-4 space-y-3 text-sm">
-                        <p className="rounded bg-[#fff5d8] p-3">
-                          <b>2 cierres pendientes</b>
-                          <br />
-                          Recoleta y Maure requieren revisión.
-                        </p>
-                        <p className="rounded bg-[#fff1ec] p-3">
-                          <b>Stock a controlar</b>
-                          <br />
-                          El conteo físico se completa desde un perfil autorizado.
-                        </p>
-                        <p className="rounded bg-[#eef2f6] p-3">
-                          <b>Fichajes</b>
-                          <br />
-                          Las alertas de tardanza se activarán con los fichajes
-                          persistentes.
-                        </p>
+                        {operationalAlerts.length ? operationalAlerts.slice(0, 5).map((alert, index) => (
+                          <p key={`${alert.label}-${index}`} className={`rounded p-3 ${alert.tone}`}>
+                            <b>{alert.label}</b><br />{alert.detail}
+                          </p>
+                        )) : (
+                          <p className="rounded bg-[#eef5ef] p-3">Sin alertas operativas activas.</p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -5743,14 +5872,16 @@ export default function Home() {
                           </b>
                         </div>
                         <div className="rounded bg-[#eef5ef] p-4">
-                          <p className="text-sm">Proyección de cierre</p>
+                          <p className="text-sm">Proyección del mes</p>
                           <b className="mt-2 block text-2xl">
-                            {money.format(Math.round(adminTotals.net * 1.12))}
+                            {projectedNet === null ? "No aplica al rango" : money.format(projectedNet)}
                           </b>
                         </div>
                         <div className="rounded bg-[#eef2f6] p-4">
                           <p className="text-sm">Avance de metas</p>
-                          <b className="mt-2 block text-2xl">89%</b>
+                          <b className="mt-2 block text-2xl">
+                            {targetProgress === null ? "Sin meta" : `${targetProgress}%`}
+                          </b>
                         </div>
                         <div className="rounded bg-[#fff5d8] p-4">
                           <p className="text-sm">Alertas críticas</p>
@@ -5767,7 +5898,7 @@ export default function Home() {
                                 <th className="p-3 text-left">Local</th>
                                 <th className="p-3 text-right">Venta neta</th>
                                 <th className="p-3 text-right">Tickets</th>
-                                <th className="p-3 text-right">Proyección</th>
+                                <th className="p-3 text-right">Ticket promedio</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -5781,7 +5912,7 @@ export default function Home() {
                                     {row.tickets}
                                   </td>
                                   <td className="p-3 text-right">
-                                    {money.format(Math.round(row.net * 1.12))}
+                                    {money.format(row.tickets ? Math.round(row.net / row.tickets) : 0)}
                                   </td>
                                 </tr>
                               ))}
@@ -5817,7 +5948,7 @@ export default function Home() {
                     <div className="mt-5">
                       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[#eef2f6] p-4 text-sm">
                         <div>
-                          <b>{pnlConnection.connected ? "Fuente conectada:" : "Histórico inicial:"}</b>{" "}
+                          <b>{pnlConnection.connected ? "Fuente conectada:" : "Fuente pendiente:"}</b>{" "}
                           P&amp;L Consolidado 2026 de Drive. {pnlConnection.updatedAt ? `Última lectura: ${new Date(pnlConnection.updatedAt.replace(" ", "T")).toLocaleString("es-AR")}.` : "Aún no se realizó una lectura automática."}
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -5839,124 +5970,10 @@ export default function Home() {
                             : "Conectá Drive para consultar el P&L. Ningún importe queda incluido en la página pública."}
                         </p>
                       </div>
-                      <div className="mt-5 rounded border bg-white p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <b>Detalle completo del P&amp;L</b>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Elegí un bloque para ver cada línea mensual de la hoja consolidada.
-                            </p>
-                          </div>
-                          <div className="flex rounded-lg bg-[#eef2f6] p-1 text-sm font-bold">
-                            <button onClick={() => setPlPerspective("financial")} className={`rounded px-3 py-2 ${plPerspective === "financial" ? "bg-[#183a67] text-white" : ""}`}>Financiero</button>
-                            <button onClick={() => setPlPerspective("economic")} className={`rounded px-3 py-2 ${plPerspective === "economic" ? "bg-[#183a67] text-white" : ""}`}>Económico</button>
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {Object.entries(PL_SECTIONS).map(([key, section]) => (
-                            <button key={key} onClick={() => setPlSection(key)} className={`rounded-full px-3 py-2 text-sm font-bold ${plSection === key ? "bg-[#183a67] text-white" : "bg-[#eef2f6]"}`}>
-                              {section.title}
-                            </button>
-                          ))}
-                        </div>
-                        <p className="mt-3 text-xs text-slate-600">
-                          <span className="mr-3 inline-flex items-center gap-1"><b className="text-green-700">▲ Verde</b> aumentó frente al mes anterior</span>
-                          <span className="mr-3 inline-flex items-center gap-1"><b className="text-red-700">▼ Rojo</b> bajó frente al mes anterior</span>
-                          <span>La marca indica variación; no define por sí sola si el resultado es bueno o malo.</span>
-                        </p>
-                        <div className="mt-4 overflow-auto rounded border">
-                          <table className="w-full min-w-[1050px] text-sm">
-                            <thead className="bg-[#183a67] text-white">
-                              <tr>
-                                <th className="sticky left-0 bg-[#183a67] p-3 text-left">Concepto</th>
-                                {PL_MONTHS.map((month) => <th key={month} className="p-3 text-right">{month}</th>)}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {PL_SECTIONS[plSection].rows.map((row) => {
-                                const values = plPerspective === "economic" && row.economic ? row.economic : row.financial;
-                                return (
-                                  <tr key={row.label} className="border-t odd:bg-[#fbfaf7]">
-                                    <td className="sticky left-0 bg-inherit p-3 font-bold">{row.label}</td>
-                                    {values.map((value, index) => {
-                                      const previousValue = index > 0 ? values[index - 1] : null;
-                                      const increased = previousValue !== null && value > previousValue;
-                                      const decreased = previousValue !== null && value < previousValue;
-                                      const shown = row.format === "percent" ? `${value.toFixed(1)}%` : row.format === "times" ? `${value.toFixed(2)}x` : row.format === "days" ? `${value.toFixed(1)} días` : money.format(value);
-                                      return <td key={`${row.label}-${index}`} className={`p-3 text-right ${typeof value === "number" && value < 0 ? "text-red-700" : ""}`}>
-                                        <span className={increased ? "font-bold text-green-700" : decreased ? "font-bold text-red-700" : ""}>
-                                          {increased ? "▲ " : decreased ? "▼ " : ""}{shown}
-                                        </span>
-                                      </td>;
-                                    })}
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                        {plPerspective === "economic" && PL_SECTIONS[plSection].rows.every((row) => !row.economic) && (
-                          <p className="mt-3 rounded bg-[#fff5d8] p-3 text-sm">Esta sección no tiene una línea económica distinta en el P&amp;L original; se muestra la base financiera.</p>
-                        )}
-                      </div>
-                      <div className="mt-5 grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
-                        <div className="overflow-auto rounded border">
-                          <table className="w-full min-w-[560px] text-sm">
-                            <thead className="bg-[#183a67] text-white">
-                              <tr>
-                                <th className="p-3 text-left">Mes 2026</th>
-                                <th className="p-3 text-right">Facturación bruta</th>
-                                <th className="p-3 text-right">Variación mensual</th>
-                                <th className="p-3 text-center">Estado</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {PL_CONSOLIDATED_REFERENCE.map((row) => (
-                                <tr key={row.month} className="border-t">
-                                  <td className="p-3 font-bold">{row.month}</td>
-                                  <td className="p-3 text-right">{money.format(row.revenue)}</td>
-                                  <td className={`p-3 text-right font-bold ${row.change === null ? "text-slate-500" : row.change >= 0 ? "text-green-700" : "text-red-700"}`}>
-                                    {row.change === null ? "En curso" : `${row.change > 0 ? "+" : ""}${row.change.toFixed(1)}%`}
-                                  </td>
-                                  <td className="p-3 text-center text-xs font-bold">
-                                    {row.month === "Septiembre" ? "PARCIAL" : "CERRADO"}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="space-y-4">
-                          <div className="rounded border p-4">
-                            <b>Lectura gerencial</b>
-                            <p className="mt-2 text-sm text-slate-600">
-                              Este reporte reúne venta, resultado, caja, deuda e
-                              inventario en una sola vista para decidir el cierre del mes.
-                            </p>
-                          </div>
-                          <div className="rounded bg-[#fff5d8] p-4 text-sm">
-                            <b>Integración de gastos disponible</b>
-                            <p className="mt-2">
-                              En Egresos ya podés actualizar una copia de solo lectura de
-                              GASTOS OPERATIVOS para consultar gastos y cuentas por pagar.
-                              Las ventas, cobros, cajas y stock seguirán requiriendo su propia
-                              integración antes de actualizar esta vista automáticamente.
-                            </p>
-                          </div>
-                          <div className="rounded bg-[#fff1ec] p-4 text-sm">
-                            <b>Control previo</b>
-                            <p className="mt-2">
-                              Antes de automatizar márgenes y resultados, revisaremos
-                              las fórmulas históricas para evitar trasladar porcentajes
-                              o conciliaciones inconsistentes.
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                      {pnlConnection.rows.length > 0 && (
+                      {pnlConnection.rows.length > 0 ? (
                         <div className="mt-5 rounded border bg-white p-4">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div><b>Lectura completa recibida desde Drive</b><p className="mt-1 text-sm text-slate-600">Copia de consulta para contrastar todos los datos importados. La planilla original no se modifica.</p></div>
+                            <div><b>P&amp;L operativo recibido desde Drive</b><p className="mt-1 text-sm text-slate-600">Esta es la fuente autenticada vigente. La planilla original no se modifica.</p></div>
                             <span className="rounded bg-[#eef2f6] px-3 py-2 text-sm font-bold">{pnlConnection.rows.length} filas</span>
                           </div>
                           <div className="mt-4 max-h-[520px] overflow-auto rounded border">
@@ -5965,25 +5982,7 @@ export default function Home() {
                             </table>
                           </div>
                         </div>
-                      )}
-                      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                        <div className="rounded border p-4">
-                          <b>Proyección del mes · Septiembre 2026</b>
-                          <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
-                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">FC bruta acumulada</span><b>Consultar Drive</b></div>
-                            <div className="rounded bg-[#eef5ef] p-3"><span className="block text-slate-600">Proyección de cierre</span><b>Consultar Drive</b></div>
-                            <div className="rounded bg-[#eef2f6] p-3"><span className="block text-slate-600">Promedio diario actual</span><b>Consultar Drive</b></div>
-                          </div>
-                          <p className="mt-3 text-sm text-slate-600">Los valores se muestran únicamente después de la lectura autenticada de Drive.</p>
-                        </div>
-                        <div className="rounded border p-4">
-                          <b>Conciliación de caja por mes</b>
-                          <p className="mt-2 text-sm text-slate-600">La hoja contempla efectivo, banco, Mercado Pago y otras billeteras para cada mes. En esta primera importación los saldos de conciliación están pendientes de completar.</p>
-                          <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
-                            {['Efectivo', 'Banco', 'Mercado Pago', 'Otras cuentas / billeteras'].map((account) => <span key={account} className="rounded bg-[#fff5d8] px-3 py-2">{account} · Pendiente</span>)}
-                          </div>
-                        </div>
-                      </div>
+                      ) : <p className="mt-5 rounded bg-[#fff5d8] p-4 text-sm">Conectá la lectura de Drive para mostrar información operativa. Ya no se presentan importes históricos precargados.</p>}
                     </div>
                   )}
                   {adminReport === "Alertas" && (
@@ -6041,9 +6040,7 @@ export default function Home() {
                         </b>
                       </div>
                       <p className="md:col-span-3 text-sm text-slate-500">
-                        Cuando los cinco locales estén vinculados, este reporte
-                        sumará comparación contra período anterior, día de la
-                        semana, franja horaria y categoría de producto.
+                        Resultado calculado con ventas activas guardadas entre {reportFrom} y {reportTo}. La comparación contra el período anterior está disponible en Evolución.
                       </p>
                     </div>
                   )}
@@ -6061,18 +6058,8 @@ export default function Home() {
                           </tr>
                         </thead>
                         <tbody>
-                          {sales.filter(
-                            (sale) =>
-                              reportSite === "Todos los locales" ||
-                              sale.site === reportSite,
-                          ).length ? (
-                            sales
-                              .filter(
-                                (sale) =>
-                                  reportSite === "Todos los locales" ||
-                                  sale.site === reportSite,
-                              )
-                              .map((sale) => (
+                          {reportSales.length ? (
+                            reportSales.map((sale) => (
                                 <tr key={sale.id} className="border-t">
                                   <td className="p-3">{sale.createdAt}</td>
                                   <td className="p-3">{sale.site}</td>
@@ -6083,12 +6070,11 @@ export default function Home() {
                                     {money.format(sale.net)}
                                   </td>
                                 </tr>
-                              ))
+                            ))
                           ) : (
                             <tr>
                               <td colSpan={6} className="p-4 text-slate-500">
-                                No hay ventas de esta sesión para el local
-                                seleccionado.
+                                No hay ventas activas guardadas para el período y local seleccionados.
                               </td>
                             </tr>
                           )}
@@ -6119,168 +6105,59 @@ export default function Home() {
                     </div>
                   )}
                   {adminReport === "Productos" && (
-                    <div className="mt-5 grid gap-4 md:grid-cols-3">
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Ranking</b>
-                        <p className="mt-2 text-sm">
-                          Más y menos vendidos por unidades y facturación.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Categorías</b>
-                        <p className="mt-2 text-sm">
-                          Participación de pastas, salsas, pizzas, postres y
-                          demás grupos.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#fff5d8] p-4">
-                        <b>Sin movimiento</b>
-                        <p className="mt-2 text-sm">
-                          Productos sin ventas dentro del período elegido.
-                        </p>
-                      </div>
+                    <div className="mt-5 overflow-auto rounded border">
+                      <table className="w-full min-w-[680px] text-sm">
+                        <thead className="bg-[#eef2f6]"><tr><th className="p-3 text-left">Producto</th><th className="p-3 text-left">Categoría</th><th className="p-3 text-right">Unidades</th><th className="p-3 text-right">Venta bruta</th></tr></thead>
+                        <tbody>
+                          {productPerformance.length ? productPerformance.map((row) => (
+                            <tr key={row.id} className="border-t"><td className="p-3 font-bold">{row.name}</td><td className="p-3">{row.category}</td><td className="p-3 text-right">{row.units}</td><td className="p-3 text-right">{money.format(row.gross)}</td></tr>
+                          )) : <tr><td colSpan={4} className="p-4 text-slate-500">No hay productos vendidos en el rango seleccionado.</td></tr>}
+                        </tbody>
+                      </table>
+                      <p className="border-t p-3 text-xs text-slate-500">Ranking calculado con las líneas de las ventas activas guardadas. La venta bruta no descuenta promociones.</p>
                     </div>
                   )}
                   {adminReport === "Evolucion" && (
-                    <>
-                      <div className="mt-5 grid gap-4 md:grid-cols-4">
-                        <div className="rounded bg-[#eef2f6] p-4">
-                          <b>Día anterior</b>
-                          <p className="mt-2 text-sm">
-                            Variación de venta y tickets.
-                          </p>
-                        </div>
-                        <div className="rounded bg-[#eef2f6] p-4">
-                          <b>Semana anterior</b>
-                          <p className="mt-2 text-sm">
-                            Comparación de días equivalentes.
-                          </p>
-                        </div>
-                        <div className="rounded bg-[#eef2f6] p-4">
-                          <b>Mes anterior</b>
-                          <p className="mt-2 text-sm">Crecimiento por local.</p>
-                        </div>
-                        <div className="rounded bg-[#fff5d8] p-4">
-                          <b>Proyección</b>
-                          <p className="mt-2 text-sm">
-                            Estimación del cierre mensual.
-                          </p>
-                        </div>
+                    <div className="mt-5 overflow-auto rounded-xl border">
+                      <div className="border-b bg-[#eef2f6] p-4">
+                        <b>Comparación contra el período inmediatamente anterior</b>
+                        <p className="mt-1 text-xs text-slate-600">Actual: {reportFrom} a {reportTo} · Anterior: {previousFrom} a {previousTo} · Ambos contienen {reportDays} días.</p>
                       </div>
-                      <div className="mt-5 overflow-auto rounded-xl border">
-                        <div className="border-b bg-[#fff5d8] p-4">
-                          <b>Proyección mensual vs. mes anterior</b>
-                          <p className="mt-1 text-xs text-slate-600">
-                            Los valores actuales son la referencia compartida;
-                            luego se calcularán automáticamente con los datos de
-                            cada local.
-                          </p>
-                        </div>
-                        <table className="w-full min-w-[820px] text-sm">
-                          <thead className="bg-[#eef2f6]">
-                            <tr>
-                              <th className="p-3 text-left">Indicador</th>
-                              {[
-                                "Congreso",
-                                "Recoleta",
-                                "Villa Mitre",
-                                "Maure",
-                                "Novo Pacheco",
-                              ].map((local) => (
-                                <th key={local} className="p-3 text-right">
-                                  {local}
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr className="border-t">
-                              <td className="p-3 font-bold">Proyección</td>
-                              {[null, null, null, null, null].map((value, index) => (
-                                <td
-                                  key={index}
-                                  className="p-3 text-right font-bold"
-                                >
-                                  {value === null
-                                    ? "Pendiente"
-                                    : money2.format(value)}
-                                </td>
-                              ))}
-                            </tr>
-                            <tr className="border-t bg-[#eef5ef]">
-                              <td className="p-3 font-bold">Vs. mes pasado</td>
-                              {[13.5, 19.4, 16.4, 0, null].map(
-                                (value, index) => (
-                                  <td
-                                    key={index}
-                                    className={`p-3 text-right font-bold ${value !== null && value > 0 ? "text-green-700" : "text-slate-600"}`}
-                                  >
-                                    {value === null
-                                      ? "Pendiente"
-                                      : `${value.toFixed(1)}%`}
-                                  </td>
-                                ),
-                              )}
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
+                      <table className="w-full min-w-[760px] text-sm">
+                        <thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Local</th><th className="p-3 text-right">Período actual</th><th className="p-3 text-right">Período anterior</th><th className="p-3 text-right">Variación</th></tr></thead>
+                        <tbody>{evolutionRows.map((row) => (
+                          <tr key={row.site} className="border-t"><td className="p-3 font-bold">{row.site}</td><td className="p-3 text-right">{money.format(row.current)}</td><td className="p-3 text-right">{money.format(row.previous)}</td><td className={`p-3 text-right font-bold ${row.change === null ? "text-slate-500" : row.change >= 0 ? "text-green-700" : "text-red-700"}`}>{row.change === null ? "Sin base comparable" : `${row.change > 0 ? "+" : ""}${row.change.toFixed(1)}%`}</td></tr>
+                        ))}</tbody>
+                      </table>
+                      {projectedNet !== null && <p className="border-t bg-[#eef5ef] p-3 text-sm"><b>Proyección operativa del mes:</b> {money.format(projectedNet)}, calculada con el promedio diario acumulado hasta hoy.</p>}
+                    </div>
                   )}
                   {adminReport === "VendidoCobrado" && (
                     <div className="mt-5 overflow-auto rounded-xl border">
                       <div className="border-b bg-[#eef2f6] p-4">
-                        <b>Informe mensual por local</b>
+                        <b>Conciliación de operaciones por local</b>
                         <p className="mt-1 text-xs text-slate-600">
-                          Compara el total vendido con el total cobrado. Maure y
-                          Novo Pacheco se completarán al validar sus fuentes.
+                          Compara ventas activas y pagos asociados entre {reportFrom} y {reportTo}. No equivale a una acreditación bancaria.
                         </p>
                       </div>
-                      <table className="w-full min-w-[980px] text-sm">
+                      <table className="w-full min-w-[760px] text-sm">
                         <thead className="bg-[#183a67] text-white">
                           <tr>
-                            <th className="p-3 text-left">Fecha</th>
-                            <th className="p-3 text-left">Concepto</th>
-                            <th className="p-3 text-right">Congreso</th>
-                            <th className="p-3 text-right">Recoleta</th>
-                            <th className="p-3 text-right">Villa Mitre</th>
-                            <th className="p-3 text-right">Maure</th>
-                            <th className="p-3 text-right">Novo Pacheco</th>
+                            <th className="p-3 text-left">Local</th>
+                            <th className="p-3 text-right">Vendido</th>
+                            <th className="p-3 text-right">Cobrado registrado</th>
+                            <th className="p-3 text-right">Diferencia</th>
+                            <th className="p-3 text-center">Control</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {SOLD_COLLECTED_REFERENCE.map(
-                            ([month, concept, congreso, recoleta, villa]) => (
-                              <tr
-                                key={`${month}-${concept}`}
-                                className={`border-t ${concept === "Cobrado" ? "bg-[#eef5ef]" : "bg-white"}`}
-                              >
-                                <td className="p-3 capitalize">{month}</td>
-                                <td className="p-3 font-bold">{concept}</td>
-                                <td className="p-3 text-right">
-                                  {money2.format(congreso)}
-                                </td>
-                                <td className="p-3 text-right">
-                                  {money2.format(recoleta)}
-                                </td>
-                                <td className="p-3 text-right">
-                                  {money2.format(villa)}
-                                </td>
-                                <td className="p-3 text-right text-slate-500">
-                                  Pendiente
-                                </td>
-                                <td className="p-3 text-right text-slate-500">
-                                  Pendiente
-                                </td>
-                              </tr>
-                            ),
-                          )}
+                          {soldCollectedRows.map((row) => (
+                            <tr key={row.site} className="border-t"><td className="p-3 font-bold">{row.site}</td><td className="p-3 text-right">{money.format(row.sold)}</td><td className="p-3 text-right">{money.format(row.collected)}</td><td className={`p-3 text-right font-bold ${Math.abs(row.difference) < 1 ? "text-green-700" : "text-red-700"}`}>{money.format(row.difference)}</td><td className="p-3 text-center">{Math.abs(row.difference) < 1 ? "Conciliado" : "Revisar"}</td></tr>
+                          ))}
                         </tbody>
                       </table>
                       <p className="border-t p-3 text-xs text-slate-500">
-                        Valores de referencia tomados del cuadro compartido. En
-                        la versión conectada se podrá elegir año, rango y
-                        concepto.
+                        Fuente: operaciones y pagos persistidos en la base. Una diferencia indica un pago faltante, duplicado o sin asociación y requiere revisión.
                       </p>
                     </div>
                   )}
@@ -6290,12 +6167,12 @@ export default function Home() {
                         <thead className="bg-[#eef2f6]">
                           <tr>
                             <th className="p-3 text-left">Medio</th>
-                            <th className="p-3 text-right">{site} · turno actual</th>
+                            <th className="p-3 text-right">Importe del período</th>
                             <th className="p-3 text-left">Estado</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {totals.map(({ method, amount }) => (
+                          {paymentReportRows.length ? paymentReportRows.map(({ method, amount }) => (
                             <tr key={method} className="border-t">
                               <td className="p-3">{method}</td>
                               <td className="p-3 text-right font-bold">
@@ -6305,35 +6182,23 @@ export default function Home() {
                                 Datos operativos
                               </td>
                             </tr>
-                          ))}
+                          )) : <tr><td colSpan={3} className="p-4 text-slate-500">No hay pagos asociados a ventas activas en el rango seleccionado.</td></tr>}
                         </tbody>
                       </table>
                       <p className="mt-3 text-xs text-slate-500">
-                        Estos importes corresponden al cierre de Recoleta del
-                        25/08; los medios dependen de las columnas específicas
-                        de cada local.
+                        Importes asociados a ventas activas guardadas entre {reportFrom} y {reportTo}, para {reportSite.toLowerCase()}.
                       </p>
                     </div>
                   )}
                   {adminReport === "Cajas" && (
-                    <div className="mt-5 grid gap-4 md:grid-cols-3">
-                      <div className="rounded bg-[#fff5d8] p-4">
-                        <b>Cierres pendientes</b>
-                        <p className="mt-2 text-2xl font-bold">2</p>
-                        <p className="text-sm">Recoleta y Maure</p>
-                      </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Control requerido</b>
-                        <p className="mt-2 text-sm">
-                          Diferencia, total físico, gastos, retiros y sobre.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Seguimiento</b>
-                        <p className="mt-2 text-sm">
-                          Fecha, responsable y estado de control.
-                        </p>
-                      </div>
+                    <div className="mt-5 overflow-auto rounded border">
+                      <table className="w-full min-w-[900px] text-sm">
+                        <thead className="bg-[#eef2f6]"><tr><th className="p-3 text-left">Local</th><th className="p-3 text-center">Estado actual</th><th className="p-3 text-left">Abierta por</th><th className="p-3 text-left">Apertura</th><th className="p-3 text-left">Último cierre</th><th className="p-3 text-left">Cerrada por</th></tr></thead>
+                        <tbody>{cashReportRows.map((row) => (
+                          <tr key={row.site} className="border-t"><td className="p-3 font-bold">{row.site}</td><td className={`p-3 text-center font-bold ${row.status === "Abierta" ? "text-amber-700" : "text-green-700"}`}>{row.status}</td><td className="p-3">{row.openedBy}</td><td className="p-3">{row.openedAt}</td><td className="p-3">{row.lastClosedAt}</td><td className="p-3">{row.lastClosedBy}</td></tr>
+                        ))}</tbody>
+                      </table>
+                      <p className="border-t p-3 text-xs text-slate-500">Estado leído de las cajas y turnos guardados. Una caja abierta requiere revisión al finalizar la jornada; no se presume pendiente por una lista fija.</p>
                     </div>
                   )}
                   {adminReport === "CajaMayor" && (
@@ -6735,34 +6600,37 @@ export default function Home() {
                             <th className="p-3 text-right">Venta actual</th>
                             <th className="p-3 text-right">Avance</th>
                             <th className="p-3 text-right">Faltante</th>
+                            <th className="p-3 text-center">Acción</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {ADMIN_DEMO_ROWS.map((row) => {
-                            const target = Math.round(row.net * 1.12);
+                          {adminRows.map((row) => {
+                            const target = monthlyTargets[row.site] || 0;
+                            const progress = target > 0 ? Math.round((row.net / target) * 100) : null;
                             return (
                               <tr key={row.site} className="border-t">
                                 <td className="p-3 font-bold">{row.site}</td>
                                 <td className="p-3 text-right">
-                                  {money.format(target)}
+                                  <label className="sr-only" htmlFor={`target-${row.site}`}>Meta mensual de {row.site}</label>
+                                  <input id={`target-${row.site}`} type="number" min="0" step="1000" value={monthlyTargetDrafts[row.site] || ""} onChange={(event) => setMonthlyTargetDrafts((targets) => ({ ...targets, [row.site]: Math.max(0, Number(event.target.value) || 0) }))} className="w-36 rounded border p-2 text-right" placeholder="Sin meta" />
                                 </td>
                                 <td className="p-3 text-right">
                                   {money.format(row.net)}
                                 </td>
-                                <td className="p-3 text-right font-bold text-green-700">
-                                  {Math.round((row.net / target) * 100)}%
+                                <td className={`p-3 text-right font-bold ${progress === null ? "text-slate-500" : progress >= 100 ? "text-green-700" : "text-amber-700"}`}>
+                                  {progress === null ? "Sin meta" : `${progress}%`}
                                 </td>
                                 <td className="p-3 text-right">
-                                  {money.format(target - row.net)}
+                                  {target > 0 ? money.format(Math.max(0, target - row.net)) : "—"}
                                 </td>
+                                <td className="p-3 text-center"><button onClick={() => saveMonthlyTarget(row.site)} className="rounded bg-[#183a67] px-3 py-2 text-xs font-bold text-white">Guardar meta</button></td>
                               </tr>
                             );
                           })}
                         </tbody>
                       </table>
                       <p className="border-t p-3 text-xs text-slate-500">
-                        Metas de demostración. En Administración se configurará
-                        una meta mensual real por local.
+                        Las metas se guardan en la base operativa. La venta y el avance respetan el período y local seleccionados arriba.
                       </p>
                     </div>
                   )}

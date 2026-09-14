@@ -1,5 +1,5 @@
 import { SITES } from "../shared/constants";
-import type { EmployeeSchedule, PLRow, Product } from "../shared/types";
+import type { EmployeeSchedule, Product } from "../shared/types";
 
 export const INITIAL_SCHEDULES: EmployeeSchedule[] = SITES.flatMap((site) => [
   {
@@ -93,16 +93,6 @@ export const GUIDE_UPDATES = [
       "Si la pantalla sigue abierta, usá Contingencia en el mismo equipo. No cierres sesión, no borres datos del navegador ni repitas el cobro en otro dispositivo. Al volver Internet, sincronizá y verificá las operaciones antes de cerrar caja.",
   },
 ];
-export const ADMIN_DEMO_ROWS: Array<{ site: string; gross: number; net: number; tickets: number; status: string; source: string }> = [];
-export const SOLD_COLLECTED_REFERENCE: ReadonlyArray<readonly [string, string, number, number, number]> = [];
-export const PL_CONSOLIDATED_REFERENCE: ReadonlyArray<{ month: string; revenue: number; change: number | null }> = [];
-export const PL_MONTHS = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre"] as const;
-export const PL_SECTIONS: Record<string, { title: string; rows: PLRow[] }> = {
-  ingresos: { title: "Ingresos y canales de cobro", rows: [] },
-  egresos: { title: "Egresos fijos, variables y retiros", rows: [] },
-  resultados: { title: "Resultados, caja y punto de equilibrio", rows: [] },
-  rentabilidad: { title: "Rentabilidad, deuda e inventario", rows: [] },
-};
 const raw: [string, string, string, number][] = [
   ["Chocotorta", "250 g", "Postres", 8000],
   ["Tiramisú", "250 g", "Postres", 8000],
