@@ -149,13 +149,23 @@ function pnl_is_connected(PDO $pdo, array $config): bool
     return pnl_stored_refresh_token($pdo, $config) !== '';
 }
 
-function pnl_exchange_authorization_code(PDO $pdo, array $config, string $code): void
+function pnl_exchange_authorization_code($pdoOrConfig, $configOrCode, ?string $code = null): void
 {
+    if ($pdoOrConfig instanceof PDO) {
+        $pdo = $pdoOrConfig;
+        $config = is_array($configOrCode) ? $configOrCode : [];
+        $authorizationCode = (string) $code;
+    } else {
+        global $pdo;
+        $config = is_array($pdoOrConfig) ? $pdoOrConfig : [];
+        $authorizationCode = (string) $configOrCode;
+    }
+    if (!($pdo instanceof PDO)) throw new RuntimeException('No se pudo acceder al almacenamiento seguro.');
     $oauth = pnl_oauth_client($config);
     $response = pnl_http('https://oauth2.googleapis.com/token', [
         'method' => 'POST',
         'form' => [
-            'code' => $code,
+            'code' => $authorizationCode,
             'client_id' => $oauth['client_id'],
             'client_secret' => $oauth['client_secret'],
             'redirect_uri' => $oauth['redirect_uri'],
@@ -168,8 +178,16 @@ function pnl_exchange_authorization_code(PDO $pdo, array $config, string $code):
     pnl_store_refresh_token($pdo, $config, (string) $response['json']['refresh_token']);
 }
 
-function pnl_access_token(PDO $pdo, array $config): string
+function pnl_access_token($pdoOrConfig, ?array $maybeConfig = null): string
 {
+    if ($pdoOrConfig instanceof PDO) {
+        $pdo = $pdoOrConfig;
+        $config = $maybeConfig ?? [];
+    } else {
+        global $pdo;
+        $config = is_array($pdoOrConfig) ? $pdoOrConfig : [];
+    }
+    if (!($pdo instanceof PDO)) throw new RuntimeException('No se pudo acceder al almacenamiento seguro.');
     $refreshToken = pnl_stored_refresh_token($pdo, $config);
     if ($refreshToken === '') throw new RuntimeException('Falta autorizar la lectura del P&L con Google.');
     $oauth = pnl_oauth_client($config);
@@ -188,8 +206,16 @@ function pnl_access_token(PDO $pdo, array $config): string
     return (string) $response['json']['access_token'];
 }
 
-function pnl_fetch_sheet_values(PDO $pdo, array $config): array
+function pnl_fetch_sheet_values($pdoOrConfig, ?array $maybeConfig = null): array
 {
+    if ($pdoOrConfig instanceof PDO) {
+        $pdo = $pdoOrConfig;
+        $config = $maybeConfig ?? [];
+    } else {
+        global $pdo;
+        $config = is_array($pdoOrConfig) ? $pdoOrConfig : [];
+    }
+    if (!($pdo instanceof PDO)) throw new RuntimeException('No se pudo acceder al almacenamiento seguro.');
     $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
     $range = (string) ($config['pnl_sync']['range'] ?? "'P&L Consolidado 2026 COPIA'!A1:AN220");
     if ($sheetId === '' || $range === '') throw new RuntimeException('Falta identificar la hoja del P&L.');
@@ -203,8 +229,16 @@ function pnl_fetch_sheet_values(PDO $pdo, array $config): array
     return $rows;
 }
 
-function expense_fetch_sheet_values(PDO $pdo, array $config): array
+function expense_fetch_sheet_values($pdoOrConfig, ?array $maybeConfig = null): array
 {
+    if ($pdoOrConfig instanceof PDO) {
+        $pdo = $pdoOrConfig;
+        $config = $maybeConfig ?? [];
+    } else {
+        global $pdo;
+        $config = is_array($pdoOrConfig) ? $pdoOrConfig : [];
+    }
+    if (!($pdo instanceof PDO)) throw new RuntimeException('No se pudo acceder al almacenamiento seguro.');
     $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
     $range = (string) ($config['expense_sync']['range'] ?? "'GASTOS OPERATIVOS'!A7:Z10000");
     if ($sheetId === '' || $range === '') throw new RuntimeException('Falta identificar la fuente de gastos.');
