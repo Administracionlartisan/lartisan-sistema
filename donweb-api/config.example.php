@@ -16,6 +16,12 @@ return [
     'primary_admin_username' => 'CONFIGURAR_EN_EL_SERVIDOR',
     'admin_recovery_email' => 'CONFIGURAR_EN_EL_SERVIDOR',
     'recovery_from_email' => 'CONFIGURAR_EN_EL_SERVIDOR',
+    'monitoring' => [
+        // Si se omite, usa admin_recovery_email. Repite una misma alerta
+        // como máximo una vez dentro de este intervalo.
+        'alert_email' => 'CONFIGURAR_EN_EL_SERVIDOR',
+        'cooldown_hours' => 6,
+    ],
     'backup' => [
         'local_retention_days' => 30,
         'drive' => [

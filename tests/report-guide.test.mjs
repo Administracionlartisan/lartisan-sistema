@@ -122,7 +122,7 @@ test('audit facts remain in guide, not only in a separate document',()=>{
   assert.match(byId('PLConsolidado'),/lectura autenticada más reciente de Drive/i);
   assert.match(byId('PLConsolidado'),/modo de solo lectura/i);
   assert.match(byId('Reposicion'),/umbral fijo de 8/);
-  assert.match(byId('Auditoria'),/solo cinco eventos/);
+  assert.match(byId('Auditoria'),/Usuario y Acción permiten acotar la búsqueda/);
   assert.match(byId('Personal'),/30 registros/);
   assert.match(byId('Egresos'),/nombre de archivo/);
   assert.match(byId('Fiscal'),/no emite CAE/);

@@ -609,23 +609,53 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
     }
     $body = request_body();
     $baseRevision = max(0, (int) ($body['baseRevision'] ?? 0));
+    $requestId = trim((string) ($body['requestId'] ?? ''));
+    $baseState = $body['baseState'] ?? null;
     $state = $body['state'] ?? null;
-    if (!is_array($state)) {
+    if (!is_array($state) || !preg_match('/^[a-f0-9-]{36}$/i', $requestId)) {
         json_response(['ok' => false, 'error' => 'Datos operativos inválidos'], 422);
     }
     $pdo->beginTransaction();
     try {
+        $requestLookup = $pdo->prepare('SELECT revision FROM operation_requests WHERE request_id = ? AND site = ? LIMIT 1');
+        $requestLookup->execute([$requestId, $site]);
+        $processedRevision = $requestLookup->fetchColumn();
+        if ($processedRevision !== false) {
+            $pdo->commit();
+            json_response(['ok' => true, 'revision' => (int) $processedRevision, 'alreadyProcessed' => true]);
+        }
         $revisionStatement = $pdo->prepare('SELECT revision, state_json FROM operation_site_states WHERE site = ? FOR UPDATE');
         $revisionStatement->execute([$site]);
         $currentRow = $revisionStatement->fetch();
         $currentRevision = $currentRow === false ? false : (int) $currentRow['revision'];
         $previousState = $currentRow === false ? [] : (json_decode((string) $currentRow['state_json'], true) ?: []);
-        $state = authorize_operational_snapshot($user, $previousState, $state);
+        $authorizedIncoming = authorize_operational_snapshot($user, $previousState, $state);
+        $merged = false;
+        if ($currentRow !== false && (int) $currentRevision !== $baseRevision) {
+            if (!is_array($baseState)) {
+                $pdo->rollBack();
+                json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
+            }
+            $state = merge_operational_snapshot($baseState, $previousState, $authorizedIncoming);
+            $merged = true;
+        } else {
+            $state = $authorizedIncoming;
+        }
         $changedKeys = array_values(array_filter(array_unique(array_merge(array_keys($previousState), array_keys($state))), static function ($key) use ($previousState, $state): bool {
             return ($previousState[$key] ?? null) !== ($state[$key] ?? null);
         }));
         $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $eventJson = json_encode(['changedKeys' => $changedKeys, 'recordedAt' => gmdate('c')], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $clientEvent = is_array($body['event'] ?? null) ? $body['event'] : [];
+        $eventJson = json_encode([
+            'changedKeys' => $changedKeys,
+            'recordedAt' => gmdate('c'),
+            'requestId' => $requestId,
+            'mergedConcurrentChanges' => $merged,
+            'event' => [
+                'action' => substr((string) ($clientEvent['action'] ?? 'Actualización operativa'), 0, 160),
+                'detail' => substr((string) ($clientEvent['detail'] ?? ''), 0, 800),
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($stateJson === false || $eventJson === false || strlen($stateJson) > 4_000_000) {
             $pdo->rollBack();
             json_response(['ok' => false, 'error' => 'La operación supera el tamaño permitido'], 422);
@@ -638,10 +668,6 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
             $pdo->prepare('INSERT INTO operation_site_states (site, state_json, revision, updated_by) VALUES (?, ?, 1, ?)')
                 ->execute([$site, $stateJson, $user['id']]);
         } else {
-            if ((int) $currentRevision !== $baseRevision) {
-                $pdo->rollBack();
-                json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
-            }
             $pdo->prepare('UPDATE operation_site_states SET state_json = ?, revision = revision + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE site = ?')
                 ->execute([$stateJson, $user['id'], $site]);
         }
@@ -650,13 +676,163 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
         )->execute([$site, $user['id'], 'operacion_actualizada', $eventJson]);
         sync_normalized_operations($pdo, $site, $state, (int) $user['id']);
         audit($pdo, (int) $user['id'], 'operational_state_updated', $site);
+        $nextRevision = $currentRow === false ? 1 : ((int) $currentRevision + 1);
+        $pdo->prepare('INSERT INTO operation_requests (request_id, site, user_id, revision) VALUES (?, ?, ?, ?)')
+            ->execute([$requestId, $site, $user['id'], $nextRevision]);
         $pdo->commit();
     } catch (Throwable $error) {
         $pdo->rollBack();
         throw $error;
     }
     $revision = (int) $pdo->query("SELECT revision FROM operation_site_states WHERE site = " . $pdo->quote($site))->fetchColumn();
-    json_response(['ok' => true, 'revision' => $revision]);
+    json_response(['ok' => true, 'revision' => $revision, 'merged' => $merged ?? false, 'state' => ($merged ?? false) ? operational_snapshot_for_user($user, $state) : null]);
+}
+
+if ($method === 'POST' && $route === 'monitoring/heartbeat') {
+    require_user($pdo);
+    $result = notify_monitoring_alerts($pdo, $config);
+    json_response(['ok' => true, 'notification' => $result]);
+}
+
+if ($method === 'GET' && $route === 'admin/audit') {
+    require_user($pdo, ['administracion']);
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : date('Y-m-01');
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? '')) ? (string) $_GET['to'] : date('Y-m-d');
+    $siteFilter = trim((string) ($_GET['site'] ?? ''));
+    $userFilter = trim((string) ($_GET['user'] ?? ''));
+    $actionFilter = trim((string) ($_GET['action'] ?? ''));
+    $sql = "SELECT e.id, e.site, e.event_json, e.created_at, COALESCE(u.full_name, 'Sistema') AS user_name
+            FROM operation_events e LEFT JOIN users u ON u.id = e.user_id
+            WHERE e.created_at >= ? AND e.created_at < DATE_ADD(?, INTERVAL 1 DAY)";
+    $params = [$from, $to];
+    if ($siteFilter !== '' && in_array($siteFilter, operational_sites(), true)) { $sql .= ' AND e.site = ?'; $params[] = $siteFilter; }
+    if ($userFilter !== '') { $sql .= ' AND COALESCE(u.full_name, ?) LIKE ?'; $params[] = 'Sistema'; $params[] = '%' . $userFilter . '%'; }
+    if ($actionFilter !== '') { $sql .= ' AND e.event_json LIKE ?'; $params[] = '%' . $actionFilter . '%'; }
+    $sql .= ' ORDER BY e.created_at DESC, e.id DESC LIMIT 1000';
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
+    $events = [];
+    foreach ($statement->fetchAll() as $row) {
+        $payload = json_decode((string) $row['event_json'], true) ?: [];
+        $event = is_array($payload['event'] ?? null) ? $payload['event'] : [];
+        $events[] = [
+            'id' => 'operation-' . $row['id'], 'at' => $row['created_at'], 'site' => $row['site'],
+            'userName' => $row['user_name'], 'action' => (string) ($event['action'] ?? $payload['eventType'] ?? 'Actualización operativa'),
+            'detail' => (string) ($event['detail'] ?? implode(', ', $payload['changedKeys'] ?? [])),
+        ];
+    }
+    if ($siteFilter === '') {
+        $auditSql = "SELECT a.id, a.event_type, a.event_detail, a.created_at, COALESCE(u.full_name, 'Sistema') AS user_name FROM audit_log a LEFT JOIN users u ON u.id = a.user_id WHERE a.created_at >= ? AND a.created_at < DATE_ADD(?, INTERVAL 1 DAY)";
+        $auditParams = [$from, $to];
+        if ($userFilter !== '') { $auditSql .= ' AND COALESCE(u.full_name, ?) LIKE ?'; $auditParams[] = 'Sistema'; $auditParams[] = '%' . $userFilter . '%'; }
+        if ($actionFilter !== '') { $auditSql .= ' AND (a.event_type LIKE ? OR a.event_detail LIKE ?)'; $auditParams[] = '%' . $actionFilter . '%'; $auditParams[] = '%' . $actionFilter . '%'; }
+        $auditSql .= ' ORDER BY a.created_at DESC LIMIT 1000';
+        $auditStatement = $pdo->prepare($auditSql); $auditStatement->execute($auditParams);
+        foreach ($auditStatement->fetchAll() as $row) $events[] = [
+            'id' => 'security-' . $row['id'], 'at' => $row['created_at'], 'site' => 'General', 'userName' => $row['user_name'],
+            'action' => str_replace('_', ' ', (string) $row['event_type']), 'detail' => (string) ($row['event_detail'] ?? ''),
+        ];
+        usort($events, static fn (array $left, array $right): int => strcmp((string) $right['at'], (string) $left['at']));
+        $events = array_slice($events, 0, 1000);
+    }
+    json_response(['ok' => true, 'events' => $events]);
+}
+
+if ($method === 'GET' && $route === 'admin/cash-history') {
+    require_user($pdo, ['administracion']);
+    ensure_normalized_operations_schema($pdo);
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : date('Y-m-01');
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? '')) ? (string) $_GET['to'] : date('Y-m-d');
+    $siteFilter = trim((string) ($_GET['site'] ?? ''));
+    $sql = 'SELECT id, site, opened_at, opened_by, initial_fund, closed_at, closed_by, expected_cash, counted_cash, difference_amount, envelope_amount FROM lartisan_cash_sessions WHERE opened_at >= ? AND opened_at < DATE_ADD(?, INTERVAL 1 DAY)';
+    $params = [$from, $to];
+    if ($siteFilter !== '' && in_array($siteFilter, operational_sites(), true)) { $sql .= ' AND site = ?'; $params[] = $siteFilter; }
+    $sql .= ' ORDER BY opened_at DESC LIMIT 2000';
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
+    json_response(['ok' => true, 'sessions' => array_map(static fn (array $row): array => [
+        'id' => $row['id'], 'site' => $row['site'], 'openedAt' => $row['opened_at'], 'openedBy' => $row['opened_by'],
+        'initialFund' => (float) $row['initial_fund'], 'closedAt' => $row['closed_at'], 'closedBy' => $row['closed_by'],
+        'expectedCash' => $row['expected_cash'] === null ? null : (float) $row['expected_cash'],
+        'countedCash' => $row['counted_cash'] === null ? null : (float) $row['counted_cash'],
+        'differenceAmount' => $row['difference_amount'] === null ? null : (float) $row['difference_amount'],
+        'envelopeAmount' => $row['envelope_amount'] === null ? null : (float) $row['envelope_amount'],
+    ], $statement->fetchAll())]);
+}
+
+if ($method === 'GET' && $route === 'admin/report-sales') {
+    require_user($pdo, ['administracion']);
+    ensure_normalized_operations_schema($pdo);
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : date('Y-m-01');
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? '')) ? (string) $_GET['to'] : date('Y-m-d');
+    $siteFilter = trim((string) ($_GET['site'] ?? ''));
+    $sql = 'SELECT * FROM lartisan_sales WHERE occurred_at >= ? AND occurred_at < DATE_ADD(?, INTERVAL 1 DAY)';
+    $params = [$from, $to];
+    if ($siteFilter !== '' && in_array($siteFilter, operational_sites(), true)) { $sql .= ' AND site = ?'; $params[] = $siteFilter; }
+    $sql .= ' ORDER BY occurred_at DESC LIMIT 10000';
+    $statement = $pdo->prepare($sql); $statement->execute($params); $saleRows = $statement->fetchAll();
+    $ids = array_column($saleRows, 'id'); $itemsBySale = []; $paymentsBySale = [];
+    if ($ids) {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $itemStatement = $pdo->prepare("SELECT * FROM lartisan_sale_items WHERE sale_id IN ($placeholders) ORDER BY sale_id, line_number");
+        $itemStatement->execute($ids);
+        foreach ($itemStatement->fetchAll() as $item) $itemsBySale[$item['sale_id']][] = $item;
+        $paymentStatement = $pdo->prepare("SELECT * FROM lartisan_sale_payments WHERE sale_id IN ($placeholders)");
+        $paymentStatement->execute($ids);
+        foreach ($paymentStatement->fetchAll() as $paymentRow) $paymentsBySale[$paymentRow['sale_id']][] = ['method' => $paymentRow['payment_method'], 'amount' => (float) $paymentRow['amount'], 'saleId' => $paymentRow['sale_id']];
+    }
+    $sales = [];
+    foreach ($saleRows as $row) {
+        $items = [];
+        foreach ($itemsBySale[$row['id']] ?? [] as $item) for ($count = 0; $count < (int) $item['quantity']; $count++) $items[] = [
+            'id' => (int) $item['product_id'], 'name' => $item['product_name'], 'detail' => $item['presentation'] ?? '', 'category' => 'Histórico', 'price' => (float) $item['unit_price'],
+        ];
+        $sales[] = [
+            'id' => $row['id'], 'site' => $row['site'], 'createdAt' => $row['occurred_at'], 'createdAtISO' => str_replace(' ', 'T', (string) $row['occurred_at']),
+            'items' => $items, 'gross' => (float) $row['gross_amount'], 'discount' => (float) $row['discount_amount'], 'net' => (float) $row['net_amount'],
+            'method' => $row['payment_method'] ?: 'Sin informar', 'invoiceType' => $row['invoice_type'] ?: 'Remito interno', 'customer' => $row['customer_name'] ?: 'Consumidor final',
+            'invitation' => (bool) $row['invitation'], 'channel' => $row['channel'] ?: 'Mostrador', 'status' => $row['status'] ?: 'activa',
+        ];
+    }
+    json_response(['ok' => true, 'sales' => $sales, 'payments' => array_values(array_merge(...array_values($paymentsBySale ?: [[]]))), 'truncated' => count($sales) >= 10000]);
+}
+
+if ($method === 'POST' && $route === 'admin/history/import') {
+    $admin = require_user($pdo, ['administracion']);
+    ensure_normalized_operations_schema($pdo);
+    $body = request_body(); $kind = (string) ($body['kind'] ?? 'sales'); $rows = $body['rows'] ?? [];
+    if (!in_array($kind, ['sales', 'cash'], true) || !is_array($rows) || !$rows || count($rows) > 5000) json_response(['ok' => false, 'error' => 'Archivo histórico inválido o demasiado grande'], 422);
+    $batchHash = hash('sha256', json_encode([$kind, $rows], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    $uuid = static function (string $seed): string { $hex = substr(hash('sha256', $seed), 0, 32); return substr($hex,0,8).'-'.substr($hex,8,4).'-4'.substr($hex,13,3).'-a'.substr($hex,17,3).'-'.substr($hex,20,12); };
+    $imported = 0; $rejected = 0; $pdo->beginTransaction();
+    try {
+        if ($kind === 'sales') {
+            $insert = $pdo->prepare("INSERT INTO lartisan_sales (id, site, occurred_at, gross_amount, discount_amount, net_amount, payment_method, invoice_type, customer_name, channel, status, invitation, synced_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE id=id");
+            $paymentInsert = $pdo->prepare('INSERT INTO lartisan_sale_payments (sale_id, payment_method, amount) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE amount=VALUES(amount)');
+            foreach ($rows as $index => $row) {
+                if (!is_array($row)) { $rejected++; continue; }
+                $siteName = trim((string) ($row['local'] ?? '')); $at = historical_datetime($row['fecha'] ?? ''); $net = historical_number($row['neto'] ?? 0);
+                if (!in_array($siteName, operational_sites(), true) || !$at || $net < 0) { $rejected++; continue; }
+                $saleId = preg_match('/^[a-f0-9-]{36}$/i', (string) ($row['operacion'] ?? '')) ? (string) $row['operacion'] : $uuid($batchHash . '|' . $index);
+                $gross = historical_number($row['bruto'] ?? $net); $discount = historical_number($row['descuento'] ?? max(0, $gross - $net)); $methodName = trim((string) ($row['medio_pago'] ?? 'Sin informar'));
+                $insert->execute([$saleId, $siteName, $at, $gross, $discount, $net, $methodName, (string) ($row['comprobante'] ?? 'Remito interno'), (string) ($row['cliente'] ?? 'Consumidor final'), (string) ($row['canal'] ?? 'Mostrador'), (string) ($row['estado'] ?? 'activa'), $admin['id']]);
+                $paymentInsert->execute([$saleId, $methodName, $net]); $imported++;
+            }
+        } else {
+            $insert = $pdo->prepare("INSERT INTO lartisan_cash_sessions (id, site, opened_at, opened_by, initial_fund, closed_at, closed_by, expected_cash, counted_cash, difference_amount, envelope_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id=id");
+            foreach ($rows as $index => $row) {
+                if (!is_array($row)) { $rejected++; continue; }
+                $siteName = trim((string) ($row['local'] ?? '')); $opened = historical_datetime($row['apertura'] ?? '');
+                if (!in_array($siteName, operational_sites(), true) || !$opened) { $rejected++; continue; }
+                $id = preg_match('/^[a-f0-9-]{36}$/i', (string) ($row['turno'] ?? '')) ? (string) $row['turno'] : $uuid($batchHash . '|cash|' . $index);
+                $expectedValue = historical_number($row['esperado'] ?? 0); $countedValue = historical_number($row['contado'] ?? 0);
+                $insert->execute([$id, $siteName, $opened, (string) ($row['abrió'] ?? $row['abrio'] ?? 'Histórico'), historical_number($row['fondo_inicial'] ?? 0), historical_datetime($row['cierre'] ?? ''), (string) ($row['cerró'] ?? $row['cerro'] ?? ''), $expectedValue, $countedValue, historical_number($row['diferencia'] ?? ($countedValue - $expectedValue)), historical_number($row['sobre'] ?? 0)]); $imported++;
+            }
+        }
+        audit($pdo, (int) $admin['id'], 'historical_import', $kind . ': importados=' . $imported . ', rechazados=' . $rejected);
+        $pdo->commit();
+    } catch (Throwable $error) { $pdo->rollBack(); throw $error; }
+    json_response(['ok' => true, 'imported' => $imported, 'rejected' => $rejected]);
 }
 
 if ($method === 'GET' && $route === 'admin/reset-requests') {

@@ -36,6 +36,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.site-package-*/
 
 # private server configuration and generated release archives
 /donweb-api/config.local.php

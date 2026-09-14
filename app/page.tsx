@@ -10,13 +10,16 @@ import {
   INITIAL_MANAGED_USERS, money, SITES,
 } from "./modules/shared/constants";
 import { downloadCsv } from "./modules/shared/downloadCsv";
+import { readPendingWrites, removePendingWrite, savePendingWrite, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
 import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import ComingSoonPanel, { type ComingSoonSection } from "./modules/administracion/ComingSoonPanel";
 import MrpPanel from "./modules/administracion/MrpPanel";
+import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
-  AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent,
+  AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
   CashAdjustment, CashFields, CashLedgerEntry, CashShift, CashTransfer,
+  CashHistoryRow,
   EmployeeSchedule, EnvelopeRecord, Expense, Incident, ManagedUser,
   ExpenseSyncSnapshot,
   OperationalLimits, OperationalSnapshot, PasswordResetRequest, Payment,
@@ -150,6 +153,7 @@ export default function Home() {
   const [operationalVersion, setOperationalVersion] = useState(0);
   const operationalEventRef = useRef<{ action: string; detail: string } | null>(null);
   const lastPersistedSnapshot = useRef<Record<string, string>>({});
+  const queuedBaseSnapshot = useRef<Record<string, string>>({});
   const serverRevision = useRef<Record<string, number>>({});
   const persistQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingReceiptRef = useRef<Sale | null>(null);
@@ -177,6 +181,14 @@ export default function Home() {
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
+  const [persistedReportSales, setPersistedReportSales] = useState<Sale[] | null>(null);
+  const [persistedReportPayments, setPersistedReportPayments] = useState<Payment[]>([]);
+  const [auditHistory, setAuditHistory] = useState<AuditHistoryRow[]>([]);
+  const [auditUserFilter, setAuditUserFilter] = useState("");
+  const [auditActionFilter, setAuditActionFilter] = useState("");
+  const [cashHistory, setCashHistory] = useState<CashHistoryRow[]>([]);
+  const [historyImportKind, setHistoryImportKind] = useState<"sales" | "cash">("sales");
+  const [historyImporting, setHistoryImporting] = useState(false);
   const [aiSupportRequests, setAiSupportRequests] = useState<AiSupportRequest[]>([]);
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
@@ -433,7 +445,7 @@ export default function Home() {
       window.clearInterval(timer);
       window.removeEventListener("focus", refreshOnFocus);
     };
-  }, [user?.id, user?.role]);
+  }, [user]);
   useEffect(() => {
     if (user?.role !== "administracion") return;
     let active = true;
@@ -482,6 +494,21 @@ export default function Home() {
     const timer = window.setInterval(check, 5 * 60 * 1000);
     return () => { active = false; window.clearInterval(timer); };
   }, [user?.id, user?.role, healthRefreshKey, managedUsers]);
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    const heartbeat = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/monitoring/heartbeat`, { method: "POST", credentials: "include", cache: "no-store" });
+        if (!response.ok || !active || user.role !== "administracion") return;
+        const data = (await response.json()) as { notification?: SystemHealth["notification"] };
+        if (data.notification) setSystemHealth((current) => ({ ...current, notification: data.notification }));
+      } catch { /* El chequeo visible informará si la API deja de responder. */ }
+    };
+    void heartbeat();
+    const timer = window.setInterval(heartbeat, 5 * 60 * 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [user]);
   useEffect(() => {
     if (user?.role !== "administracion") return;
     let active = true;
@@ -633,6 +660,7 @@ export default function Home() {
       lastPersistedSnapshot.current = Object.fromEntries(
         entries.map(([local, entry]) => [local, JSON.stringify(entry.state)]),
       );
+      queuedBaseSnapshot.current = { ...lastPersistedSnapshot.current };
       serverRevision.current = Object.fromEntries(
         entries.map(([local, entry]) => [local, entry.revision]),
       );
@@ -660,6 +688,45 @@ export default function Home() {
   // Cargar nuevamente solo cuando cambia la identidad autenticada.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+  useEffect(() => {
+    if (user?.role !== "administracion" || tab !== "Administración") return;
+    let active = true;
+    const start = new Date(`${reportFrom}T12:00:00`);
+    const end = new Date(`${reportTo}T12:00:00`);
+    const days = Math.max(1, Math.floor((end.getTime() - start.getTime()) / 86400000) + 1);
+    const previousStart = new Date(start);
+    previousStart.setDate(previousStart.getDate() - days);
+    const params = new URLSearchParams({ from: dateKey(previousStart), to: reportTo });
+    if (reportSite !== "Todos los locales") params.set("site", reportSite);
+    fetch(`${API_BASE}/admin/report-sales?${params}`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("No se pudo cargar el historial operativo.");
+        const data = (await response.json()) as { sales?: Sale[]; payments?: Payment[] };
+        if (active) { setPersistedReportSales(data.sales || []); setPersistedReportPayments(data.payments || []); }
+      })
+      .catch(() => { if (active) setPersistedReportSales(null); });
+    return () => { active = false; };
+  }, [user?.id, user?.role, tab, reportFrom, reportTo, reportSite, operationalVersion]);
+  useEffect(() => {
+    if (user?.role !== "administracion" || tab !== "Administración" || !["Auditoria", "Cajas"].includes(adminReport)) return;
+    let active = true;
+    const params = new URLSearchParams({ from: reportFrom, to: reportTo });
+    if (reportSite !== "Todos los locales") params.set("site", reportSite);
+    if (adminReport === "Auditoria") {
+      if (auditUserFilter.trim()) params.set("user", auditUserFilter.trim());
+      if (auditActionFilter.trim()) params.set("action", auditActionFilter.trim());
+      fetch(`${API_BASE}/admin/audit?${params}`, { credentials: "include", cache: "no-store" })
+        .then(async (response) => { if (!response.ok) throw new Error(); return (await response.json()) as { events?: AuditHistoryRow[] }; })
+        .then((data) => { if (active) setAuditHistory(data.events || []); })
+        .catch(() => { if (active) setAuditHistory([]); });
+    } else {
+      fetch(`${API_BASE}/admin/cash-history?${params}`, { credentials: "include", cache: "no-store" })
+        .then(async (response) => { if (!response.ok) throw new Error(); return (await response.json()) as { sessions?: CashHistoryRow[] }; })
+        .then((data) => { if (active) setCashHistory(data.sessions || []); })
+        .catch(() => { if (active) setCashHistory([]); });
+    }
+    return () => { active = false; };
+  }, [user?.id, user?.role, tab, adminReport, reportFrom, reportTo, reportSite, auditUserFilter, auditActionFilter, operationalVersion]);
   const operationalSnapshot = (local: string): OperationalSnapshot => {
     const localSales = sales.filter((item) => item.site === local);
     const saleIds = new Set(localSales.map((item) => item.id));
@@ -698,6 +765,37 @@ export default function Home() {
       monthlyTargets,
     };
   };
+  const refreshPendingCount = () => {
+    if (!user) return setPendingSync(0);
+    setPendingSync(readPendingWrites(String(user.id)).length);
+  };
+  const sendPendingWrite = async (write: PendingOperationalWrite) => {
+    if (!user) throw new Error("Sesión requerida");
+    const response = await fetch(`${API_BASE}/operations/states/${encodeURIComponent(write.site)}`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      body: JSON.stringify(write),
+    });
+    if (!response.ok) throw new Error(response.status === 409 ? "El servidor requiere recargar el estado antes de combinarlo." : "No se pudo guardar");
+    const data = (await response.json()) as { revision?: number; merged?: boolean };
+    if (typeof data.revision === "number") serverRevision.current[write.site] = data.revision;
+    lastPersistedSnapshot.current[write.site] = JSON.stringify(write.state);
+    removePendingWrite(String(user.id), write.site, write.requestId);
+    refreshPendingCount();
+    if (data.merged) {
+      await loadOperationalData();
+      setMessage(`Los cambios simultáneos de ${write.site} se combinaron sin perder operaciones.`);
+    }
+  };
+  const flushPendingWrites = async () => {
+    if (!user || !navigator.onLine) return;
+    const writes = readPendingWrites(String(user.id));
+    for (const write of writes) await sendPendingWrite(write);
+    refreshPendingCount();
+    if (writes.length) setSyncStatus(`${writes.length} operación(es) pendientes confirmadas por el servidor.`);
+  };
   useEffect(() => {
     if (!user || !operationalReady || operationalVersion === 0) return;
     const event = operationalEventRef.current || {
@@ -709,38 +807,30 @@ export default function Home() {
       const snapshot = operationalSnapshot(local);
       const serialized = JSON.stringify(snapshot);
       if (lastPersistedSnapshot.current[local] === serialized) return;
+      const baseState = JSON.parse(queuedBaseSnapshot.current[local] || lastPersistedSnapshot.current[local] || "{}") as OperationalSnapshot;
+      const write: PendingOperationalWrite = {
+        requestId: crypto.randomUUID(),
+        site: local,
+        state: snapshot,
+        baseState,
+        baseRevision: serverRevision.current[local] || 0,
+        event: { ...event, recordedAt: new Date().toISOString() },
+        queuedAt: new Date().toISOString(),
+      };
+      queuedBaseSnapshot.current[local] = serialized;
+      savePendingWrite(String(user.id), write);
+      refreshPendingCount();
       persistQueue.current = persistQueue.current.then(async () => {
-        const response = await fetch(`${API_BASE}/operations/states/${encodeURIComponent(local)}`, {
-          method: "PUT",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          keepalive: true,
-          body: JSON.stringify({
-            state: snapshot,
-            baseRevision: serverRevision.current[local] || 0,
-            eventType: "operacion_registrada",
-            event: { ...event, recordedAt: new Date().toISOString() },
-          }),
-        });
-        if (response.status === 409) {
-          setOperationalReady(false);
-          setMessage(`Otro equipo actualizó ${local}. Volvé a ingresar antes de continuar para evitar pérdidas.`);
-          throw new Error("Conflicto de versión");
-        }
-        if (!response.ok) throw new Error("No se pudo guardar");
-        const data = (await response.json()) as { revision?: number };
-        if (typeof data.revision === "number") serverRevision.current[local] = data.revision;
-        lastPersistedSnapshot.current[local] = serialized;
+        await sendPendingWrite(write);
         const pendingReceipt = pendingReceiptRef.current;
         if (pendingReceipt && pendingReceipt.site === local && snapshot.sales?.some((sale) => sale.id === pendingReceipt.id)) {
           pendingReceiptRef.current = null;
           setReceiptSale(pendingReceipt);
           setMessage(`Venta confirmada y guardada: ${money.format(pendingReceipt.net)}. Ya podés imprimir el ticket.`);
         }
-        if (pendingSync > 0) setPendingSync(0);
         setSyncStatus("Operación guardada en la base de datos.");
       }).catch(() => {
-        setPendingSync((value) => Math.max(1, value));
+        refreshPendingCount();
         setMessage("La operación quedó pendiente. No recargues ni repitas el cobro; verificá la conexión.");
       });
     });
@@ -780,6 +870,24 @@ export default function Home() {
     priceChanges,
     monthlyTargets,
   ]);
+  useEffect(() => {
+    if (!user) return;
+    const handleOffline = () => setConnectionMode("Contingencia");
+    const handleOnline = () => {
+      setConnectionMode("En línea");
+      flushPendingWrites().catch(() => setMessage("La conexión volvió, pero todavía hay operaciones pendientes. Tocá Sincronizar."));
+    };
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    const initialTimer = window.setTimeout(() => {
+      refreshPendingCount();
+      if (!navigator.onLine) handleOffline();
+      else flushPendingWrites().catch(() => undefined);
+    }, 0);
+    return () => { window.clearTimeout(initialTimer); window.removeEventListener("offline", handleOffline); window.removeEventListener("online", handleOnline); };
+  // La cola se reanuda al autenticar o cuando vuelve Internet.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
   useEffect(() => {
     if (user) window.localStorage.setItem(`lartisan:last-site:${user.id}`, site);
   }, [site, user]);
@@ -976,7 +1084,9 @@ export default function Home() {
   const reportSites = SITES.filter(
     (local) => reportSite === "Todos los locales" || local === reportSite,
   );
-  const reportSales = sales.filter((sale) => {
+  const reportSourceSales = persistedReportSales ?? sales;
+  const reportSourcePayments = persistedReportSales === null ? payments : persistedReportPayments;
+  const reportSales = reportSourceSales.filter((sale) => {
     const day = sale.createdAtISO?.slice(0, 10);
     return Boolean(
       day &&
@@ -987,7 +1097,7 @@ export default function Home() {
     );
   });
   const reportSaleIds = new Set(reportSales.map((sale) => sale.id));
-  const reportPayments = payments.filter(
+  const reportPayments = reportSourcePayments.filter(
     (paymentItem) => paymentItem.saleId && reportSaleIds.has(paymentItem.saleId),
   );
   const adminRows = reportSites
@@ -1024,7 +1134,7 @@ export default function Home() {
     const localSales = reportSales.filter((sale) => sale.site === local);
     const ids = new Set(localSales.map((sale) => sale.id));
     const sold = localSales.reduce((total, sale) => total + sale.net, 0);
-    const collected = payments
+    const collected = reportSourcePayments
       .filter((paymentItem) => paymentItem.saleId && ids.has(paymentItem.saleId))
       .reduce((total, paymentItem) => total + paymentItem.amount, 0);
     return { site: local, sold, collected, difference: collected - sold };
@@ -1041,7 +1151,7 @@ export default function Home() {
   previousStart.setDate(previousStart.getDate() - reportDays + 1);
   const previousFrom = dateKey(previousStart);
   const previousTo = dateKey(previousEnd);
-  const previousSales = sales.filter((sale) => {
+  const previousSales = reportSourceSales.filter((sale) => {
     const day = sale.createdAtISO?.slice(0, 10);
     return Boolean(
       day &&
@@ -1081,7 +1191,7 @@ export default function Home() {
         const current = summary.get(product.id) || {
           id: product.id,
           name: product.name,
-          category: product.category,
+          category: PRODUCTS.find((catalogProduct) => catalogProduct.id === product.id)?.category || product.category,
           units: 0,
           gross: 0,
         };
@@ -1807,7 +1917,7 @@ export default function Home() {
     );
   };
   const exportAdminReport = () => {
-    downloadCsv(`Informe_${adminReport}_${reportFrom}_${reportTo}.csv`, [
+    const heading: Array<Array<string | number | null>> = [
       ["L'ARTISAN · INFORME ADMINISTRATIVO"],
       [
         "Reporte",
@@ -1817,6 +1927,16 @@ export default function Home() {
       ["Desde", reportFrom, "Hasta", reportTo],
       ["Local", reportSite],
       [],
+    ];
+    const reportRows: Record<string, Array<Array<string | number | null>>> = {
+      DetalleVentas: [["Fecha", "Operación", "Local", "Cliente", "Comprobante", "Medio", "Bruto", "Descuento", "Neto", "Estado"], ...reportSales.map((sale) => [sale.createdAtISO, sale.id, sale.site, sale.customer, sale.invoiceType, sale.method, sale.gross, sale.discount, sale.net, sale.status])],
+      Productos: [["Producto", "Categoría", "Unidades", "Venta bruta"], ...productPerformance.map((row) => [row.name, row.category, row.units, row.gross])],
+      Pagos: [["Medio de pago", "Importe"], ...paymentReportRows.map((row) => [row.method, row.amount])],
+      VendidoCobrado: [["Local", "Vendido", "Cobrado", "Diferencia"], ...soldCollectedRows.map((row) => [row.site, row.sold, row.collected, row.difference])],
+      Cajas: [["Local", "Apertura", "Abrió", "Fondo", "Cierre", "Cerró", "Esperado", "Contado", "Diferencia", "Sobre"], ...cashHistory.map((row) => [row.site, row.openedAt, row.openedBy, row.initialFund, row.closedAt || "", row.closedBy || "", row.expectedCash ?? "", row.countedCash ?? "", row.differenceAmount ?? "", row.envelopeAmount ?? ""])],
+      Auditoria: [["Fecha", "Usuario", "Local", "Acción", "Detalle"], ...auditHistory.map((row) => [row.at, row.userName, row.site, row.action, row.detail])],
+    };
+    downloadCsv(`Informe_${adminReport}_${reportFrom}_${reportTo}.csv`, [...heading, ...(reportRows[adminReport] || [
       ["Local", "Venta neta", "Tickets", "Ticket promedio", "Estado caja"],
       ...adminRows.map((row) => [
         row.site,
@@ -1825,7 +1945,20 @@ export default function Home() {
         row.tickets ? Math.round(row.net / row.tickets) : 0,
         row.status,
       ]),
-    ]);
+    ])]);
+  };
+  const importHistoricalFile = async (file: File) => {
+    setHistoryImporting(true);
+    try {
+      const rows = parseHistoryCsv(await file.text());
+      const response = await fetch(`${API_BASE}/admin/history/import`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: historyImportKind, rows }) });
+      const data = (await response.json()) as { imported?: number; rejected?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "No se pudo importar el historial.");
+      setMessage(`Historial importado: ${data.imported || 0} filas aceptadas y ${data.rejected || 0} rechazadas.`);
+      setOperationalVersion((version) => version + 1);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No se pudo importar el historial.");
+    } finally { setHistoryImporting(false); }
   };
   const saveMonthlyTarget = (local: string) => {
     const value = Math.max(0, Number(monthlyTargetDrafts[local]) || 0);
@@ -2347,10 +2480,16 @@ export default function Home() {
     setClosed(true);
     setCashOpenBySite((items) => ({ ...items, [site]: false }));
     if (activeShift) {
+      const closedNow = new Date();
       const finalShift = {
         ...activeShift,
-        closedAt: new Date().toLocaleString("es-AR"),
+        closedAt: closedNow.toLocaleString("es-AR"),
+        closedAtISO: closedNow.toISOString(),
         closedBy: user.name,
+        expectedCash: expected,
+        countedCash: counted,
+        differenceAmount: cashVariance,
+        envelopeAmount: envelope,
       };
       setShiftLog((items) =>
         items.map((shift) => (shift.id === finalShift.id ? finalShift : shift)),
@@ -2505,12 +2644,19 @@ export default function Home() {
     recordAudit("Transferencia de caja recibida", `${transfer.originSite} a ${transfer.destination} · ${money.format(transfer.amount)}`);
     setMessage("Transferencia confirmada y conciliada en el libro mayor.");
   };
-  const syncContingency = () => {
+  const syncContingency = async () => {
     if (connectionMode === "Contingencia")
       return setMessage("Volvé a modo En línea antes de sincronizar.");
     if (!pendingSync) return setMessage("No hay operaciones pendientes de sincronización.");
     recordAudit("Sincronización solicitada", `${pendingSync} operación(es) pendientes.`);
     setMessage("Sincronizando operaciones pendientes. Esperá la confirmación antes de recargar.");
+    try {
+      await flushPendingWrites();
+      setMessage("Todas las operaciones pendientes fueron confirmadas por el servidor.");
+    } catch {
+      refreshPendingCount();
+      setMessage("Todavía quedan operaciones pendientes. No repitas cobros y revisá la conexión.");
+    }
   };
   if (authLoading && !user) return <SecureLoading />;
   if (!user) return <AccessScreen {...{ portal, login, setLogin, password, setPassword, showPassword, setShowPassword, authLoading, recoverySending, recoveryStage, recoveryCode, setRecoveryCode, recoveryPassword, setRecoveryPassword, recoveryPasswordConfirm, setRecoveryPasswordConfirm, setRecoveryStage, message, setMessage, enter, requestPasswordReset, confirmEmailRecovery }} />;
@@ -4627,6 +4773,7 @@ export default function Home() {
                       ["Sincronizaciones", systemHealth.failedSyncs24h === undefined ? "Verificando" : systemHealth.failedSyncs24h === 0 ? "Sin errores en 24 h" : `${systemHealth.failedSyncs24h} con error en 24 h`, systemHealth.failedSyncs24h === 0],
                       ["Respaldo externo", systemHealth.lastBackup?.status === "verified" ? "Copia verificada" : "Sin copia verificada", systemHealth.lastBackup?.status === "verified"],
                       ["Google Drive", systemHealth.driveConnected === undefined ? "Verificando" : systemHealth.driveConnected ? "Conectado · solo lectura" : "Sin conectar", systemHealth.driveConnected === true],
+                      ["Alertas por correo", systemHealth.notification?.status === "sent" ? "Última alerta enviada" : systemHealth.notification?.status === "failed" ? "El correo rechazó el envío" : systemHealth.notification?.status === "disabled" ? "Correo no configurado" : "Monitoreo activo", systemHealth.notification?.status !== "failed" && systemHealth.notification?.status !== "disabled"],
                       ["ARCA", "Pendiente de integración", false],
                     ].map(([label, status, ok]) => (
                       <div key={String(label)} className={`rounded border p-3 text-sm ${ok ? "border-emerald-200 bg-[#e7f4e8]" : "border-[#e7c26a] bg-[#fff5d8]"}`}>
@@ -5725,6 +5872,7 @@ export default function Home() {
                 </div>
                 <p className="mt-3 text-xs text-slate-500">
                   Fuente operativa: ventas, cobros, cajas y movimientos guardados por los locales en la base del sistema.
+                  {persistedReportSales === null ? " Mostrando la copia disponible mientras se consulta el servidor." : " Historial verificado."}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
@@ -5742,6 +5890,19 @@ export default function Home() {
                     Imprimir / Guardar PDF
                   </button>
                 </div>
+                <details className="mt-4 rounded border bg-[#fbfaf7] p-4">
+                  <summary className="cursor-pointer font-bold">Importar historial anterior</summary>
+                  <p className="mt-2 text-sm text-slate-600">Usá la plantilla para incorporar ventas o cierres anteriores. La importación no modifica operaciones existentes con el mismo identificador y deja registro en Auditoría.</p>
+                  <div className="mt-3 flex flex-wrap items-end gap-3">
+                    <label className="text-sm font-bold">Tipo de historial
+                      <select value={historyImportKind} onChange={(event) => setHistoryImportKind(event.target.value as "sales" | "cash")} className="mt-1 block rounded border bg-white p-2 font-normal"><option value="sales">Ventas</option><option value="cash">Cierres de caja</option></select>
+                    </label>
+                    <button onClick={() => downloadCsv(`Plantilla_historial_${historyImportKind}.csv`, historyImportKind === "sales" ? SALES_HISTORY_TEMPLATE : CASH_HISTORY_TEMPLATE)} className="rounded border px-3 py-2 text-sm font-bold">Descargar plantilla</button>
+                    <label className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white">{historyImporting ? "Importando…" : "Elegir CSV e importar"}
+                      <input type="file" accept=".csv,text/csv" disabled={historyImporting} className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importHistoricalFile(file); event.target.value = ""; }} />
+                    </label>
+                  </div>
+                </details>
               </div>
               {adminReport === "Resumen" && (
                 <>
@@ -6191,7 +6352,8 @@ export default function Home() {
                     </div>
                   )}
                   {adminReport === "Cajas" && (
-                    <div className="mt-5 overflow-auto rounded border">
+                    <div className="mt-5 space-y-4">
+                    <div className="overflow-auto rounded border">
                       <table className="w-full min-w-[900px] text-sm">
                         <thead className="bg-[#eef2f6]"><tr><th className="p-3 text-left">Local</th><th className="p-3 text-center">Estado actual</th><th className="p-3 text-left">Abierta por</th><th className="p-3 text-left">Apertura</th><th className="p-3 text-left">Último cierre</th><th className="p-3 text-left">Cerrada por</th></tr></thead>
                         <tbody>{cashReportRows.map((row) => (
@@ -6199,6 +6361,12 @@ export default function Home() {
                         ))}</tbody>
                       </table>
                       <p className="border-t p-3 text-xs text-slate-500">Estado leído de las cajas y turnos guardados. Una caja abierta requiere revisión al finalizar la jornada; no se presume pendiente por una lista fija.</p>
+                    </div>
+                    <div className="overflow-auto rounded border">
+                      <div className="border-b p-4"><b>Historial de aperturas y cierres</b><p className="mt-1 text-sm text-slate-600">Respeta el período y el local seleccionados. Incluye arqueo y diferencia cuando el cierre fue registrado con la versión actual.</p></div>
+                      <table className="w-full min-w-[1100px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Local</th><th className="p-3 text-left">Apertura</th><th className="p-3 text-left">Abrió</th><th className="p-3 text-right">Fondo</th><th className="p-3 text-left">Cierre</th><th className="p-3 text-left">Cerró</th><th className="p-3 text-right">Esperado</th><th className="p-3 text-right">Contado</th><th className="p-3 text-right">Diferencia</th><th className="p-3 text-right">Sobre</th></tr></thead>
+                        <tbody>{cashHistory.length ? cashHistory.map((row) => <tr key={row.id} className="border-t"><td className="p-3 font-bold">{row.site}</td><td className="p-3">{row.openedAt}</td><td className="p-3">{row.openedBy}</td><td className="p-3 text-right">{money.format(row.initialFund)}</td><td className="p-3">{row.closedAt || "Abierta"}</td><td className="p-3">{row.closedBy || "—"}</td><td className="p-3 text-right">{row.expectedCash == null ? "—" : money.format(row.expectedCash)}</td><td className="p-3 text-right">{row.countedCash == null ? "—" : money.format(row.countedCash)}</td><td className={`p-3 text-right font-bold ${(row.differenceAmount || 0) === 0 ? "text-green-700" : "text-amber-700"}`}>{row.differenceAmount == null ? "—" : money.format(row.differenceAmount)}</td><td className="p-3 text-right">{row.envelopeAmount == null ? "—" : money.format(row.envelopeAmount)}</td></tr>) : <tr><td colSpan={10} className="p-4 text-slate-500">No hay cierres registrados en el rango.</td></tr>}</tbody></table>
+                    </div>
                     </div>
                   )}
                   {adminReport === "CajaMayor" && (
@@ -6859,25 +7027,15 @@ export default function Home() {
                   {adminReport === "Auditoria" && (
                     <div className="mt-5">
                       <p className="text-sm text-slate-500">
-                        El historial conservará usuario, local, fecha, acción y
-                        detalle. Ventas anuladas y ajustes nunca se eliminan.
+                        Historial del servidor por usuario, local, fecha, acción y detalle. Ventas anuladas y ajustes conservan su trazabilidad.
                       </p>
-                      <div className="mt-3 divide-y">
-                        {audit.length ? (
-                          audit.slice(0, 5).map((event) => (
-                            <p key={event.id} className="py-3 text-sm">
-                              <b>{event.action}</b> · {event.site} · {event.at}
-                              <br />
-                              <span className="text-slate-500">
-                                {event.detail}
-                              </span>
-                            </p>
-                          ))
-                        ) : (
-                          <p className="py-4 text-sm text-slate-500">
-                            Todavía no hay operaciones de esta sesión.
-                          </p>
-                        )}
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <label className="text-sm font-bold">Usuario<input value={auditUserFilter} onChange={(event) => setAuditUserFilter(event.target.value)} placeholder="Nombre del usuario" className="mt-1 block w-full rounded border p-2 font-normal" /></label>
+                        <label className="text-sm font-bold">Acción<input value={auditActionFilter} onChange={(event) => setAuditActionFilter(event.target.value)} placeholder="Venta, caja, stock…" className="mt-1 block w-full rounded border p-2 font-normal" /></label>
+                      </div>
+                      <div className="mt-4 overflow-auto rounded border">
+                        <table className="w-full min-w-[900px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Fecha</th><th className="p-3 text-left">Usuario</th><th className="p-3 text-left">Local</th><th className="p-3 text-left">Acción</th><th className="p-3 text-left">Detalle</th></tr></thead>
+                          <tbody>{auditHistory.length ? auditHistory.map((event) => <tr key={event.id} className="border-t"><td className="p-3 whitespace-nowrap">{event.at}</td><td className="p-3 font-bold">{event.userName}</td><td className="p-3">{event.site}</td><td className="p-3 font-bold">{event.action}</td><td className="p-3 text-slate-600">{event.detail}</td></tr>) : <tr><td colSpan={5} className="p-4 text-slate-500">No hay eventos para los filtros seleccionados.</td></tr>}</tbody></table>
                       </div>
                     </div>
                   )}

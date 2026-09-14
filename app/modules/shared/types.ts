@@ -63,7 +63,7 @@ export type SavedOrder = {
 
 export type CashAdjustment = { id: string; site: string; kind: "Ingreso de caja" | "Ajuste de caja" | "Retiro de caja"; amount: number; detail: string; at: string; atISO?: string; createdBy: string; impact?: "Ingreso" | "Egreso" };
 export type CashLedgerEntry = { id: string; site: string; shiftId?: string; kind: string; direction: "Ingreso" | "Egreso" | "Informativo"; amount: number; cashImpact: number; paymentMethod?: string; reference?: string; detail: string; at: string; atISO?: string; createdBy: string };
-export type CashShift = { id: string; site: string; openedAt: string; openedAtISO?: string; openedBy: string; initialFund: number; closedAt?: string; closedBy?: string };
+export type CashShift = { id: string; site: string; openedAt: string; openedAtISO?: string; openedBy: string; initialFund: number; closedAt?: string; closedAtISO?: string; closedBy?: string; expectedCash?: number; countedCash?: number; differenceAmount?: number; envelopeAmount?: number };
 export type OperationalLimits = { maxDiscount: number; maxExpense: number; maxCashDifference: number };
 export type PasswordResetRequest = { id: string; userId: string; username: string; site?: string; requestedAt: string; status: "Pendiente" | "Restablecida" };
 
@@ -82,7 +82,7 @@ export type StockMovement = {
 };
 
 export type EnvelopeRecord = { id: string; site: string; amount: number; status: "En Caja Mayor" | "Retirado por Oscar"; at: string; withdrawnAmount: number };
-export type AuditEvent = { id: string; at: string; site: string; action: string; detail: string };
+export type AuditEvent = { id: string; at: string; site: string; action: string; detail: string; userName?: string };
 export type Payment = { method: string; amount: number; saleId?: string; site?: string; shiftId?: string; createdAtISO?: string };
 export type PriceChange = { id: string; at: string; percentage: number; category: string; effectiveDate: string; beforePrices: Record<number, number>; afterPrices: Record<number, number> };
 export type EmployeeSchedule = { id: string; employee: string; site: string; startsAt: string; endsAt: string; toleranceMinutes: number };
@@ -153,7 +153,10 @@ export type SystemHealth = {
   driveConnected?: boolean;
   lastBackup?: { finished_at?: string | null; status?: string | null } | null;
   alerts?: Array<{ level: "atencion" | "critico"; message: string }>;
+  notification?: { status: "sent" | "failed" | "unchanged" | "disabled"; sentAt?: string | null };
 };
+export type CashHistoryRow = { id: string; site: string; openedAt: string; openedBy: string; initialFund: number; closedAt?: string | null; closedBy?: string | null; expectedCash?: number | null; countedCash?: number | null; differenceAmount?: number | null; envelopeAmount?: number | null };
+export type AuditHistoryRow = { id: string; at: string; site: string; userName: string; action: string; detail: string };
 export type AiSupportRequest = { id: string; userName: string; role: Role; site?: string; section?: string; question: string; status: "pendiente" | "resuelta"; createdAt: string };
 
 export type ApiUser = {

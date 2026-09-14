@@ -12,9 +12,9 @@ export type ReportGuide = {
   questions: string[]; filters: string; limits: string; source: string;
 };
 const noFilters = "Los filtros superiores Desde/Hasta/Local no se aplican a este bloque. No los uses como prueba de que estás viendo ese período o sucursal.";
-const localOnly = "El selector Local sí cambia este bloque. Desde/Hasta no filtran sus datos en esta versión; comprobá las fechas en la fuente.";
 const pendingFilters = "Todavía no hay un cálculo o listado que esos filtros puedan segmentar.";
 const operationalFilters = "Los filtros Desde, Hasta y Local se aplican a las ventas y cobros guardados en este informe.";
+const historyFilters = "Los filtros Desde, Hasta y Local se aplican al historial guardado en el servidor.";
 const report = (id: string, title: string, detail: string, status: ReportStatus, questions: string[], filters: string, limits: string, source = `app/page.tsx · adminReport === ${id}`): ReportGuide => ({ id, title, detail, status, questions, filters, limits, source });
 
 export const adminReportGuides: ReportGuide[] = [
@@ -49,9 +49,9 @@ export const adminReportGuides: ReportGuide[] = [
   report("Pagos", "Medios de pago", "Distribución operativa de los cobros asociados a ventas activas.", "Operativo con límites",
     ["cuanto cobramos en efectivo", "cuanto por tarjeta", "cobros por medio de pago", "total mercado pago", "ventas por forma de pago", "cobros qr", "distribucion medios de pago", "reporte medios de pago"], operationalFilters,
     "Agrupa pagos persistidos y asociados a las ventas del rango. No prueba acreditación bancaria."),
-  report("Cajas", "Cajas", "Estado actual de cada caja, responsable de apertura y último cierre registrado.", "Operativo con límites",
-    ["informe cierres de caja", "diferencias de caja por local", "quien cerro caja", "historial de cierres", "control de arqueos", "sobrantes y faltantes de caja", "reporte cajas"], localOnly,
-    "El selector Local aplica al estado actual. Desde/Hasta no cambian esta vista porque no es un historial de cierres completo."),
+  report("Cajas", "Cajas", "Estado actual e historial de aperturas, cierres, responsables, arqueos y diferencias.", "Operativo con límites",
+    ["informe cierres de caja", "diferencias de caja por local", "quien cerro caja", "historial de cierres", "control de arqueos", "sobrantes y faltantes de caja", "reporte cajas"], historyFilters,
+    "El estado actual no depende del rango. El historial inferior sí respeta Desde, Hasta y Local; los cierres antiguos solo muestran arqueo si fue importado o registrado por una versión que guardaba esos valores."),
   report("CajaMayor", "Caja Mayor", "Sobres registrados, importes retirados y disponible por sobre/local.", "Operativo con límites",
     ["cuanto hay en caja mayor", "sobres entregados", "disponible en caja mayor", "retiros de oscar", "cuanto retiro oscar", "saldo sobres", "dinero de los sobres", "sobre retirado disponible"], noFilters,
     "Calcula con sobres cargados en el estado disponible. Ver el informe no mueve dinero: ‘Registrar retiro’ es una acción distinta que no debés usar solo para consultar. El disponible no es un saldo bancario."),
@@ -96,9 +96,9 @@ export const adminReportGuides: ReportGuide[] = [
   report("Fiscal", "Fiscal", "Sección reservada para comprobantes y conciliación fiscal.", "Pendiente",
     ["informe fiscal", "reporte cae", "facturas autorizadas arca", "notas credito fiscales", "iva ventas", "libro iva", "facturas pendientes afip", "comprobantes fiscales emitidos"], pendingFilters,
     "La integración ARCA/AFIP quedó para la última etapa. Esta pantalla no emite CAE, no entrega libro IVA validado ni convierte comprobantes internos en fiscales. Consultá el circuito fiscal autorizado fuera de esta guía."),
-  report("Auditoria", "Auditoría", "Eventos recientes: acción, local, fecha y detalle.", "Operativo con límites",
-    ["quien hizo modificacion", "quien cambio datos", "quien hizo un cambio", "historial de cambios", "reporte auditoria", "rastreo acciones", "quien hizo ajuste", "usuario que modifico"], noFilters,
-    "Esta vista muestra solo cinco eventos y no imprime explícitamente un usuario en todas las filas. No permite una búsqueda histórica completa por responsable. Si no alcanza, Administración debe solicitar revisión del registro backend; el chat no lo consulta."),
+  report("Auditoria", "Auditoría", "Historial del servidor con fecha, usuario, local, acción y detalle.", "Operativo con límites",
+    ["quien hizo modificacion", "quien cambio datos", "quien hizo un cambio", "historial de cambios", "reporte auditoria", "rastreo acciones", "quien hizo ajuste", "usuario que modifico"], historyFilters,
+    "Desde, Hasta y Local filtran el historial; Usuario y Acción permiten acotar la búsqueda. Los eventos anteriores a esta mejora pueden mostrar un detalle técnico reducido porque no guardaban la descripción completa."),
   report("Incidencias", "Incidencias", "Problemas cargados: local, tipo, detalle, persona que informó y estado.", "Operativo con límites",
     ["reclamos de locales", "problemas abiertos", "informe incidencias", "reclamos pendientes", "quien reporto problema", "incidencias resueltas", "faltantes reclamados"], noFilters,
     "El listado usa los registros disponibles, sin filtros efectivos por estado/fecha/local. Ver el estado no cambia el caso: el selector Gestión sí lo modifica y debe usarse solo cuando corresponda, no para consultar."),

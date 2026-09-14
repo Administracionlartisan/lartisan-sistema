@@ -383,7 +383,149 @@ function ensure_operations_schema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
     }
+    if (!table_exists($pdo, 'operation_requests')) {
+        $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS operation_requests (
+            request_id CHAR(36) NOT NULL PRIMARY KEY,
+            site VARCHAR(80) NOT NULL,
+            user_id BIGINT UNSIGNED NULL,
+            revision INT UNSIGNED NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_operation_requests_site_date (site, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+    }
     ensure_normalized_operations_schema($pdo);
+}
+
+function operational_item_key(string $field, array $item, int $index): string
+{
+    if ($field === 'payments') {
+        return (string) ($item['saleId'] ?? '') . '|' . (string) ($item['method'] ?? '') . '|' . (string) ($item['amount'] ?? '');
+    }
+    return isset($item['id']) && is_scalar($item['id']) ? (string) $item['id'] : '__row_' . $index;
+}
+
+/** Three-way list merge: apply only this browser's changes over the latest server list. */
+function merge_operational_list(string $field, array $base, array $current, array $incoming): array
+{
+    $map = [];
+    $order = [];
+    foreach ($current as $index => $item) {
+        if (!is_array($item)) continue;
+        $key = operational_item_key($field, $item, (int) $index);
+        $map[$key] = $item;
+        $order[] = $key;
+    }
+    $baseMap = [];
+    foreach ($base as $index => $item) {
+        if (!is_array($item)) continue;
+        $baseMap[operational_item_key($field, $item, (int) $index)] = $item;
+    }
+    $incomingMap = [];
+    foreach ($incoming as $index => $item) {
+        if (!is_array($item)) continue;
+        $key = operational_item_key($field, $item, (int) $index);
+        $incomingMap[$key] = $item;
+        if (!array_key_exists($key, $baseMap) || $baseMap[$key] !== $item) {
+            $map[$key] = $item;
+            if (!in_array($key, $order, true)) array_unshift($order, $key);
+        }
+    }
+    foreach ($baseMap as $key => $item) {
+        if (!array_key_exists($key, $incomingMap) && array_key_exists($key, $map) && $map[$key] === $item) {
+            unset($map[$key]);
+        }
+    }
+    $result = [];
+    foreach (array_values(array_unique($order)) as $key) if (array_key_exists($key, $map)) $result[] = $map[$key];
+    return $result;
+}
+
+function merge_operational_snapshot(array $base, array $current, array $incoming): array
+{
+    $result = $current;
+    $listFields = ['sales', 'payments', 'stockRequests', 'savedOrders', 'cashAdjustments', 'cashLedger', 'shiftLog', 'envelopeRecords', 'stockMovements', 'expensesLog', 'returnsLog', 'cashTransfers', 'attendanceRecords', 'incidents', 'stockAdjustments', 'schedules', 'priceChanges'];
+    foreach ($incoming as $field => $value) {
+        if (!is_string($field)) continue;
+        $baseValue = $base[$field] ?? null;
+        if ($value === $baseValue) continue;
+        if (in_array($field, $listFields, true) && is_array($value)) {
+            $result[$field] = merge_operational_list($field, is_array($baseValue) ? $baseValue : [], is_array($current[$field] ?? null) ? $current[$field] : [], $value);
+            continue;
+        }
+        if ($field === 'stock' && is_array($value)) {
+            $stock = is_array($current[$field] ?? null) ? $current[$field] : [];
+            $baseStock = is_array($baseValue) ? $baseValue : [];
+            foreach ($value as $productId => $quantity) {
+                $baseQuantity = (float) ($baseStock[$productId] ?? 0);
+                if ((float) $quantity === $baseQuantity) continue;
+                $stock[$productId] = max(0, (float) ($stock[$productId] ?? 0) + ((float) $quantity - $baseQuantity));
+            }
+            $result[$field] = $stock;
+            continue;
+        }
+        $result[$field] = $value;
+    }
+    return $result;
+}
+
+function ensure_monitoring_notification_schema(PDO $pdo): void
+{
+    if (!table_exists($pdo, 'monitoring_notifications')) {
+        $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS monitoring_notifications (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            alert_hash CHAR(64) NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            recipient VARCHAR(190) NULL,
+            error_message VARCHAR(500) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_monitoring_notifications_hash_date (alert_hash, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+    }
+}
+
+function active_monitoring_alerts(PDO $pdo): array
+{
+    ensure_pnl_sync_schema($pdo);
+    ensure_expense_sync_schema($pdo);
+    ensure_mrp_schema($pdo);
+    $failedPnl = (int) $pdo->query("SELECT COUNT(*) FROM pnl_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+    $failedExpenses = (int) $pdo->query("SELECT COUNT(*) FROM expense_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+    $failedMrp = (int) $pdo->query("SELECT COUNT(*) FROM mrp_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+    $lastBackup = table_exists($pdo, 'backup_runs') ? $pdo->query('SELECT finished_at, status FROM backup_runs ORDER BY id DESC LIMIT 1')->fetch() : null;
+    $freeBytes = function_exists('disk_free_space') ? @disk_free_space(__DIR__) : false;
+    $alerts = [];
+    if (($failedPnl + $failedExpenses + $failedMrp) > 0) $alerts[] = 'Hubo sincronizaciones fallidas en las últimas 24 horas.';
+    if (!$lastBackup || ($lastBackup['status'] ?? '') !== 'verified') $alerts[] = 'No hay un respaldo externo verificado.';
+    if ($freeBytes !== false && $freeBytes < 512 * 1024 * 1024) $alerts[] = 'El servidor tiene menos de 512 MB libres.';
+    return $alerts;
+}
+
+function notify_monitoring_alerts(PDO $pdo, array $config): array
+{
+    ensure_monitoring_notification_schema($pdo);
+    $alerts = active_monitoring_alerts($pdo);
+    if (!$alerts) return ['status' => 'unchanged', 'sentAt' => null];
+    $recipient = trim((string) ($config['monitoring']['alert_email'] ?? $config['admin_recovery_email'] ?? ''));
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) return ['status' => 'disabled', 'sentAt' => null];
+    sort($alerts);
+    $hash = hash('sha256', implode('|', $alerts));
+    $cooldownHours = max(1, min(24, (int) ($config['monitoring']['cooldown_hours'] ?? 6)));
+    $recent = $pdo->prepare("SELECT created_at FROM monitoring_notifications WHERE alert_hash = ? AND status = 'sent' AND created_at >= DATE_SUB(NOW(), INTERVAL $cooldownHours HOUR) ORDER BY id DESC LIMIT 1");
+    $recent->execute([$hash]);
+    $sentAt = $recent->fetchColumn();
+    if ($sentAt) return ['status' => 'unchanged', 'sentAt' => $sentAt];
+    $subject = "L'ARTISAN - alerta del sistema";
+    $body = "El monitoreo detectó condiciones que requieren revisión:\n\n- " . implode("\n- ", $alerts) . "\n\nIngresá a Administración > Protección de datos para revisar el detalle.";
+    $from = trim((string) ($config['recovery_from_email'] ?? ''));
+    $headers = $from !== '' ? ['From: ' . $from, 'Content-Type: text/plain; charset=UTF-8'] : ['Content-Type: text/plain; charset=UTF-8'];
+    $sent = @mail($recipient, $subject, $body, implode("\r\n", $headers));
+    $statement = $pdo->prepare('INSERT INTO monitoring_notifications (alert_hash, status, recipient, error_message) VALUES (?, ?, ?, ?)');
+    $statement->execute([$hash, $sent ? 'sent' : 'failed', $recipient, $sent ? null : 'El servidor de correo rechazó el envío.']);
+    return ['status' => $sent ? 'sent' : 'failed', 'sentAt' => $sent ? date('Y-m-d H:i:s') : null];
 }
 
 function ensure_normalized_operations_schema(PDO $pdo): void
@@ -451,11 +593,19 @@ function ensure_normalized_operations_schema(PDO $pdo): void
             initial_fund DECIMAL(14,2) NOT NULL DEFAULT 0,
             closed_at DATETIME NULL,
             closed_by VARCHAR(190) NULL,
+            expected_cash DECIMAL(14,2) NULL,
+            counted_cash DECIMAL(14,2) NULL,
+            difference_amount DECIMAL(14,2) NULL,
+            envelope_amount DECIMAL(14,2) NULL,
             synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_lartisan_cash_sessions_site_opened (site, opened_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
     }
+    ensure_column($pdo, 'lartisan_cash_sessions', 'expected_cash', 'DECIMAL(14,2) NULL AFTER closed_by');
+    ensure_column($pdo, 'lartisan_cash_sessions', 'counted_cash', 'DECIMAL(14,2) NULL AFTER expected_cash');
+    ensure_column($pdo, 'lartisan_cash_sessions', 'difference_amount', 'DECIMAL(14,2) NULL AFTER counted_cash');
+    ensure_column($pdo, 'lartisan_cash_sessions', 'envelope_amount', 'DECIMAL(14,2) NULL AFTER difference_amount');
     if (!table_exists($pdo, 'lartisan_cash_movements')) {
         $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_cash_movements (
@@ -514,6 +664,37 @@ function iso_datetime(?string $value): ?string
     }
 }
 
+function historical_datetime(mixed $value): ?string
+{
+    $text = trim((string) $value);
+    if ($text === '') return null;
+    foreach (['d/m/Y H:i:s', 'd/m/Y H:i', 'd/m/Y', 'Y-m-d H:i:s', 'Y-m-d H:i', 'Y-m-d'] as $format) {
+        $date = DateTimeImmutable::createFromFormat('!' . $format, $text);
+        if ($date !== false && $date->format($format) === $text) return $date->format('Y-m-d H:i:s');
+    }
+    return iso_datetime($text);
+}
+
+function historical_number(mixed $value): float
+{
+    if (is_int($value) || is_float($value)) return (float) $value;
+    $text = preg_replace('/[^0-9,.-]/u', '', trim((string) $value)) ?? '';
+    if ($text === '') return 0.0;
+    $comma = strrpos($text, ',');
+    $dot = strrpos($text, '.');
+    if ($comma !== false && $dot !== false) {
+        $decimal = $comma > $dot ? ',' : '.';
+        $thousands = $decimal === ',' ? '.' : ',';
+        $text = str_replace($thousands, '', $text);
+        $text = str_replace($decimal, '.', $text);
+    } elseif ($comma !== false) {
+        $text = preg_match('/,\d{1,2}$/', $text) ? str_replace(',', '.', $text) : str_replace(',', '', $text);
+    } elseif ($dot !== false && preg_match('/^-?\d{1,3}(\.\d{3})+$/', $text)) {
+        $text = str_replace('.', '', $text);
+    }
+    return is_numeric($text) ? (float) $text : 0.0;
+}
+
 function sync_normalized_operations(PDO $pdo, string $site, array $state, int $userId): void
 {
     $saleStatement = $pdo->prepare(
@@ -565,10 +746,11 @@ function sync_normalized_operations(PDO $pdo, string $site, array $state, int $u
     }
 
     $sessionStatement = $pdo->prepare(
-        "INSERT INTO lartisan_cash_sessions (id, site, opened_at, opened_by, initial_fund, closed_at, closed_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO lartisan_cash_sessions (id, site, opened_at, opened_by, initial_fund, closed_at, closed_by, expected_cash, counted_cash, difference_amount, envelope_amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE opened_at=VALUES(opened_at), opened_by=VALUES(opened_by), initial_fund=VALUES(initial_fund),
-        closed_at=VALUES(closed_at), closed_by=VALUES(closed_by)"
+        closed_at=VALUES(closed_at), closed_by=VALUES(closed_by), expected_cash=VALUES(expected_cash), counted_cash=VALUES(counted_cash),
+        difference_amount=VALUES(difference_amount), envelope_amount=VALUES(envelope_amount)"
     );
     $sessions = [];
     foreach (($state['shiftLog'] ?? []) as $session) if (is_array($session) && !empty($session['id'])) $sessions[$session['id']] = $session;
@@ -576,7 +758,11 @@ function sync_normalized_operations(PDO $pdo, string $site, array $state, int $u
     foreach ($sessions as $session) {
         $sessionStatement->execute([
             (string) $session['id'], $site, iso_datetime($session['openedAt'] ?? null), (string) ($session['openedBy'] ?? ''),
-            (float) ($session['initialFund'] ?? 0), iso_datetime($session['closedAt'] ?? null), (string) ($session['closedBy'] ?? ''),
+            (float) ($session['initialFund'] ?? 0), iso_datetime($session['closedAtISO'] ?? $session['closedAt'] ?? null), (string) ($session['closedBy'] ?? ''),
+            isset($session['expectedCash']) ? (float) $session['expectedCash'] : null,
+            isset($session['countedCash']) ? (float) $session['countedCash'] : null,
+            isset($session['differenceAmount']) ? (float) $session['differenceAmount'] : null,
+            isset($session['envelopeAmount']) ? (float) $session['envelopeAmount'] : null,
         ]);
     }
 
