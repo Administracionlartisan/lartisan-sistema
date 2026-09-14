@@ -13,6 +13,7 @@ import { downloadCsv } from "./modules/shared/downloadCsv";
 import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import ComingSoonPanel, { type ComingSoonSection } from "./modules/administracion/ComingSoonPanel";
+import MrpPanel from "./modules/administracion/MrpPanel";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent,
   CashAdjustment, CashFields, CashLedgerEntry, CashShift, CashTransfer,
@@ -2403,6 +2404,7 @@ export default function Home() {
           "Fichaje",
           "Clientes",
           "Guía",
+          ...(can("mrp") ? ["MRP"] : []),
         ];
   const tabs = [
     ...baseTabs,
@@ -4405,8 +4407,8 @@ export default function Home() {
             </>
           ) : (["Recetas y costos", "Legajos"].includes(tab) && user.role === "administracion") ? (
             <ComingSoonPanel section={tab as ComingSoonSection} />
-          ) : tab === "MRP" && (user.role === "administracion" || (user.role === "compras" && can("mrp"))) ? (
-            <ComingSoonPanel section="MRP" />
+          ) : tab === "MRP" && can("mrp") ? (
+            <MrpPanel />
           ) : tab === "Protección de datos" && user.role === "administracion" ? (
             <>
               <Heading

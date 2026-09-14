@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/pnl_sync.php';
+require __DIR__ . '/mrp_sync.php';
 require __DIR__ . '/assistant.php';
 
 configure_cors($config);
@@ -28,6 +29,7 @@ try {
     ensure_user_locations_schema($pdo);
     // Mantiene listas las tablas operativas aun antes de la primera venta.
     ensure_operations_schema($pdo);
+    ensure_mrp_schema($pdo);
 } catch (Throwable $error) {
     error_log('LARTISAN API schema initialization failed: ' . $error->getMessage());
     json_response(['ok' => false, 'error' => 'schema_initialization_failed', 'type' => get_class($error)], 503);
@@ -160,6 +162,116 @@ if ($method === 'POST' && $route === 'admin/expenses/sync') {
     } catch (Throwable $error) {
         json_response(['ok' => false, 'error' => 'No se pudieron actualizar gastos y cuentas por pagar. Se conserva la última versión válida.'], 502);
     }
+}
+
+if ($method === 'GET' && $route === 'mrp/latest') {
+    $mrpUser = require_mrp_user($pdo);
+    ensure_mrp_schema($pdo);
+    $latest = $pdo->query("SELECT payload_json, rows_imported, started_at, finished_at FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetch();
+    $lastUpdate = $latest ? ($latest['finished_at'] ?: $latest['started_at']) : null;
+    $stale = !$lastUpdate || strtotime((string) $lastUpdate) < time() - 10 * 60;
+    $recentAttempt = $pdo->query("SELECT started_at FROM mrp_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
+    if (is_file(pnl_private_token_path()) && $stale && !$recentAttempt) {
+        try {
+            mrp_sync_from_google($pdo, $config, (int) $mrpUser['id']);
+            $latest = $pdo->query("SELECT payload_json, rows_imported, started_at, finished_at FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetch();
+        } catch (Throwable $error) {
+            error_log('LARTISAN automatic MRP sync failed: ' . $error->getMessage());
+        }
+    }
+    json_response(['ok' => true, 'connected' => is_file(pnl_private_token_path()), 'snapshot' => $latest ? [
+        'data' => json_decode((string) $latest['payload_json'], true) ?: [],
+        'rowsImported' => (int) $latest['rows_imported'],
+        'updatedAt' => $latest['finished_at'] ?: $latest['started_at'],
+    ] : null]);
+}
+
+if ($method === 'POST' && $route === 'mrp/sync') {
+    $mrpUser = require_mrp_user($pdo);
+    $last = $pdo->query("SELECT started_at FROM mrp_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
+    if ($last) json_response(['ok' => false, 'error' => 'La lectura MRP ya se actualizó recientemente.'], 429);
+    try {
+        json_response(['ok' => true, 'snapshot' => mrp_sync_from_google($pdo, $config, (int) $mrpUser['id'])]);
+    } catch (Throwable $error) {
+        json_response(['ok' => false, 'error' => 'No se pudo actualizar el MRP. Se conserva la última copia válida.'], 502);
+    }
+}
+
+if ($method === 'GET' && $route === 'mrp/operations') {
+    require_mrp_user($pdo);
+    ensure_mrp_schema($pdo);
+    $orders = $pdo->query("SELECT o.*, COALESCE(SUM(r.quantity_received),0) AS received_quantity FROM mrp_purchase_orders o LEFT JOIN mrp_receipts r ON r.purchase_order_id=o.id GROUP BY o.id ORDER BY o.created_at DESC LIMIT 200")->fetchAll();
+    $controls = $pdo->query("SELECT * FROM mrp_weekly_controls ORDER BY updated_at DESC LIMIT 200")->fetchAll();
+    json_response(['ok' => true, 'orders' => $orders, 'controls' => $controls]);
+}
+
+if ($method === 'POST' && $route === 'mrp/orders') {
+    $mrpUser = require_mrp_user($pdo);
+    $body = request_body();
+    $item = mrp_clean_text($body['itemName'] ?? '', 190);
+    $provider = mrp_clean_text($body['providerName'] ?? '', 190);
+    $unit = mrp_clean_text($body['unit'] ?? '', 40);
+    $quantity = (float) ($body['quantity'] ?? 0);
+    $notes = mrp_clean_text($body['notes'] ?? '', 1000);
+    if ($item === '' || $unit === '' || !is_finite($quantity) || $quantity <= 0) json_response(['ok' => false, 'error' => 'Completá insumo, unidad y una cantidad válida.'], 422);
+    $pdo->prepare('INSERT INTO mrp_purchase_orders (item_name, provider_name, unit, quantity, notes, created_by) VALUES (?, ?, ?, ?, ?, ?)')
+        ->execute([$item, $provider ?: null, $unit, $quantity, $notes ?: null, $mrpUser['id']]);
+    $id = (int) $pdo->lastInsertId();
+    audit($pdo, (int) $mrpUser['id'], 'mrp_purchase_order_created', 'order_id=' . $id);
+    json_response(['ok' => true, 'id' => $id], 201);
+}
+
+if ($method === 'PATCH' && preg_match('#^mrp/orders/(\d+)$#', $route, $matches)) {
+    $mrpUser = require_mrp_user($pdo);
+    $body = request_body();
+    $id = (int) $matches[1];
+    $version = (int) ($body['rowVersion'] ?? 0);
+    $status = mrp_clean_text($body['status'] ?? '', 30);
+    if (!in_array($status, ['Por pedir', 'Pedido', 'Recibido', 'Cancelado'], true) || $version < 1) json_response(['ok' => false, 'error' => 'Estado o versión inválida.'], 422);
+    $stmt = $pdo->prepare('UPDATE mrp_purchase_orders SET status=?, row_version=row_version+1 WHERE id=? AND row_version=?');
+    $stmt->execute([$status, $id, $version]);
+    if ($stmt->rowCount() !== 1) json_response(['ok' => false, 'error' => 'Otro usuario actualizó esta orden. Volvé a cargarla.'], 409);
+    audit($pdo, (int) $mrpUser['id'], 'mrp_purchase_order_updated', 'order_id=' . $id);
+    json_response(['ok' => true, 'rowVersion' => $version + 1]);
+}
+
+if ($method === 'POST' && preg_match('#^mrp/orders/(\d+)/receipts$#', $route, $matches)) {
+    $mrpUser = require_mrp_user($pdo);
+    $orderId = (int) $matches[1];
+    $body = request_body();
+    $quantity = (float) ($body['quantityReceived'] ?? 0);
+    $notes = mrp_clean_text($body['notes'] ?? '', 1000);
+    if (!is_finite($quantity) || $quantity <= 0) json_response(['ok' => false, 'error' => 'Indicá una cantidad recibida válida.'], 422);
+    $exists = $pdo->prepare('SELECT id FROM mrp_purchase_orders WHERE id=?');
+    $exists->execute([$orderId]);
+    if (!$exists->fetchColumn()) json_response(['ok' => false, 'error' => 'Orden no encontrada.'], 404);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('INSERT INTO mrp_receipts (purchase_order_id, quantity_received, notes, received_by) VALUES (?, ?, ?, ?)')
+            ->execute([$orderId, $quantity, $notes ?: null, $mrpUser['id']]);
+        $pdo->prepare("UPDATE mrp_purchase_orders o SET status=IF((SELECT COALESCE(SUM(quantity_received),0) FROM mrp_receipts WHERE purchase_order_id=o.id)>=o.quantity,'Recibido','Pedido'), row_version=row_version+1 WHERE id=?")
+            ->execute([$orderId]);
+        audit($pdo, (int) $mrpUser['id'], 'mrp_receipt_recorded', 'order_id=' . $orderId);
+        $pdo->commit();
+    } catch (Throwable $error) { $pdo->rollBack(); throw $error; }
+    json_response(['ok' => true], 201);
+}
+
+if ($method === 'POST' && $route === 'mrp/controls') {
+    $mrpUser = require_mrp_user($pdo);
+    $body = request_body();
+    $week = mrp_clean_text($body['weekKey'] ?? '', 20);
+    $item = mrp_clean_text($body['itemName'] ?? '', 190);
+    $expected = (float) ($body['expectedQuantity'] ?? 0);
+    $actual = (float) ($body['actualQuantity'] ?? 0);
+    $notes = mrp_clean_text($body['notes'] ?? '', 1000);
+    if (!preg_match('/^\d{4}-S\d{1,2}$/', $week) || $item === '' || !is_finite($expected) || !is_finite($actual) || $expected < 0 || $actual < 0) json_response(['ok' => false, 'error' => 'Control semanal inválido.'], 422);
+    $difference = $actual - $expected;
+    $status = abs($difference) < 0.0001 ? 'OK' : ($difference > 0 ? 'Comprado de más' : 'Comprado de menos');
+    $pdo->prepare("INSERT INTO mrp_weekly_controls (week_key,item_name,expected_quantity,actual_quantity,status,notes,updated_by) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE expected_quantity=VALUES(expected_quantity),actual_quantity=VALUES(actual_quantity),status=VALUES(status),notes=VALUES(notes),updated_by=VALUES(updated_by),row_version=row_version+1")
+        ->execute([$week, $item, $expected, $actual, $status, $notes ?: null, $mrpUser['id']]);
+    audit($pdo, (int) $mrpUser['id'], 'mrp_weekly_control_updated', $week . ' ' . $item);
+    json_response(['ok' => true, 'status' => $status]);
 }
 
 if ($method === 'POST' && $route === 'auth/login') {
@@ -718,6 +830,7 @@ if ($method === 'GET' && $route === 'admin/monitoring') {
     require_user($pdo, ['administracion']);
     ensure_pnl_sync_schema($pdo);
     ensure_expense_sync_schema($pdo);
+    ensure_mrp_schema($pdo);
 
     $startedAt = microtime(true);
     $pdo->query('SELECT 1');
@@ -728,15 +841,17 @@ if ($method === 'GET' && $route === 'admin/monitoring') {
     $events24h = (int) $pdo->query("SELECT COUNT(*) FROM operation_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
     $failedPnl = (int) $pdo->query("SELECT COUNT(*) FROM pnl_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
     $failedExpenses = (int) $pdo->query("SELECT COUNT(*) FROM expense_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+    $failedMrp = (int) $pdo->query("SELECT COUNT(*) FROM mrp_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
     $lastPnl = $pdo->query("SELECT finished_at, status FROM pnl_sync_runs ORDER BY id DESC LIMIT 1")->fetch();
     $lastExpenses = $pdo->query("SELECT finished_at, status FROM expense_sync_runs ORDER BY id DESC LIMIT 1")->fetch();
+    $lastMrp = $pdo->query("SELECT finished_at, status FROM mrp_sync_runs ORDER BY id DESC LIMIT 1")->fetch();
     $lastBackup = null;
     if (table_exists($pdo, 'backup_runs')) {
         $lastBackup = $pdo->query('SELECT finished_at, status FROM backup_runs ORDER BY id DESC LIMIT 1')->fetch();
     }
 
     $alerts = [];
-    if (($failedPnl + $failedExpenses) > 0) {
+    if (($failedPnl + $failedExpenses + $failedMrp) > 0) {
         $alerts[] = ['level' => 'atencion', 'message' => 'Hubo sincronizaciones que no se completaron en las últimas 24 horas.'];
     }
     if (!$lastBackup || ($lastBackup['status'] ?? '') !== 'verified') {
@@ -754,10 +869,11 @@ if ($method === 'GET' && $route === 'admin/monitoring') {
         'users' => ['total' => $totalUsers, 'active' => $activeUsers],
         'space' => $freeBytes === false ? null : (int) $freeBytes,
         'events_24h' => $events24h,
-        'failed_syncs_24h' => $failedPnl + $failedExpenses,
+        'failed_syncs_24h' => $failedPnl + $failedExpenses + $failedMrp,
         'drive_connected' => is_file(pnl_private_token_path()),
         'last_pnl_sync' => $lastPnl ?: null,
         'last_expense_sync' => $lastExpenses ?: null,
+        'last_mrp_sync' => $lastMrp ?: null,
         'last_backup' => $lastBackup ?: null,
         'alerts' => $alerts,
         'checked_at' => gmdate('c'),
