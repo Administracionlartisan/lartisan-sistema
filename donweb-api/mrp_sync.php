@@ -127,9 +127,9 @@ function mrp_number($value): float
     return is_numeric($raw) ? (float) $raw : 0.0;
 }
 
-function mrp_fetch_ranges(array $config): array
+function mrp_fetch_ranges(PDO $pdo, array $config): array
 {
-    $token = pnl_access_token($config);
+    $token = pnl_access_token($pdo, $config);
     $ranges = [
         "'00_Control_Semanal_MRP'!A1:D30",
         "'04_Plan_Produccion_Semanal'!A1:L500",
@@ -396,7 +396,7 @@ function mrp_sync_from_google(PDO $pdo, array $config, int $userId): array
         ->execute([MRP_SPREADSHEET_ID, $userId]);
     $runId = (int) $pdo->lastInsertId();
     try {
-        $snapshot = mrp_build_snapshot(mrp_fetch_ranges($config));
+        $snapshot = mrp_build_snapshot(mrp_fetch_ranges($pdo, $config));
         $payload = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payload === false) throw new RuntimeException('No se pudo guardar la copia MRP.');
         mrp_persist_master_data($pdo, $snapshot, $runId);

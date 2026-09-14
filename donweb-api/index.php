@@ -62,7 +62,7 @@ if ($method === 'GET' && $route === 'admin/pnl/google-callback') {
     $message = 'No se pudo validar la autorización de Google.';
     try {
         if (!$userId || $code === '') throw new RuntimeException($message);
-        pnl_exchange_authorization_code($config, $code);
+        pnl_exchange_authorization_code($pdo, $config, $code);
         audit($pdo, (int) $userId, 'pnl_google_connected', 'lectura_solo');
         $success = true;
         $message = 'Google quedó conectado con permiso de solo lectura. Ya podés volver a Administración y actualizar el P&L.';
@@ -84,7 +84,7 @@ if ($method === 'GET' && $route === 'admin/pnl/latest') {
     require_user($pdo, ['administracion']);
     ensure_pnl_sync_schema($pdo);
     $latest = $pdo->query("SELECT rows_imported, payload_json, started_at, finished_at FROM pnl_sync_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetch();
-    $connected = is_file(pnl_private_token_path());
+    $connected = pnl_is_connected($pdo, $config);
     json_response([
         'ok' => true,
         'connected' => $connected,
@@ -108,7 +108,7 @@ if ($method === 'POST' && $route === 'admin/pnl/sync') {
         ->execute([$sheetId, $range, $admin['id']]);
     $runId = (int) $pdo->lastInsertId();
     try {
-        $rows = pnl_fetch_sheet_values($config);
+        $rows = pnl_fetch_sheet_values($pdo, $config);
         $payload = json_encode($rows, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payload === false) throw new RuntimeException('No se pudo guardar la copia de lectura del P&L.');
         $pdo->prepare("UPDATE pnl_sync_runs SET status = 'verified', rows_imported = ?, payload_json = ?, payload_hash = ?, finished_at = NOW() WHERE id = ?")
@@ -127,7 +127,7 @@ if ($method === 'GET' && $route === 'admin/expenses/latest') {
     $admin = require_user($pdo, ['administracion']);
     ensure_expense_sync_schema($pdo);
     $latest = $pdo->query("SELECT rows_imported, payload_json, started_at, finished_at FROM expense_sync_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetch();
-    $connected = is_file(pnl_private_token_path());
+    $connected = pnl_is_connected($pdo, $config);
     $lastUpdate = $latest ? ($latest['finished_at'] ?: $latest['started_at']) : null;
     $stale = !$lastUpdate || strtotime((string) $lastUpdate) < (time() - 15 * 60);
     // Evita lecturas simultáneas desde varias pestañas y reintentos continuos
@@ -171,7 +171,7 @@ if ($method === 'GET' && $route === 'mrp/latest') {
     $lastUpdate = $latest ? ($latest['finished_at'] ?: $latest['started_at']) : null;
     $stale = !$lastUpdate || strtotime((string) $lastUpdate) < time() - 10 * 60;
     $recentAttempt = $pdo->query("SELECT started_at FROM mrp_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
-    if (is_file(pnl_private_token_path()) && $stale && !$recentAttempt) {
+    if (pnl_is_connected($pdo, $config) && $stale && !$recentAttempt) {
         try {
             mrp_sync_from_google($pdo, $config, (int) $mrpUser['id']);
             $latest = $pdo->query("SELECT payload_json, rows_imported, started_at, finished_at FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetch();
@@ -179,7 +179,7 @@ if ($method === 'GET' && $route === 'mrp/latest') {
             error_log('LARTISAN automatic MRP sync failed: ' . $error->getMessage());
         }
     }
-    json_response(['ok' => true, 'connected' => is_file(pnl_private_token_path()), 'snapshot' => $latest ? [
+    json_response(['ok' => true, 'connected' => pnl_is_connected($pdo, $config), 'snapshot' => $latest ? [
         'data' => json_decode((string) $latest['payload_json'], true) ?: [],
         'rowsImported' => (int) $latest['rows_imported'],
         'updatedAt' => $latest['finished_at'] ?: $latest['started_at'],
@@ -1046,7 +1046,7 @@ if ($method === 'GET' && $route === 'admin/monitoring') {
         'space' => $freeBytes === false ? null : (int) $freeBytes,
         'events_24h' => $events24h,
         'failed_syncs_24h' => $failedPnl + $failedExpenses + $failedMrp,
-        'drive_connected' => is_file(pnl_private_token_path()),
+        'drive_connected' => pnl_is_connected($pdo, $config),
         'last_pnl_sync' => $lastPnl ?: null,
         'last_expense_sync' => $lastExpenses ?: null,
         'last_mrp_sync' => $lastMrp ?: null,

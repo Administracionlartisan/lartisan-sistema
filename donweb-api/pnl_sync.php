@@ -38,6 +38,14 @@ function ensure_pnl_sync_schema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
     }
+    if (!table_exists($pdo, 'pnl_oauth_credentials')) {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS pnl_oauth_credentials (
+            id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+            credential_ciphertext TEXT NOT NULL,
+            connected_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    }
 }
 
 function ensure_expense_sync_schema(PDO $pdo): void
@@ -98,7 +106,50 @@ function pnl_authorization_url(PDO $pdo, array $config, int $userId): string
     ]);
 }
 
-function pnl_exchange_authorization_code(array $config, string $code): void
+function pnl_credential_key(array $config): string
+{
+    $oauth = pnl_oauth_client($config);
+    return hash('sha256', 'lartisan-pnl-v1|' . $oauth['client_secret'], true);
+}
+
+function pnl_store_refresh_token(PDO $pdo, array $config, string $refreshToken): void
+{
+    $iv = random_bytes(12);
+    $tag = '';
+    $ciphertext = openssl_encrypt($refreshToken, 'aes-256-gcm', pnl_credential_key($config), OPENSSL_RAW_DATA, $iv, $tag);
+    if ($ciphertext === false || $tag === '') throw new RuntimeException('No se pudo proteger la autorización de Google.');
+    $payload = json_encode(['iv' => base64_encode($iv), 'tag' => base64_encode($tag), 'data' => base64_encode($ciphertext)], JSON_UNESCAPED_SLASHES);
+    if ($payload === false) throw new RuntimeException('No se pudo proteger la autorización de Google.');
+    $pdo->prepare('INSERT INTO pnl_oauth_credentials (id, credential_ciphertext, connected_at) VALUES (1, ?, NOW()) ON DUPLICATE KEY UPDATE credential_ciphertext=VALUES(credential_ciphertext), connected_at=VALUES(connected_at)')
+        ->execute([base64_encode($payload)]);
+}
+
+function pnl_stored_refresh_token(PDO $pdo, array $config): string
+{
+    ensure_pnl_sync_schema($pdo);
+    $encoded = $pdo->query('SELECT credential_ciphertext FROM pnl_oauth_credentials WHERE id = 1')->fetchColumn();
+    if (is_string($encoded) && $encoded !== '') {
+        $decoded = json_decode((string) base64_decode($encoded, true), true);
+        if (is_array($decoded)) {
+            $iv = base64_decode((string) ($decoded['iv'] ?? ''), true);
+            $tag = base64_decode((string) ($decoded['tag'] ?? ''), true);
+            $data = base64_decode((string) ($decoded['data'] ?? ''), true);
+            if ($iv !== false && $tag !== false && $data !== false) {
+                $token = openssl_decrypt($data, 'aes-256-gcm', pnl_credential_key($config), OPENSSL_RAW_DATA, $iv, $tag);
+                if (is_string($token) && $token !== '') return $token;
+            }
+        }
+    }
+    $legacy = is_file(pnl_private_token_path()) ? json_decode((string) file_get_contents(pnl_private_token_path()), true) : null;
+    return is_array($legacy) ? (string) ($legacy['refresh_token'] ?? '') : '';
+}
+
+function pnl_is_connected(PDO $pdo, array $config): bool
+{
+    return pnl_stored_refresh_token($pdo, $config) !== '';
+}
+
+function pnl_exchange_authorization_code(PDO $pdo, array $config, string $code): void
 {
     $oauth = pnl_oauth_client($config);
     $response = pnl_http('https://oauth2.googleapis.com/token', [
@@ -114,22 +165,12 @@ function pnl_exchange_authorization_code(array $config, string $code): void
     if ($response['status'] !== 200 || empty($response['json']['refresh_token'])) {
         throw new RuntimeException('Google no devolvió una autorización permanente.');
     }
-    $payload = json_encode([
-        'refresh_token' => $response['json']['refresh_token'],
-        'connected_at' => gmdate('c'),
-        'scope' => 'spreadsheets.readonly',
-    ], JSON_UNESCAPED_SLASHES);
-    if ($payload === false || file_put_contents(pnl_private_token_path(), $payload, LOCK_EX) === false) {
-        throw new RuntimeException('No se pudo guardar la autorización de Google en el área privada.');
-    }
-    @chmod(pnl_private_token_path(), 0600);
+    pnl_store_refresh_token($pdo, $config, (string) $response['json']['refresh_token']);
 }
 
-function pnl_access_token(array $config): string
+function pnl_access_token(PDO $pdo, array $config): string
 {
-    $path = pnl_private_token_path();
-    $stored = is_file($path) ? json_decode((string) file_get_contents($path), true) : null;
-    $refreshToken = is_array($stored) ? (string) ($stored['refresh_token'] ?? '') : '';
+    $refreshToken = pnl_stored_refresh_token($pdo, $config);
     if ($refreshToken === '') throw new RuntimeException('Falta autorizar la lectura del P&L con Google.');
     $oauth = pnl_oauth_client($config);
     $response = pnl_http('https://oauth2.googleapis.com/token', [
@@ -147,12 +188,12 @@ function pnl_access_token(array $config): string
     return (string) $response['json']['access_token'];
 }
 
-function pnl_fetch_sheet_values(array $config): array
+function pnl_fetch_sheet_values(PDO $pdo, array $config): array
 {
     $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
     $range = (string) ($config['pnl_sync']['range'] ?? "'P&L Consolidado 2026 COPIA'!A1:AN220");
     if ($sheetId === '' || $range === '') throw new RuntimeException('Falta identificar la hoja del P&L.');
-    $accessToken = pnl_access_token($config);
+    $accessToken = pnl_access_token($pdo, $config);
     $url = 'https://sheets.googleapis.com/v4/spreadsheets/' . rawurlencode($sheetId) . '/values/' . rawurlencode($range) . '?majorDimension=ROWS';
     $response = pnl_http($url, ['headers' => ['Authorization: Bearer ' . $accessToken]]);
     $rows = $response['json']['values'] ?? null;
@@ -162,12 +203,12 @@ function pnl_fetch_sheet_values(array $config): array
     return $rows;
 }
 
-function expense_fetch_sheet_values(array $config): array
+function expense_fetch_sheet_values(PDO $pdo, array $config): array
 {
     $sheetId = trim((string) ($config['pnl_sync']['spreadsheet_id'] ?? ''));
     $range = (string) ($config['expense_sync']['range'] ?? "'GASTOS OPERATIVOS'!A7:Z10000");
     if ($sheetId === '' || $range === '') throw new RuntimeException('Falta identificar la fuente de gastos.');
-    $accessToken = pnl_access_token($config);
+    $accessToken = pnl_access_token($pdo, $config);
     $url = 'https://sheets.googleapis.com/v4/spreadsheets/' . rawurlencode($sheetId) . '/values/' . rawurlencode($range) . '?majorDimension=ROWS';
     $response = pnl_http($url, ['headers' => ['Authorization: Bearer ' . $accessToken]]);
     $rows = $response['json']['values'] ?? null;
@@ -289,7 +330,7 @@ function expense_sync_from_google(PDO $pdo, array $config, int $userId): array
         ->execute([$sheetId, $range, $userId]);
     $runId = (int) $pdo->lastInsertId();
     try {
-        $rows = expense_fetch_sheet_values($config);
+        $rows = expense_fetch_sheet_values($pdo, $config);
         $snapshot = expense_sync_snapshot($rows);
         $payload = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payload === false) throw new RuntimeException('No se pudo guardar la copia de gastos.');
