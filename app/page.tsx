@@ -987,8 +987,10 @@ export default function Home() {
     setStockMovements((items) => [entry, ...items]);
     return entry;
   };
+  // Administración es el rol propietario: ningún permiso agregado después de
+  // iniciar sesión debe ocultarle un módulo operativo.
   const can = (permission: string) =>
-    Boolean(user?.actionPermissions.includes(permission));
+    user?.role === "administracion" || Boolean(user?.actionPermissions.includes(permission));
   const canAdjustStock = can("stock");
   const canCountRealStock = can("stock");
   const canApproveStockAdjustments =
