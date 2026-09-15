@@ -274,6 +274,16 @@ export default function Home() {
       ]),
     ),
   );
+  const [stockCountComments, setStockCountComments] = useState<
+    Record<string, Record<number, string>>
+  >(() =>
+    Object.fromEntries(
+      SITES.map((s) => [
+        s,
+        Object.fromEntries(PRODUCTS.map((p) => [p.id, ""])),
+      ]),
+    ),
+  );
   const [payments, setPayments] = useState<Payment[]>([]);
   const cashFields = cashFieldsBySite[site] || EMPTY_CASH_FIELDS;
   const updateCashField = <K extends keyof CashFields>(
@@ -633,6 +643,15 @@ export default function Home() {
           ]),
         ),
       }));
+      setStockCountComments((items) => ({
+        ...items,
+        ...Object.fromEntries(
+          entries.map(([local, entry]) => [
+            local,
+            entry.state.stockCountComments || items[local],
+          ]),
+        ),
+      }));
       setSales(all("sales") as Sale[]);
       setPayments(all("payments") as Payment[]);
       setStockRequests(all("stockRequests") as StockRequest[]);
@@ -746,6 +765,7 @@ export default function Home() {
       stock: stock[local] || {},
       minimumStock: minimumStock[local] || {},
       realStock: realStock[local] || {},
+      stockCountComments: stockCountComments[local] || {},
       sales: localSales,
       payments: payments.filter((item) => item.saleId && saleIds.has(item.saleId)),
       stockRequests: filterBySite(stockRequests),
@@ -854,6 +874,7 @@ export default function Home() {
     stock,
     minimumStock,
     realStock,
+    stockCountComments,
     sales,
     payments,
     stockRequests,
@@ -1003,7 +1024,7 @@ export default function Home() {
   const canAdjustStock = can("stock");
   const canCountRealStock = can("stock");
   const canApproveStockAdjustments =
-    user?.role === "supervisora" && can("stock");
+    (user?.role === "administracion" || user?.role === "supervisora") && can("stock");
   const canManageSchedules =
     user?.role === "supervisora" && user.reportPermissions.includes("Personal");
   const canViewSupervisorReports =
@@ -1891,6 +1912,39 @@ export default function Home() {
     setAdjustReason("");
     recordAudit("Ajuste de stock solicitado", `${site} · ${adjustment.reason}`);
     setMessage("Ajuste enviado para aprobación.");
+  };
+  const submitStockControl = () => {
+    if (!user || !can("stock"))
+      return setMessage("Tu usuario no tiene permiso para cerrar un control de stock.");
+    const lines = PRODUCTS.flatMap((product) => {
+      const counted = realStock[site][product.id];
+      if (counted === "") return [];
+      const theoretical = stock[site][product.id] || 0;
+      const difference = Number(counted) - theoretical;
+      if (difference === 0) return [];
+      const comment = stockCountComments[site][product.id]?.trim() || "";
+      return [{ product, counted: Number(counted), theoretical, difference, comment }];
+    });
+    if (!lines.length)
+      return setMessage("Cargá al menos una diferencia antes de cerrar el control.");
+    const withoutComment = lines.find((line) => !line.comment);
+    if (withoutComment)
+      return setMessage(`Agregá una observación para ${withoutComment.product.name}.`);
+    const now = new Date().toLocaleString("es-AR");
+    const adjustments: StockAdjustment[] = lines.map((line) => ({
+      id: crypto.randomUUID(),
+      site,
+      productId: line.product.id,
+      counted: line.counted,
+      theoretical: line.theoretical,
+      reason: line.comment,
+      requestedAt: now,
+      requestedBy: user.name,
+      status: "Pendiente",
+    }));
+    setStockAdjustments((items) => [...adjustments, ...items]);
+    recordAudit("Control de stock cerrado", `${site} · ${adjustments.length} diferencia(s) informada(s)`);
+    setMessage(`Control enviado: ${adjustments.length} diferencia(s) quedan en revisión y aparecen como tarea para los perfiles autorizados de Administración/stock.`);
   };
   const approveStockAdjustment = (
     adjustment: StockAdjustment,
@@ -3672,6 +3726,7 @@ export default function Home() {
                       <th className="p-3">Mínimo</th>
                       <th className="p-3">Real</th>
                       <th className="p-3">Diferencia</th>
+                      <th className="p-3 text-left">Observación</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3732,21 +3787,47 @@ export default function Home() {
                             ? "—"
                             : Number(realStock[site][p.id]) - stock[site][p.id]}
                         </td>
+                        <td className="p-3">
+                          {canCountRealStock ? (
+                            <input
+                              value={stockCountComments[site][p.id] || ""}
+                              onChange={(e) =>
+                                setStockCountComments((current) => ({
+                                  ...current,
+                                  [site]: {
+                                    ...current[site],
+                                    [p.id]: e.target.value,
+                                  },
+                                }))
+                              }
+                              placeholder="Obligatoria si hay diferencia"
+                              aria-label={`Observación de stock de ${p.name}`}
+                              className="w-56 rounded border p-1"
+                            />
+                          ) : (
+                            <span>{stockCountComments[site][p.id] || "—"}</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
               <p className="mt-3 text-sm text-slate-500">
-                El conteo real, los mínimos y los ajustes quedan reservados a perfiles autorizados.
+                El conteo real y sus observaciones quedan registrados. Las diferencias requieren comentario y no modifican el stock teórico hasta que se revisen.
               </p>
               {canCountRealStock && (
                 <div className="mt-5 rounded-2xl border bg-white p-5">
-                  <b>Solicitar ajuste de inventario</b>
+                  <b>Cerrar control de stock del local</b>
                   <p className="mt-1 text-sm text-slate-500">
-                    Un perfil autorizado debe aprobar el ajuste antes de modificar el stock
-                    teórico.
+                    Andrea puede cargar el conteo de cada local. Al cerrar, cada diferencia con su observación queda en historial y aparece como tarea para Administración y los perfiles autorizados de stock; el stock teórico no cambia automáticamente.
                   </p>
+                  <button
+                    onClick={submitStockControl}
+                    className="mt-4 rounded bg-[#183a67] px-4 py-2.5 font-bold text-white"
+                  >
+                    Enviar diferencias para revisión
+                  </button>
                   <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1.5fr_auto] md:items-end">
                     <label className="text-sm font-bold">
                       Producto contado

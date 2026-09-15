@@ -113,6 +113,7 @@ export type OperationalSnapshot = {
   stock?: Record<number, number>;
   minimumStock?: Record<number, number>;
   realStock?: Record<number, string>;
+  stockCountComments?: Record<number, string>;
   sales?: Sale[];
   payments?: Payment[];
   stockRequests?: StockRequest[];
