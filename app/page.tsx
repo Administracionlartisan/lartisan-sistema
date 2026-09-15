@@ -15,6 +15,7 @@ import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import ComingSoonPanel, { type ComingSoonSection } from "./modules/administracion/ComingSoonPanel";
 import MrpPanel from "./modules/administracion/MrpPanel";
+import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
@@ -2702,6 +2703,7 @@ export default function Home() {
           "Recetas y costos",
           "Legajos",
           "MRP",
+          "Compras de producción",
           "Protección de datos",
           "Actualizaciones",
           "Integraciones",
@@ -2721,6 +2723,7 @@ export default function Home() {
           "Clientes",
           "Guía",
           ...(can("mrp") ? ["MRP"] : []),
+          ...(can("comprasProduccion") ? ["Compras de producción"] : []),
         ];
   const tabs = [
     ...baseTabs,
@@ -4725,6 +4728,8 @@ export default function Home() {
             <ComingSoonPanel section={tab as ComingSoonSection} />
           ) : tab === "MRP" && can("mrp") ? (
             <MrpPanel />
+          ) : tab === "Compras de producción" && can("comprasProduccion") ? (
+            <PurchaseCostsPanel />
           ) : tab === "Protección de datos" && user.role === "administracion" ? (
             <>
               <Heading
