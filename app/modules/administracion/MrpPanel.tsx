@@ -189,12 +189,16 @@ function ValidationPanel({ snapshot }: { snapshot: MrpSnapshot | null }) {
 }
 
 function downloadRecipeCosts(recipes: Recipe[]) {
-  const value = (input: unknown) => `"${String(input ?? "").replace(/"/g, '""')}"`;
+  const text = (input: unknown) => `"${String(input ?? "").replace(/"/g, '""')}"`;
+  // Excel configurado en Argentina reconoce la coma decimal y el punto y coma
+  // como separador de columnas. Los importes se entregan sin comillas para que
+  // pueda sumar, filtrar y aplicar formato de moneda correctamente.
+  const numeric = (input: number | null | undefined) => input === null || input === undefined ? "" : String(input).replace(".", ",");
   const rows = [
-    ["Receta / producto", "Rendimiento", "Componentes", "Costo por unidad", "Estado", "Costos pendientes"],
-    ...recipes.map((recipe) => [recipe.recipe, recipe.yield ?? "", recipe.components, recipe.costPerUnit ?? "", recipe.costStatus, recipe.missingCosts.join(" | ")]),
+    [text("Receta / producto"), text("Rendimiento"), text("Componentes"), text("Costo por unidad"), text("Estado"), text("Costos pendientes")],
+    ...recipes.map((recipe) => [text(recipe.recipe), numeric(recipe.yield), numeric(recipe.components), numeric(recipe.costPerUnit), text(recipe.costStatus), text(recipe.missingCosts.join(" | "))]),
   ];
-  const blob = new Blob(["\uFEFF" + rows.map((row) => row.map(value).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob(["\uFEFF" + rows.map((row) => row.join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob); const link = document.createElement("a");
   link.href = url; link.download = `costos-recetas-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); URL.revokeObjectURL(url);
 }
