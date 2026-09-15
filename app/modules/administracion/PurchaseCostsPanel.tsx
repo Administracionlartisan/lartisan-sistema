@@ -18,6 +18,9 @@ export default function PurchaseCostsPanel() {
   const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState("");
   const load = useCallback(async () => { setLoading(true); setError(""); try { const response = await fetch(`${API_BASE}/purchase-costs/catalog`, { credentials: "include", cache: "no-store" }); const body = await response.json() as { error?: string; inputs?: Input[]; history?: History[] }; if (!response.ok) throw new Error(body.error || "No se pudo consultar el catálogo de compras."); setInputs(body.inputs ?? []); setHistory(body.history ?? []); } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo cargar compras."); } finally { setLoading(false); } }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void fetch(`${API_BASE}/activity/module-opened`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: "Compras de producción" }) });
+  }, []);
   const selected = useMemo(() => new Map(inputs.map((item) => [item.key, item])), [inputs]);
   const updateLine = (index: number, patch: Partial<Line>) => setLines((rows) => rows.map((row, i) => i === index ? { ...row, ...patch } : row));
   const chooseInput = (index: number, inputKey: string) => { const input = selected.get(inputKey); updateLine(index, { inputKey, unitCost: input?.unitCost ? String(input.unitCost) : "" }); };

@@ -431,6 +431,15 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portal]);
   useEffect(() => {
+    if (!user || (tab !== "Reportes" && !(tab === "Administración" && adminReport))) return;
+    void fetch(`${API_BASE}/activity/module-opened`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "Reportes" }),
+    });
+  }, [adminReport, tab, user]);
+  useEffect(() => {
     if (user?.role !== "administracion") return;
     let active = true;
     const refreshAdminTasks = () =>

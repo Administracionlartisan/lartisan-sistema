@@ -77,6 +77,10 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+  useEffect(() => {
+    const module = initialView === "Recetas y costos" ? "Recetas y costos" : "MRP semanal";
+    void fetch(`${API_BASE}/activity/module-opened`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module }) });
+  }, [initialView]);
 
   const importOnce = async () => {
     if (!importFile || importing) return;
