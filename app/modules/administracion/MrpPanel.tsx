@@ -127,8 +127,16 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
     <DataTable rows={rows ?? []} columns={view === "Explosión y requerimientos" ? [["item", "Insumo / subreceta"], ["category", "Categoría"], ["directRequirement", "Nivel directo"], ["subrecipeRequirement", "Por subrecetas"], ["required", "Requerido total"], ["stock", "Stock"], ["netNeed", "Necesidad"], ["action", "Acción"]] : [["item", "Insumo / subreceta"], ["category", "Categoría"], ["required", "Requerido"], ["stock", "Stock"], ["netNeed", "Necesidad"], ["suggestedQuantity", "Cantidad sugerida"], ["provider", "Proveedor"], ["status", "Estado"]]} />
   );
 
+  if (initialView === "Recetas y costos") return <div className={styles.panel}>
+    <Heading k="ADMINISTRACIÓN · PRODUCCIÓN" h="Recetas y costos" p="Fichas técnicas, rendimientos y costos por producto guardados en el sistema." />
+    <div className={styles.notice}><div><strong>{snapshot ? "Recetario operativo" : "Recetario sin carga"}</strong><p>Esta sección administra las fichas técnicas y el costo de cada producto. El MRP semanal se usa por separado para planificar compras, preparación y necesidades de producción.</p>{snapshot?.importCounts && <p>{snapshot.importCounts.recipes} recetas · {snapshot.importCounts.components} componentes · {snapshot.importCounts.inputs} insumos.</p>}<button type="button" className={styles.button} disabled={loading} onClick={() => void load()}>Actualizar recetario</button></div><span className={styles.status}>{loading ? "Consultando datos…" : updatedAt ? `Actualizado ${updatedAt}` : error ? "No se pudo verificar" : "Sin recetario confirmado"}</span></div>
+    {error && <div className={styles.error}>{error}</div>}
+    {notice && <div className={styles.notice}><strong>{notice}</strong></div>}
+    <RecipesPanel snapshot={snapshot} canEdit={canEditRecipes} onSaved={() => void load()} />
+  </div>;
+
   return <div className={styles.panel}>
-    <Heading k="ADMINISTRACIÓN · ABASTECIMIENTO" h={initialView === "Recetas y costos" ? "Recetas y costos" : "MRP semanal"} p={initialView === "Recetas y costos" ? "Recetario, rendimientos y costos calculados desde la copia validada del MRP." : "Planificación, requerimientos y seguimiento de compras desde la base operativa del sistema."} />
+    <Heading k="ADMINISTRACIÓN · ABASTECIMIENTO" h="MRP semanal" p="Planificación, requerimientos y seguimiento de compras desde la base operativa del sistema." />
     <div className={styles.notice}><div><strong>{snapshot ? "Recetario guardado en el sistema" : "Carga única del recetario"}</strong><p>{snapshot ? "Las recetas, insumos, rendimientos y costos se consultan desde la base propia. No se vuelve a importar al actualizar la página. El plan semanal mostrado es la copia de origen, no una planificación recalculada automáticamente." : "Importá la copia preparada de la planilla una sola vez. No requiere conectar Google y no modifica el archivo original."}</p>
       {!snapshot && canImport && <div><label>Archivo de migración MRP <input type="file" accept=".json,application/json" disabled={importing} onChange={event => setImportFile(event.target.files?.[0] ?? null)} /></label><button type="button" className={styles.button} disabled={!importFile || importing || loading} onClick={() => void importOnce()}>{importing ? "Guardando y verificando…" : "Importar y guardar en el sistema"}</button></div>}
       {snapshot?.importCounts && <p>{snapshot.importCounts.recipes} recetas · {snapshot.importCounts.components} componentes · {snapshot.importCounts.inputs} insumos.</p>}
