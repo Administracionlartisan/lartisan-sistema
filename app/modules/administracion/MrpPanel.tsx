@@ -30,11 +30,14 @@ const number = (value: unknown) => {
 };
 const quantity = (value: unknown) => new Intl.NumberFormat("es-AR", { maximumFractionDigits: 4 }).format(number(value));
 
-export default function MrpPanel() {
-  const [view, setView] = useState("Plan semanal");
+type MrpPanelProps = { initialView?: "Plan semanal" | "Recetas y costos" };
+
+export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps) {
+  const [view, setView] = useState(initialView);
   const [snapshot, setSnapshot] = useState<MrpSnapshot | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
   const [canImport, setCanImport] = useState(false);
+  const [canEditRecipes, setCanEditRecipes] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -55,13 +58,14 @@ export default function MrpPanel() {
         fetch(`${API_BASE}/mrp/latest`, { credentials: "include", cache: "no-store", signal: controller.signal }),
         fetch(`${API_BASE}/mrp/operations`, { credentials: "include", cache: "no-store", signal: controller.signal }),
       ]);
-      const source = await sourceResponse.json() as { error?: string; canImport?: boolean; snapshot?: { data?: MrpSnapshot; updatedAt?: string } };
+      const source = await sourceResponse.json() as { error?: string; canImport?: boolean; canEditRecipes?: boolean; snapshot?: { data?: MrpSnapshot; updatedAt?: string } };
       const operations = await operationsResponse.json() as { error?: string; orders?: Order[]; controls?: MrpRow[] };
       if (!sourceResponse.ok) throw new Error(source.error || "No se pudo leer el MRP.");
       if (!operationsResponse.ok) throw new Error(operations.error || "No se pudo leer la operación MRP.");
       setSnapshot(source.snapshot?.data ?? null);
       setUpdatedAt(source.snapshot?.updatedAt ?? "");
       setCanImport(source.canImport === true);
+      setCanEditRecipes(source.canEditRecipes === true);
       setOrders(operations.orders ?? []);
       setControls(operations.controls ?? []);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo cargar el MRP."); }
@@ -124,7 +128,7 @@ export default function MrpPanel() {
   );
 
   return <div className={styles.panel}>
-    <Heading k="ADMINISTRACIÓN · ABASTECIMIENTO" h="MRP semanal" p="Planificación, requerimientos y seguimiento de compras desde la base operativa del sistema." />
+    <Heading k="ADMINISTRACIÓN · ABASTECIMIENTO" h={initialView === "Recetas y costos" ? "Recetas y costos" : "MRP semanal"} p={initialView === "Recetas y costos" ? "Recetario, rendimientos y costos calculados desde la copia validada del MRP." : "Planificación, requerimientos y seguimiento de compras desde la base operativa del sistema."} />
     <div className={styles.notice}><div><strong>{snapshot ? "Recetario guardado en el sistema" : "Carga única del recetario"}</strong><p>{snapshot ? "Las recetas, insumos, rendimientos y costos se consultan desde la base propia. No se vuelve a importar al actualizar la página. El plan semanal mostrado es la copia de origen, no una planificación recalculada automáticamente." : "Importá la copia preparada de la planilla una sola vez. No requiere conectar Google y no modifica el archivo original."}</p>
       {!snapshot && canImport && <div><label>Archivo de migración MRP <input type="file" accept=".json,application/json" disabled={importing} onChange={event => setImportFile(event.target.files?.[0] ?? null)} /></label><button type="button" className={styles.button} disabled={!importFile || importing || loading} onClick={() => void importOnce()}>{importing ? "Guardando y verificando…" : "Importar y guardar en el sistema"}</button></div>}
       {snapshot?.importCounts && <p>{snapshot.importCounts.recipes} recetas · {snapshot.importCounts.components} componentes · {snapshot.importCounts.inputs} insumos.</p>}
@@ -139,7 +143,7 @@ export default function MrpPanel() {
       <Metric label="Alertas operativas" value={snapshot?.kpis.alerts ?? "—"} />
     </div>
     <div className={styles.tabs}>{["Plan semanal", "Comprar", "Preparar", "Explosión y requerimientos", "Recetas y costos", "Operación", "Validación"].map((item) => <button key={item} onClick={() => setView(item)} className={`${styles.tab} ${view === item ? styles.tabActive : ""}`}>{item}</button>)}</div>
-    {view === "Operación" ? <OperationPanel {...{ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Recetas y costos" ? <RecipesPanel snapshot={snapshot} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${rows?.length ?? 0} registros visibles`}</p></div></div>{table}</section>}
+    {view === "Operación" ? <OperationPanel {...{ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Recetas y costos" ? <RecipesPanel snapshot={snapshot} canEdit={canEditRecipes} onSaved={() => void load()} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${rows?.length ?? 0} registros visibles`}</p></div></div>{table}</section>}
   </div>;
 }
 
@@ -174,11 +178,19 @@ function ValidationPanel({ snapshot }: { snapshot: MrpSnapshot | null }) {
   return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Comparación técnica con la planilla</strong><p>Se recalculan el plan semanal y las cantidades por unidad de cada receta, sin modificar Google Sheets.</p></div></div><div className={styles.forms}><div className={styles.form}><strong>{validation?.status === "ok" && recipes?.status === "ok" ? "Validación técnica correcta" : "Hay diferencias para revisar"}</strong><p>Plan: {validation?.checkedLines ?? 0} líneas. Recetas: {recipes?.checkedLines ?? 0} componentes en {recipes?.checkedRecipes ?? 0} recetas.</p></div><div className={styles.form}><strong>Costos disponibles</strong><p>{recipes?.costedRecipes ?? 0} recetas tienen costo completo. {recipes?.missingCostInputs.length ?? 0} insumos requieren precio o revisión en la planilla.</p><strong className={styles.inlineTitle}>Aprobación de Gerencia: pendiente</strong><p>La validación técnica confirma fórmulas y referencias; Gerencia debe aprobar una corrida real antes de tomar decisiones de costo.</p></div></div>{differences.length ? <DataTable rows={differences} columns={[["recipe", "Receta / producto"], ["ingredient", "Insumo"], ["expected", "Esperado"], ["actual", "Planilla"], ["reason", "Motivo"]]} /> : null}</section>;
 }
 
-function RecipesPanel({ snapshot }: { snapshot: MrpSnapshot | null }) {
-  const [selected, setSelected] = useState("");
+function RecipesPanel({ snapshot, canEdit, onSaved }: { snapshot: MrpSnapshot | null; canEdit: boolean; onSaved: () => void }) {
+  const [selected, setSelected] = useState(""); const [creating, setCreating] = useState(false);
   const recipes = snapshot?.recipes ?? [];
   const recipe = recipes.find((item) => item.recipe === selected) ?? recipes[0];
   useEffect(() => { if (!selected && recipes[0]) setSelected(recipes[0].recipe); }, [recipes, selected]);
   if (!recipes.length) return <section className={styles.card}><div className={styles.empty}>No hay recetario importado. Administración debe realizar la carga única desde archivo.</div></section>;
-  return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Recetas y costos</strong><p>El recetario está guardado en la base del sistema. Un costo solo se calcula cuando todos sus insumos y subrecetas tienen un precio válido.</p></div><label className={styles.recipePicker}>Receta<select value={recipe?.recipe ?? ""} onChange={(event) => setSelected(event.target.value)}>{recipes.map((item) => <option key={item.recipe}>{item.recipe}</option>)}</select></label></div>{recipe && <><div className={styles.recipeMetrics}><Metric label="Rendimiento" value={recipe.yield ?? "—"} /><Metric label="Componentes" value={recipe.components} /><Metric label="Costo por unidad" value={recipe.costPerUnit === null ? "Pendiente" : money.format(recipe.costPerUnit)} /><Metric label="Estado" value={recipe.costStatus} /></div>{recipe.missingCosts.length > 0 && <div className={styles.warning}><strong>Faltan costos que completar:</strong> {recipe.missingCosts.join(", ")}</div>}<DataTable rows={recipe.items} columns={[["ingredient", "Insumo / subreceta"], ["type", "Tipo"], ["quantity", "Cantidad lote"], ["unit", "Unidad"], ["yield", "Rendimiento"], ["perUnit", "Cantidad por unidad"], ["dictionaryCheck", "Control"]]} /></>}</section>;
+  const editingRecipe = creating ? { recipe: "", yield: 1, components: 0, costPerUnit: null, costStatus: "Pendiente de costo", missingCosts: [], items: [] } : recipe;
+  return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Recetas y costos</strong><p>El recetario está guardado en la base del sistema. Un costo solo se calcula cuando todos sus insumos y subrecetas tienen un precio válido.</p></div><label className={styles.recipePicker}>Receta<select value={recipe?.recipe ?? ""} onChange={(event) => { setSelected(event.target.value); setCreating(false); }}>{recipes.map((item) => <option key={item.recipe}>{item.recipe}</option>)}</select></label>{canEdit && <button type="button" className={styles.button} onClick={() => setCreating(true)}>Nueva receta</button>}</div>{recipe && !creating && <><div className={styles.recipeMetrics}><Metric label="Rendimiento" value={recipe.yield ?? "—"} /><Metric label="Componentes" value={recipe.components} /><Metric label="Costo por unidad" value={recipe.costPerUnit === null ? "Pendiente" : money.format(recipe.costPerUnit)} /><Metric label="Estado" value={recipe.costStatus} /></div>{recipe.missingCosts.length > 0 && <div className={styles.warning}><strong>Faltan costos que completar:</strong> {recipe.missingCosts.join(", ")}</div>}<DataTable rows={recipe.items} columns={[["ingredient", "Insumo / subreceta"], ["type", "Tipo"], ["quantity", "Cantidad lote"], ["unit", "Unidad"], ["yield", "Rendimiento"], ["perUnit", "Cantidad por unidad"], ["dictionaryCheck", "Control"]]} /></>}{canEdit && editingRecipe && <RecipeEditor recipe={editingRecipe} onSaved={() => { setCreating(false); onSaved(); }} />}</section>;
+}
+
+function RecipeEditor({ recipe, onSaved }: { recipe: Recipe; onSaved: () => void }) {
+  const [name, setName] = useState(recipe.recipe), [yieldValue, setYieldValue] = useState(String(recipe.yield ?? "")), [lines, setLines] = useState(""), [message, setMessage] = useState("");
+  useEffect(() => { setName(recipe.recipe); setYieldValue(String(recipe.yield ?? "")); setLines(recipe.items.map(item => `${item.ingredient} | ${item.quantity} | ${item.unit} | ${item.type || "Insumo"}`).join("\n")); setMessage(""); }, [recipe]);
+  const save = async (event: FormEvent) => { event.preventDefault(); const items = lines.split("\n").filter(Boolean).map(line => { const [ingredient, quantity, unit, type] = line.split("|").map(part => part.trim()); return { ingredient, quantity: Number(quantity), unit, type: type || "Insumo" }; }); const key = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, " "); const response = await fetch(`${API_BASE}/mrp/recipes/${encodeURIComponent(key)}`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ recipe: name, yield: Number(yieldValue), items }) }); const body = await response.json() as { error?: string }; if (!response.ok) return setMessage(body.error || "No se pudo guardar."); setMessage("Receta guardada y registrada en el historial."); onSaved(); };
+  return <form className={styles.form} onSubmit={save}><strong>Editar receta</strong><p>Solo Jhaiber puede guardar. Un componente por línea: insumo | cantidad lote | unidad | tipo.</p><div className={styles.formGrid}><label>Nombre<input required value={name} onChange={event => setName(event.target.value)} /></label><label>Rendimiento<input required min="0.0001" step="0.0001" type="number" value={yieldValue} onChange={event => setYieldValue(event.target.value)} /></label></div><label>Componentes<textarea required value={lines} onChange={event => setLines(event.target.value)} rows={Math.min(12, Math.max(4, lines.split("\n").length + 1))} /></label><button className={styles.button}>Guardar cambios</button>{message && <p>{message}</p>}</form>;
 }

@@ -2794,10 +2794,8 @@ export default function Home() {
               >
                 <span className="flex items-center justify-between gap-2">
                   <span>
-                    {t === "Recetas y costos" || t === "Legajos"
+                    {t === "Legajos"
                       ? `${t} (Próximamente)`
-                      : t === "MRP"
-                        ? `${t} (En preparación)`
                       : t}
                   </span>
                   {t === "Tareas" && adminTaskAlertCount > 0 && (
@@ -4721,7 +4719,9 @@ export default function Home() {
                 Registrar cliente
               </button>
             </>
-          ) : (["Recetas y costos", "Legajos"].includes(tab) && user.role === "administracion") ? (
+          ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
+            <MrpPanel initialView="Recetas y costos" />
+          ) : tab === "Legajos" && user.role === "administracion" ? (
             <ComingSoonPanel section={tab as ComingSoonSection} />
           ) : tab === "MRP" && can("mrp") ? (
             <MrpPanel />
