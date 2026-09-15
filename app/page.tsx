@@ -2734,9 +2734,9 @@ export default function Home() {
     : 0;
   const availableAdminReports =
     user.role === "administracion"
-      ? ADMIN_REPORTS.filter((report) =>
-          user.reportPermissions.includes(report.id),
-        )
+      // Administración is the owner role: its report access is never
+      // constrained by the optional per-user report checklist.
+      ? ADMIN_REPORTS
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">

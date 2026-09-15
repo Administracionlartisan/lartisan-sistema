@@ -134,7 +134,7 @@ export function groupAvailableReports(reports: readonly NavigationReport[]) {
   }) })).filter(area => area.reports.length > 0);
 }
 export function availableReportGuides(access: ReportAccess) {
-  if (access.role === "administracion") return adminReportGuides.filter(r => access.reportPermissions.includes(r.id));
+  if (access.role === "administracion") return adminReportGuides;
   return access.role === "supervisora" && access.supervisorReports ? [supervisionReportGuide] : [];
 }
 export function canOpenReport(access: ReportAccess, id: string) {
