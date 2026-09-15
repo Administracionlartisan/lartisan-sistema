@@ -237,10 +237,10 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
             if (abs($item['perUnit'] - $item['expectedPerUnit']) > 0.0001) {
                 $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => $item['expectedPerUnit'], 'actual' => $item['perUnit'], 'reason' => 'La cantidad por unidad no coincide con lote/rendimiento'];
             }
-            if ($item['dictionaryCheck'] !== '' && !str_starts_with(mb_strtoupper($item['dictionaryCheck'], 'UTF-8'), 'OK')) {
+            if ($item['dictionaryCheck'] !== '' && strpos(mb_strtoupper($item['dictionaryCheck'], 'UTF-8'), 'OK') !== 0) {
                 $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => 'En diccionario', 'actual' => $item['dictionaryCheck'], 'reason' => 'Control de diccionario'];
             }
-            if ($item['unitCheck'] !== '' && !str_starts_with(mb_strtoupper($item['unitCheck'], 'UTF-8'), 'OK')) {
+            if ($item['unitCheck'] !== '' && strpos(mb_strtoupper($item['unitCheck'], 'UTF-8'), 'OK') !== 0) {
                 $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => 'Unidad válida', 'actual' => $item['unitCheck'], 'reason' => 'Control de unidad'];
             }
         }
