@@ -23,6 +23,7 @@ type MrpSnapshot = {
 };
 type Recipe = { recipe: string; yield: number | null; components: number; costPerUnit: number | null; costStatus: string; missingCosts: string[]; items: MrpRow[] };
 type Order = { id: string; item_name: string; provider_name?: string; unit: string; quantity: string; received_quantity: string; status: string; row_version: string };
+type Stock = { input_key: string; input_name: string; unit: string; actual_quantity: string; counted_at: string; counted_by_name?: string };
 
 const number = (value: unknown) => {
   if (typeof value === "number") return value;
@@ -30,6 +31,7 @@ const number = (value: unknown) => {
   return Number(normalized) || 0;
 };
 const quantity = (value: unknown) => new Intl.NumberFormat("es-AR", { maximumFractionDigits: 4 }).format(number(value));
+const mrpKey = (value: unknown) => String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es").trim().replace(/\s+/g, " ");
 
 type MrpPanelProps = { initialView?: "Plan semanal" | "Recetas y costos" };
 
@@ -43,11 +45,14 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
   const [importing, setImporting] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [controls, setControls] = useState<MrpRow[]>([]);
+  const [stocks, setStocks] = useState<Stock[]>([]);
+  const [canCountStock, setCanCountStock] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [orderForm, setOrderForm] = useState({ itemName: "", providerName: "", unit: "kg", quantity: "" });
   const [controlForm, setControlForm] = useState({ weekKey: "", itemName: "", expectedQuantity: "", actualQuantity: "" });
+  const [stockForm, setStockForm] = useState({ inputKey: "", actualQuantity: "", notes: "" });
   const [receiptByOrder, setReceiptByOrder] = useState<Record<string, string>>({});
   const [filters, setFilters] = useState({ search: "", category: "", provider: "", status: "" });
 
@@ -61,7 +66,7 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
         fetch(`${API_BASE}/mrp/operations`, { credentials: "include", cache: "no-store", signal: controller.signal }),
       ]);
       const source = await sourceResponse.json() as { error?: string; canImport?: boolean; canEditRecipes?: boolean; snapshot?: { data?: MrpSnapshot; updatedAt?: string } };
-      const operations = await operationsResponse.json() as { error?: string; orders?: Order[]; controls?: MrpRow[] };
+      const operations = await operationsResponse.json() as { error?: string; orders?: Order[]; controls?: MrpRow[]; stocks?: Stock[]; canCountStock?: boolean };
       if (!sourceResponse.ok) throw new Error(source.error || "No se pudo leer el MRP.");
       if (!operationsResponse.ok) throw new Error(operations.error || "No se pudo leer la operación MRP.");
       setSnapshot(source.snapshot?.data ?? null);
@@ -70,6 +75,7 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
       setCanEditRecipes(source.canEditRecipes === true);
       setOrders(operations.orders ?? []);
       setControls(operations.controls ?? []);
+      setStocks(operations.stocks ?? []); setCanCountStock(operations.canCountStock === true);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo cargar el MRP."); }
     finally { window.clearTimeout(timeout); setLoading(false); }
   }, []);
@@ -125,6 +131,12 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
     if (!response.ok) return setNotice(body.error || "No se pudo registrar la recepción.");
     setReceiptByOrder((current) => ({ ...current, [orderId]: "" })); setNotice("Recepción guardada en el sistema."); void load();
   };
+  const submitStock = async (event: FormEvent) => {
+    event.preventDefault(); const input = (snapshot?.inputs ?? []).find((row) => mrpKey(row.item) === stockForm.inputKey); if (!input) return setNotice("Seleccioná un insumo.");
+    const response = await fetch(`${API_BASE}/mrp/stock-counts`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inputKey: stockForm.inputKey, inputName: input.item, unit: input.unit ?? input.stockUnit ?? "unidad", actualQuantity: Number(stockForm.actualQuantity), notes: stockForm.notes }) });
+    const body = await response.json() as { error?: string }; if (!response.ok) return setNotice(body.error || "No se pudo guardar el stock.");
+    setStockForm({ inputKey: "", actualQuantity: "", notes: "" }); setNotice("Stock real guardado. El MRP recalculó las necesidades netas."); void load();
+  };
 
   const rows = useMemo(() => view === "Comprar" ? snapshot?.buy : view === "Preparar" ? snapshot?.prepare : view === "Explosión y requerimientos" ? snapshot?.requirements : snapshot?.plan, [snapshot, view]);
   const filterOptions = useMemo(() => {
@@ -172,7 +184,7 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
       <Metric label="Alertas operativas" value={snapshot?.kpis.alerts ?? "—"} />
     </div>
     <div className={styles.tabs}>{["Plan semanal", "Comprar", "Preparar", "Explosión y requerimientos", "Recetas y costos", "Operación", "Validación"].map((item) => <button key={item} onClick={() => setView(item)} className={`${styles.tab} ${view === item ? styles.tabActive : ""}`}>{item}</button>)}</div>
-    {view === "Operación" ? <OperationPanel {...{ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Recetas y costos" ? <RecipesPanel snapshot={snapshot} canEdit={canEditRecipes} onSaved={() => void load()} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${filteredRows.length} de ${rows?.length ?? 0} registros visibles`}</p></div></div><div className={styles.filterBar}><label>Buscar<input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Insumo, producto o proveedor" /></label>{filterOptions.categories.length > 0 && <label>Categoría<select value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}><option value="">Todas</option>{filterOptions.categories.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}{filterOptions.providers.length > 0 && <label>Proveedor<select value={filters.provider} onChange={(event) => setFilters({ ...filters, provider: event.target.value })}><option value="">Todos</option>{filterOptions.providers.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}{filterOptions.statuses.length > 0 && <label>Estado<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Todos</option>{filterOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}<button type="button" className={styles.filterClear} onClick={() => setFilters({ search: "", category: "", provider: "", status: "" })}>Limpiar filtros</button></div>{table}</section>}
+    {view === "Operación" ? <OperationPanel {...{ orders, controls, stocks, inputs: snapshot?.inputs ?? [], canCountStock, stockForm, setStockForm, submitStock, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Recetas y costos" ? <RecipesPanel snapshot={snapshot} canEdit={canEditRecipes} onSaved={() => void load()} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${filteredRows.length} de ${rows?.length ?? 0} registros visibles`}</p></div></div><div className={styles.filterBar}><label>Buscar<input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Insumo, producto o proveedor" /></label>{filterOptions.categories.length > 0 && <label>Categoría<select value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}><option value="">Todas</option>{filterOptions.categories.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}{filterOptions.providers.length > 0 && <label>Proveedor<select value={filters.provider} onChange={(event) => setFilters({ ...filters, provider: event.target.value })}><option value="">Todos</option>{filterOptions.providers.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}{filterOptions.statuses.length > 0 && <label>Estado<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Todos</option>{filterOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}<button type="button" className={styles.filterClear} onClick={() => setFilters({ search: "", category: "", provider: "", status: "" })}>Limpiar filtros</button></div>{table}</section>}
   </div>;
 }
 
@@ -184,6 +196,12 @@ function DataTable({ rows, columns }: { rows: MrpRow[]; columns: string[][] }) {
 type OperationPanelProps = {
   orders: Order[];
   controls: MrpRow[];
+  stocks: Stock[];
+  inputs: MrpRow[];
+  canCountStock: boolean;
+  stockForm: { inputKey: string; actualQuantity: string; notes: string };
+  setStockForm: (value: { inputKey: string; actualQuantity: string; notes: string }) => void;
+  submitStock: (event: FormEvent) => Promise<void>;
   orderForm: { itemName: string; providerName: string; unit: string; quantity: string };
   setOrderForm: (value: { itemName: string; providerName: string; unit: string; quantity: string }) => void;
   controlForm: { weekKey: string; itemName: string; expectedQuantity: string; actualQuantity: string };
@@ -194,11 +212,11 @@ type OperationPanelProps = {
   setReceiptByOrder: (value: Record<string, string> | ((current: Record<string, string>) => Record<string, string>)) => void;
   submitReceipt: (orderId: string) => Promise<void>;
 };
-function OperationPanel({ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }: OperationPanelProps) {
+function OperationPanel({ orders, controls, stocks, inputs, canCountStock, stockForm, setStockForm, submitStock, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }: OperationPanelProps) {
   return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Órdenes, recepciones y control</strong><p>Estos registros viven en la base del sistema y nunca en la planilla original.</p></div></div><div className={styles.forms}>
     <form className={styles.form} onSubmit={submitOrder}><strong>Nueva orden interna</strong><div className={styles.formGrid}><label>Insumo<input required value={orderForm.itemName} onChange={(e) => setOrderForm({ ...orderForm, itemName: e.target.value })} /></label><label>Proveedor<input value={orderForm.providerName} onChange={(e) => setOrderForm({ ...orderForm, providerName: e.target.value })} /></label><label>Unidad<input required value={orderForm.unit} onChange={(e) => setOrderForm({ ...orderForm, unit: e.target.value })} /></label><label>Cantidad<input required min="0.0001" step="0.0001" type="number" value={orderForm.quantity} onChange={(e) => setOrderForm({ ...orderForm, quantity: e.target.value })} /></label></div><button className={styles.button}>Guardar orden</button></form>
     <form className={styles.form} onSubmit={submitControl}><strong>Control semanal</strong><div className={styles.formGrid}><label>Semana (AAAA-S##)<input required placeholder="2026-S37" value={controlForm.weekKey} onChange={(e) => setControlForm({ ...controlForm, weekKey: e.target.value })} /></label><label>Insumo<input required value={controlForm.itemName} onChange={(e) => setControlForm({ ...controlForm, itemName: e.target.value })} /></label><label>Esperado<input required min="0" step="0.0001" type="number" value={controlForm.expectedQuantity} onChange={(e) => setControlForm({ ...controlForm, expectedQuantity: e.target.value })} /></label><label>Real<input required min="0" step="0.0001" type="number" value={controlForm.actualQuantity} onChange={(e) => setControlForm({ ...controlForm, actualQuantity: e.target.value })} /></label></div><button className={styles.button}>Guardar control</button></form>
-  </div><div className={styles.tableWrap}><table className={styles.table}><thead><tr><th>Orden</th><th>Insumo</th><th>Proveedor</th><th>Cantidad</th><th>Recibido</th><th>Estado</th><th>Registrar recepción</th></tr></thead><tbody>{orders.map((order: Order) => <tr key={order.id}><td>#{order.id}</td><td>{order.item_name}</td><td>{order.provider_name || "—"}</td><td className={styles.amount}>{quantity(order.quantity)} {order.unit}</td><td className={styles.amount}>{quantity(order.received_quantity)}</td><td><span className={styles.tag}>{order.status}</span></td><td><div className={styles.receipt}><input aria-label={`Cantidad recibida orden ${order.id}`} min="0.0001" step="0.0001" type="number" value={receiptByOrder[order.id] ?? ""} onChange={(event) => setReceiptByOrder((current) => ({ ...current, [order.id]: event.target.value }))} /><button type="button" className={styles.button} onClick={() => void submitReceipt(order.id)}>Recibir</button></div></td></tr>)}</tbody></table>{!orders.length && <div className={styles.empty}>Todavía no hay órdenes internas.</div>}</div>{controls.length > 0 && <div className={styles.cardHeader}><strong>{controls.length} controles semanales registrados</strong></div>}</section>;
+  </div>{canCountStock && <form className={styles.form} onSubmit={submitStock}><strong>Stock físico para MRP</strong><p>Betzi registra aquí el inventario real. Este valor recalcula la necesidad neta de compra del MRP y queda auditado.</p><div className={styles.formGrid}><label>Insumo<select required value={stockForm.inputKey} onChange={(e) => setStockForm({ ...stockForm, inputKey: e.target.value })}><option value="">Seleccionar insumo</option>{inputs.map((input) => <option key={mrpKey(input.item)} value={mrpKey(input.item)}>{String(input.item)} · {String(input.unit ?? input.stockUnit ?? "unidad")}</option>)}</select></label><label>Stock real<input required min="0" step="any" type="number" value={stockForm.actualQuantity} onChange={(e) => setStockForm({ ...stockForm, actualQuantity: e.target.value })} /></label><label>Observación<textarea value={stockForm.notes} onChange={(e) => setStockForm({ ...stockForm, notes: e.target.value })} placeholder="Conteo, ajuste o diferencia" /></label></div><button className={styles.button}>Guardar stock y recalcular MRP</button></form>}<div className={styles.tableWrap}><table className={styles.table}><thead><tr><th>Orden</th><th>Insumo</th><th>Proveedor</th><th>Cantidad</th><th>Recibido</th><th>Estado</th><th>Registrar recepción</th></tr></thead><tbody>{orders.map((order: Order) => <tr key={order.id}><td>#{order.id}</td><td>{order.item_name}</td><td>{order.provider_name || "—"}</td><td className={styles.amount}>{quantity(order.quantity)} {order.unit}</td><td className={styles.amount}>{quantity(order.received_quantity)}</td><td><span className={styles.tag}>{order.status}</span></td><td><div className={styles.receipt}><input aria-label={`Cantidad recibida orden ${order.id}`} min="0.0001" step="0.0001" type="number" value={receiptByOrder[order.id] ?? ""} onChange={(event) => setReceiptByOrder((current) => ({ ...current, [order.id]: event.target.value }))} /><button type="button" className={styles.button} onClick={() => void submitReceipt(order.id)}>Recibir</button></div></td></tr>)}</tbody></table>{!orders.length && <div className={styles.empty}>Todavía no hay órdenes internas.</div>}</div>{stocks.length > 0 && <DataTable rows={stocks as unknown as MrpRow[]} columns={[["input_name", "Insumo"], ["actual_quantity", "Stock real"], ["unit", "Unidad"], ["counted_by_name", "Actualizó"], ["counted_at", "Fecha"]]} />}{controls.length > 0 && <div className={styles.cardHeader}><strong>{controls.length} controles semanales registrados</strong></div>}</section>;
 }
 function ValidationPanel({ snapshot }: { snapshot: MrpSnapshot | null }) {
   const validation = snapshot?.validation;
