@@ -128,6 +128,23 @@ function mrp_number($value): float
     return is_numeric($raw) ? (float) $raw : 0.0;
 }
 
+// The shared hosting can run without mbstring. These fallbacks preserve the
+// import instead of turning a missing optional extension into a failed run.
+function mrp_lower(string $value): string
+{
+    return function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
+}
+
+function mrp_upper(string $value): string
+{
+    return function_exists('mb_strtoupper') ? mb_strtoupper($value, 'UTF-8') : strtoupper($value);
+}
+
+function mrp_limit_text(string $value, int $length): string
+{
+    return function_exists('mb_substr') ? mb_substr($value, 0, $length, 'UTF-8') : substr($value, 0, $length);
+}
+
 function mrp_fetch_ranges(PDO $pdo, array $config): array
 {
     $token = pnl_access_token($pdo, $config);
@@ -151,7 +168,7 @@ function mrp_fetch_ranges(PDO $pdo, array $config): array
 
 function mrp_key($value): string
 {
-    $text = mb_strtolower(trim((string) $value), 'UTF-8');
+    $text = mrp_lower(trim((string) $value));
     $text = strtr($text, ['á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u']);
     return preg_replace('/\s+/', ' ', $text) ?? '';
 }
@@ -217,7 +234,7 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
         $cost = 0.0; $missing = [];
         foreach ($recipe['items'] as $item) {
             $ingredientKey = mrp_key($item['ingredient']);
-            $isSubrecipe = strpos(mb_strtolower((string) $item['type'], 'UTF-8'), 'subreceta') !== false;
+            $isSubrecipe = strpos(mrp_lower((string) $item['type']), 'subreceta') !== false;
             if ($isSubrecipe) {
                 $child = $calculate($ingredientKey, $stack);
                 if ($child['cost'] === null) { $missing = array_merge($missing, $child['missing']); continue; }
@@ -237,10 +254,10 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
             if (abs($item['perUnit'] - $item['expectedPerUnit']) > 0.0001) {
                 $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => $item['expectedPerUnit'], 'actual' => $item['perUnit'], 'reason' => 'La cantidad por unidad no coincide con lote/rendimiento'];
             }
-            if ($item['dictionaryCheck'] !== '' && strpos(mb_strtoupper($item['dictionaryCheck'], 'UTF-8'), 'OK') !== 0) {
+            if ($item['dictionaryCheck'] !== '' && strpos(mrp_upper($item['dictionaryCheck']), 'OK') !== 0) {
                 $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => 'En diccionario', 'actual' => $item['dictionaryCheck'], 'reason' => 'Control de diccionario'];
             }
-            if ($item['unitCheck'] !== '' && strpos(mb_strtoupper($item['unitCheck'], 'UTF-8'), 'OK') !== 0) {
+            if ($item['unitCheck'] !== '' && strpos(mrp_upper($item['unitCheck']), 'OK') !== 0) {
                 $lineDifferences[] = ['recipe' => $recipe['recipe'], 'ingredient' => $item['ingredient'], 'expected' => 'Unidad válida', 'actual' => $item['unitCheck'], 'reason' => 'Control de unidad'];
             }
         }
@@ -371,8 +388,8 @@ function mrp_build_snapshot(array $ranges): array
         'unitCost' => ['Costo unitario', 'Costo Unitario'], 'estimatedCost' => ['Costo estimado', 'Costo Estimado'],
         'status' => 'Estado operativo', 'notes' => 'Observaciones',
     ]);
-    $buy = array_values(array_filter($operational, static fn (array $row): bool => mb_strtoupper(trim((string) ($row['action'] ?? '')), 'UTF-8') === 'COMPRAR' && mrp_number($row['netNeed'] ?? 0) > 0));
-    $prepare = array_values(array_filter($operational, static fn (array $row): bool => mb_strtoupper(trim((string) ($row['action'] ?? '')), 'UTF-8') === 'PREPARAR' && mrp_number($row['netNeed'] ?? 0) > 0));
+    $buy = array_values(array_filter($operational, static fn (array $row): bool => mrp_upper(trim((string) ($row['action'] ?? ''))) === 'COMPRAR' && mrp_number($row['netNeed'] ?? 0) > 0));
+    $prepare = array_values(array_filter($operational, static fn (array $row): bool => mrp_upper(trim((string) ($row['action'] ?? ''))) === 'PREPARAR' && mrp_number($row['netNeed'] ?? 0) > 0));
     $technicalChecks = [];
     foreach ($plan as $row) {
         $expected = max(0, mrp_number($row['safetyStock'] ?? 0) - mrp_number($row['stock'] ?? 0)) + mrp_number($row['confirmedOrder'] ?? 0);
@@ -416,5 +433,5 @@ function mrp_sync_from_google(PDO $pdo, array $config, int $userId): array
 
 function mrp_clean_text($value, int $max): string
 {
-    return mb_substr(trim((string) $value), 0, $max, 'UTF-8');
+    return mrp_limit_text(trim((string) $value), $max);
 }
