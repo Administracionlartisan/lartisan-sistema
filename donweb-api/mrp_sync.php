@@ -288,7 +288,8 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
  */
 function mrp_persist_master_data(PDO $pdo, array $snapshot, int $runId): void
 {
-    $pdo->beginTransaction();
+    $ownsTransaction = !$pdo->inTransaction();
+    if ($ownsTransaction) $pdo->beginTransaction();
     try {
         // El catálogo refleja exactamente la última importación verificada. Las
         // corridas completas anteriores permanecen auditables en mrp_sync_runs.
@@ -336,9 +337,9 @@ function mrp_persist_master_data(PDO $pdo, array $snapshot, int $runId): void
                 ]);
             }
         }
-        $pdo->commit();
+        if ($ownsTransaction) $pdo->commit();
     } catch (Throwable $error) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ($ownsTransaction && $pdo->inTransaction()) $pdo->rollBack();
         throw $error;
     }
 }
@@ -394,17 +395,130 @@ function mrp_build_snapshot(array $ranges): array
     foreach ($plan as $row) {
         $expected = max(0, mrp_number($row['safetyStock'] ?? 0) - mrp_number($row['stock'] ?? 0)) + mrp_number($row['confirmedOrder'] ?? 0);
         $actual = mrp_number($row['suggestedProduction'] ?? 0);
-        if (abs($expected - $actual) > 0.001) $technicalChecks[] = ['item' => $row['product'] ?? '', 'expected' => $expected, 'actual' => $actual];
+        if (abs($expected - $actual) > 0.001) $technicalChecks[] = ['recipe' => $row['product'] ?? '', 'expected' => $expected, 'actual' => $actual, 'reason' => 'El sugerido de origen difiere de seguridad menos stock más pedido'];
     }
     $recipeSnapshot = mrp_recipe_snapshot($dictionaryValues, $recipeValues);
-    return [
+    return array_merge([
         'source' => ['spreadsheetId' => MRP_SPREADSHEET_ID, 'title' => 'MRP LArtisan - OPERATIVO OPTIMIZADO', 'mode' => 'read_only'],
         'kpis' => ['estimatedNetCost' => mrp_number($summaryValues[2][1] ?? 0), 'buyItems' => count($buy), 'prepareItems' => count($prepare), 'alerts' => (int) mrp_number($summaryValues[2][7] ?? 0)],
         'weeklyGuide' => array_slice(array_values(array_filter(array_slice($guide, 4), static fn ($row): bool => is_array($row) && isset($row[0]) && is_numeric((string) $row[0]))), 0, 10),
         'plan' => $plan, 'requirements' => $requirements, 'buy' => $buy, 'prepare' => $prepare,
         'validation' => ['status' => count($technicalChecks) === 0 ? 'ok' : 'differences', 'checkedLines' => count($plan), 'differences' => array_slice($technicalChecks, 0, 20), 'managementApproval' => 'pending'],
-        ...$recipeSnapshot,
-    ];
+    ], $recipeSnapshot);
+}
+
+/** Validate the exported copy before touching any live data. No Google calls. */
+function mrp_snapshot_from_import(array $bundle): array
+{
+    if (($bundle['format'] ?? '') !== 'lartisan-mrp-once-v1'
+        || ($bundle['sourceSpreadsheetId'] ?? '') !== MRP_SPREADSHEET_ID
+        || !preg_match('/^[a-f0-9]{64}$/D', (string) ($bundle['sourceSha256'] ?? '')))
+        throw new InvalidArgumentException('El archivo no es una copia MRP válida.');
+    $tabs = ['00_Control_Semanal_MRP', '04_Plan_Produccion_Semanal', '05_Resumen_Compras_y_Produccion', '09_Lista_Compras_Operativa', '01_Diccionario_Insumos', '02_Recetario_Maestro'];
+    $ranges = $bundle['ranges'] ?? null;
+    if (($bundle['tabs'] ?? []) !== $tabs || !is_array($ranges) || count($ranges) !== 6)
+        throw new InvalidArgumentException('Faltan hojas de la copia MRP.');
+    foreach ($ranges as $rows) {
+        if (!is_array($rows) || count($rows) > 2000) throw new InvalidArgumentException('Cantidad de filas no válida.');
+        foreach ($rows as $row) {
+            if (!is_array($row) || count($row) > 50) throw new InvalidArgumentException('Fila no válida.');
+            foreach ($row as $value) {
+                if (!(is_null($value) || is_string($value) || is_int($value) || is_float($value) || is_bool($value))
+                    || (is_string($value) && strlen($value) > 4000)
+                    || (is_float($value) && !is_finite($value)))
+                    throw new InvalidArgumentException('Celda no válida.');
+            }
+        }
+    }
+    $required = [4 => ['Código', 'Nombre', 'Categoría', 'Unidad stock/compra', 'Costo Unitario', 'Proveedor'],
+                 5 => ['Artículo o Subreceta', 'Insumo', 'Cantidad Lote', 'Unidad', 'Rendimiento', 'Cantidad x Unidad Final', 'Tipo', 'Control Diccionario', 'Control Unidad']];
+    foreach ($required as $index => $headers) {
+        if (array_diff($headers, $ranges[$index][0] ?? [])) throw new InvalidArgumentException('Encabezados de recetas o insumos incompletos.');
+    }
+    // Current mapper limits must never silently truncate a larger source.
+    if (count($ranges[1]) > 307 || count($ranges[2]) > 305 || count($ranges[3]) > 305
+        || count($ranges[4]) > 1101 || count($ranges[5]) > 1101)
+        throw new InvalidArgumentException('La copia supera el tamaño admitido; requiere revisar el mapeo antes de importar.');
+    $snapshot = mrp_build_snapshot($ranges);
+    if (count($snapshot['inputs']) === 0 || count($snapshot['recipes']) === 0)
+        throw new InvalidArgumentException('La copia no contiene recetas e insumos.');
+    $names = [];
+    foreach (array_slice($ranges[4], 1) as $row) {
+        if (trim((string) ($row[0] ?? '')) === '') continue;
+        $name = mrp_key($row[1] ?? '');
+        if ($name === '' || isset($names[$name])) throw new InvalidArgumentException('Hay insumos sin nombre o duplicados.');
+        $names[$name] = true;
+    }
+    $sourceLines = 0;
+    foreach (array_slice($ranges[5], 1) as $row) {
+        if (trim((string) ($row[0] ?? '')) === '') continue;
+        if (trim((string) ($row[1] ?? '')) === '') throw new InvalidArgumentException('Hay una receta sin componente.');
+        foreach ([2, 5] as $column) {
+            if (!is_numeric($row[$column] ?? null) || (float) $row[$column] < 0)
+                throw new InvalidArgumentException('Hay cantidades o rendimientos no válidos.');
+        }
+        // Sheet F = IF(E="", C, C/E): blank yield intentionally means a per-unit quantity.
+        if (($row[4] ?? null) !== null && $row[4] !== '' && (!is_numeric($row[4]) || (float) $row[4] <= 0))
+            throw new InvalidArgumentException('Hay un rendimiento no válido.');
+        $sourceLines++;
+    }
+    $components = array_sum(array_column($snapshot['recipes'], 'components'));
+    if ($components !== $sourceLines || count($snapshot['inputs']) !== count($names))
+        throw new InvalidArgumentException('El conteo no coincide con la planilla.');
+    foreach ($snapshot['recipeValidation']['differences'] as $difference) {
+        if ($difference['reason'] === 'La cantidad por unidad no coincide con lote/rendimiento')
+            throw new InvalidArgumentException('Las cantidades por unidad no coinciden con la planilla.');
+    }
+    $snapshot['source']['mode'] = 'local_once';
+    $snapshot['source']['sha256'] = $bundle['sourceSha256'];
+    $snapshot['source']['exportedAt'] = mrp_clean_text($bundle['exportedAt'] ?? '', 80);
+    $snapshot['importCounts'] = ['inputs' => count($names), 'recipes' => count($snapshot['recipes']), 'components' => $components];
+    return $snapshot;
+}
+
+/** Atomic, serialized and idempotent first migration. Never overwrites a catalog. */
+function mrp_import_once(PDO $pdo, array $bundle, int $userId): array
+{
+    $snapshot = mrp_snapshot_from_import($bundle);
+    ensure_mrp_schema($pdo);
+    if ((int) $pdo->query("SELECT GET_LOCK('lartisan_mrp_import', 5)")->fetchColumn() !== 1)
+        throw new RuntimeException('Otra importación está en curso.');
+    try {
+        $pdo->beginTransaction();
+        $existing = $pdo->query("SELECT id, payload_json FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1 FOR UPDATE")->fetch();
+        if ($existing) {
+            $previous = json_decode($existing['payload_json'], true) ?: [];
+            if (($previous['source']['sha256'] ?? '') === $bundle['sourceSha256']) {
+                $pdo->rollBack();
+                return ['alreadyImported' => true, 'counts' => $previous['importCounts'] ?? []];
+            }
+            throw new InvalidArgumentException('El sistema ya tiene un MRP importado. No se reemplazaron datos.');
+        }
+        foreach (['mrp_input_catalog', 'mrp_recipe_catalog', 'mrp_recipe_components'] as $table) {
+            if ((int) $pdo->query('SELECT COUNT(*) FROM ' . $table)->fetchColumn() > 0)
+                throw new InvalidArgumentException('Ya hay datos en el catálogo. Se requiere conciliarlos antes de importar.');
+        }
+        $pdo->prepare("INSERT INTO mrp_sync_runs (status, source_spreadsheet_id, triggered_by, started_at) VALUES ('running', ?, ?, NOW())")
+            ->execute([MRP_SPREADSHEET_ID, $userId]);
+        $runId = (int) $pdo->lastInsertId();
+        mrp_persist_master_data($pdo, $snapshot, $runId);
+        foreach (['inputs' => 'mrp_input_catalog', 'recipes' => 'mrp_recipe_catalog', 'components' => 'mrp_recipe_components'] as $key => $table) {
+            if ((int) $pdo->query('SELECT COUNT(*) FROM ' . $table)->fetchColumn() !== $snapshot['importCounts'][$key])
+                throw new RuntimeException('No coincide la verificación de filas guardadas.');
+        }
+        $payload = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $rows = array_sum($snapshot['importCounts']);
+        $pdo->prepare("UPDATE mrp_sync_runs SET status='verified', payload_json=?, payload_hash=?, rows_imported=?, finished_at=NOW() WHERE id=?")
+            ->execute([$payload, hash('sha256', $payload), $rows, $runId]);
+        audit($pdo, $userId, 'mrp_imported_once', 'run=' . $runId . ';filas=' . $rows);
+        $pdo->commit();
+        return ['alreadyImported' => false, 'counts' => $snapshot['importCounts']];
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    } finally {
+        $pdo->query("SELECT RELEASE_LOCK('lartisan_mrp_import')");
+    }
 }
 
 function mrp_sync_from_google(PDO $pdo, array $config, int $userId): array

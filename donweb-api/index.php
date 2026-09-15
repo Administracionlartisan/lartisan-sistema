@@ -168,18 +168,12 @@ if ($method === 'GET' && $route === 'mrp/latest') {
     $mrpUser = require_mrp_user($pdo);
     ensure_mrp_schema($pdo);
     $latest = $pdo->query("SELECT payload_json, rows_imported, started_at, finished_at FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetch();
-    $lastUpdate = $latest ? ($latest['finished_at'] ?: $latest['started_at']) : null;
-    $stale = !$lastUpdate || strtotime((string) $lastUpdate) < time() - 10 * 60;
-    $recentAttempt = $pdo->query("SELECT started_at FROM mrp_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
-    if (pnl_is_connected($pdo, $config) && $stale && !$recentAttempt) {
-        try {
-            mrp_sync_from_google($pdo, $config, (int) $mrpUser['id']);
-            $latest = $pdo->query("SELECT payload_json, rows_imported, started_at, finished_at FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetch();
-        } catch (Throwable $error) {
-            error_log('LARTISAN automatic MRP sync failed: ' . $error->getMessage());
-        }
-    }
-    json_response(['ok' => true, 'connected' => pnl_is_connected($pdo, $config), 'snapshot' => $latest ? [
+    // Reading the catalog never triggers imports, OAuth or background replacement.
+    $lastAttempt = $pdo->query("SELECT id, status, error_message, started_at FROM mrp_sync_runs ORDER BY id DESC LIMIT 1")->fetch();
+    json_response(['ok' => true, 'importMode' => 'one_time_file',
+        'canImport' => $mrpUser['role'] === 'administracion',
+        'lastAttempt' => $lastAttempt ? ['id' => $lastAttempt['id'], 'status' => $lastAttempt['status'], 'startedAt' => $lastAttempt['started_at']] : null,
+        'snapshot' => $latest ? [
         'data' => json_decode((string) $latest['payload_json'], true) ?: [],
         'rowsImported' => (int) $latest['rows_imported'],
         'updatedAt' => $latest['finished_at'] ?: $latest['started_at'],
@@ -187,13 +181,28 @@ if ($method === 'GET' && $route === 'mrp/latest') {
 }
 
 if ($method === 'POST' && $route === 'mrp/sync') {
-    $mrpUser = require_mrp_user($pdo);
-    $last = $pdo->query("SELECT started_at FROM mrp_sync_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) ORDER BY id DESC LIMIT 1")->fetchColumn();
-    if ($last) json_response(['ok' => false, 'error' => 'La lectura MRP ya se actualizó recientemente.'], 429);
+    require_mrp_user($pdo);
+    json_response(['ok' => false, 'error' => 'La sincronización MRP fue reemplazada por una importación única desde archivo.'], 409);
+}
+
+if ($method === 'POST' && $route === 'mrp/import') {
+    $admin = require_user($pdo, ['administracion']);
+    // Cookie authentication alone is not a CSRF boundary.
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true))
+        json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    if (stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== 0)
+        json_response(['ok' => false, 'error' => 'Se requiere un archivo JSON.'], 415);
+    $raw = file_get_contents('php://input', false, null, 0, 2000001);
+    if ($raw === false || strlen($raw) > 2000000) json_response(['ok' => false, 'error' => 'Archivo demasiado grande.'], 413);
     try {
-        json_response(['ok' => true, 'snapshot' => mrp_sync_from_google($pdo, $config, (int) $mrpUser['id'])]);
+        $bundle = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+        if (!is_array($bundle)) throw new InvalidArgumentException('Archivo inválido.');
+        json_response(['ok' => true, 'result' => mrp_import_once($pdo, $bundle, (int) $admin['id'])]);
+    } catch (InvalidArgumentException | JsonException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     } catch (Throwable $error) {
-        json_response(['ok' => false, 'error' => 'No se pudo actualizar el MRP. Se conserva la última copia válida.'], 502);
+        error_log('LARTISAN one-time MRP import failed: ' . $error->getMessage());
+        json_response(['ok' => false, 'error' => 'No se completó la importación. No se guardó una carga parcial.'], 500);
     }
 }
 

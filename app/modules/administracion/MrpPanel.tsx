@@ -18,6 +18,7 @@ type MrpSnapshot = {
   recipes: Recipe[];
   inputs: MrpRow[];
   recipeValidation: { status: string; checkedLines: number; checkedRecipes: number; costedRecipes: number; missingCostInputs: string[]; differences: MrpRow[] };
+  importCounts?: { inputs: number; recipes: number; components: number };
 };
 type Recipe = { recipe: string; yield: number | null; components: number; costPerUnit: number | null; costStatus: string; missingCosts: string[]; items: MrpRow[] };
 type Order = { id: string; item_name: string; provider_name?: string; unit: string; quantity: string; received_quantity: string; status: string; row_version: string };
@@ -33,7 +34,9 @@ export default function MrpPanel() {
   const [view, setView] = useState("Plan semanal");
   const [snapshot, setSnapshot] = useState<MrpSnapshot | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
-  const [googleConnected, setGoogleConnected] = useState(false);
+  const [canImport, setCanImport] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [controls, setControls] = useState<MrpRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,38 +48,49 @@ export default function MrpPanel() {
 
   const load = useCallback(async () => {
     setLoading(true); setError("");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 20000);
     try {
       const [sourceResponse, operationsResponse] = await Promise.all([
-        fetch(`${API_BASE}/mrp/latest`, { credentials: "include", cache: "no-store" }),
-        fetch(`${API_BASE}/mrp/operations`, { credentials: "include", cache: "no-store" }),
+        fetch(`${API_BASE}/mrp/latest`, { credentials: "include", cache: "no-store", signal: controller.signal }),
+        fetch(`${API_BASE}/mrp/operations`, { credentials: "include", cache: "no-store", signal: controller.signal }),
       ]);
-      const source = await sourceResponse.json() as { error?: string; connected?: boolean; snapshot?: { data?: MrpSnapshot; updatedAt?: string } };
+      const source = await sourceResponse.json() as { error?: string; canImport?: boolean; snapshot?: { data?: MrpSnapshot; updatedAt?: string } };
       const operations = await operationsResponse.json() as { error?: string; orders?: Order[]; controls?: MrpRow[] };
       if (!sourceResponse.ok) throw new Error(source.error || "No se pudo leer el MRP.");
       if (!operationsResponse.ok) throw new Error(operations.error || "No se pudo leer la operación MRP.");
       setSnapshot(source.snapshot?.data ?? null);
       setUpdatedAt(source.snapshot?.updatedAt ?? "");
-      setGoogleConnected(source.connected === true);
+      setCanImport(source.canImport === true);
       setOrders(operations.orders ?? []);
       setControls(operations.controls ?? []);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo cargar el MRP."); }
-    finally { setLoading(false); }
+    finally { window.clearTimeout(timeout); setLoading(false); }
   }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const connectGoogleReadOnly = async () => {
-    setNotice("");
+  const importOnce = async () => {
+    if (!importFile || importing) return;
+    setNotice(""); setError(""); setImporting(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 90000);
     try {
-      const response = await fetch(`${API_BASE}/admin/pnl/authorization-url`, { credentials: "include", cache: "no-store" });
-      const body = await response.json() as { error?: string; authorizationUrl?: string };
-      if (!response.ok || !body.authorizationUrl) throw new Error(body.error || "No se pudo preparar la conexión con Google.");
-      window.location.assign(body.authorizationUrl);
+      if (importFile.size > 2000000) throw new Error("El archivo supera el tamaño admitido (2 MB).");
+      const data = await importFile.text();
+      if (JSON.parse(data).format !== "lartisan-mrp-once-v1") throw new Error("Seleccioná la copia preparada para la carga única de MRP.");
+      const response = await fetch(`${API_BASE}/mrp/import`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: data, signal: controller.signal });
+      const body = await response.json() as { error?: string; result?: { alreadyImported: boolean; counts: { inputs: number; recipes: number; components: number } } };
+      if (!response.ok || !body.result) throw new Error(body.error || "No se pudo verificar la importación.");
+      const { counts } = body.result;
+      setNotice(`${body.result.alreadyImported ? "La copia ya estaba importada. No se duplicaron registros." : "Importación guardada y verificada."} ${counts.recipes} recetas, ${counts.components} componentes y ${counts.inputs} insumos.`);
+      setImportFile(null);
+      await load();
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "No se pudo preparar la conexión con Google.");
-    }
+      setError(cause instanceof Error && cause.name === "AbortError" ? "No llegó la confirmación. Usá Verificar estado antes de reintentar: la carga podría haberse completado." : cause instanceof Error ? cause.message : "No se pudo importar el MRP.");
+    } finally { window.clearTimeout(timeout); setImporting(false); }
   };
 
   const submitOrder = async (event: FormEvent) => {
@@ -111,7 +125,11 @@ export default function MrpPanel() {
 
   return <div className={styles.panel}>
     <Heading k="ADMINISTRACIÓN · ABASTECIMIENTO" h="MRP semanal" p="Planificación, requerimientos y seguimiento de compras desde la base operativa del sistema." />
-    <div className={styles.notice}><div><strong>Recetario importado a la base del sistema</strong><p>La sincronización guarda insumos, recetas, componentes, rendimientos y costos en la base propia. Google Sheets queda protegida como fuente de lectura y nunca recibe cambios desde esta pantalla.</p>{(!googleConnected || (!snapshot && !loading)) && <button type="button" className={styles.button} onClick={() => void connectGoogleReadOnly()}>Conectar lectura de Google</button>}</div><span className={styles.status}><span className={styles.dot} />{updatedAt ? `Importado ${updatedAt}` : loading ? "Actualizando…" : googleConnected ? "Preparando importación…" : "Conexión de Google pendiente"}</span></div>
+    <div className={styles.notice}><div><strong>{snapshot ? "Recetario guardado en el sistema" : "Carga única del recetario"}</strong><p>{snapshot ? "Las recetas, insumos, rendimientos y costos se consultan desde la base propia. No se vuelve a importar al actualizar la página. El plan semanal mostrado es la copia de origen, no una planificación recalculada automáticamente." : "Importá la copia preparada de la planilla una sola vez. No requiere conectar Google y no modifica el archivo original."}</p>
+      {!snapshot && canImport && <div><label>Archivo de migración MRP <input type="file" accept=".json,application/json" disabled={importing} onChange={event => setImportFile(event.target.files?.[0] ?? null)} /></label><button type="button" className={styles.button} disabled={!importFile || importing || loading} onClick={() => void importOnce()}>{importing ? "Guardando y verificando…" : "Importar y guardar en el sistema"}</button></div>}
+      {snapshot?.importCounts && <p>{snapshot.importCounts.recipes} recetas · {snapshot.importCounts.components} componentes · {snapshot.importCounts.inputs} insumos.</p>}
+      <button type="button" className={styles.button} disabled={loading || importing} onClick={() => void load()}>Verificar estado</button>
+    </div><span className={styles.status}>{importing ? "Importando…" : loading ? "Consultando estado…" : updatedAt ? `Guardado ${updatedAt}` : error ? "No se pudo verificar" : "Sin importación confirmada"}</span></div>
     {error && <div className={styles.error}>{error}</div>}
     {notice && <div className={styles.notice}><strong>{notice}</strong></div>}
     <div className={styles.metrics}>
@@ -161,6 +179,6 @@ function RecipesPanel({ snapshot }: { snapshot: MrpSnapshot | null }) {
   const recipes = snapshot?.recipes ?? [];
   const recipe = recipes.find((item) => item.recipe === selected) ?? recipes[0];
   useEffect(() => { if (!selected && recipes[0]) setSelected(recipes[0].recipe); }, [recipes, selected]);
-  if (!recipes.length) return <section className={styles.card}><div className={styles.empty}>No hay recetario disponible todavía. Actualizá el MRP cuando exista una conexión autorizada con la planilla.</div></section>;
+  if (!recipes.length) return <section className={styles.card}><div className={styles.empty}>No hay recetario importado. Administración debe realizar la carga única desde archivo.</div></section>;
   return <section className={styles.card}><div className={styles.cardHeader}><div><strong>Recetas y costos</strong><p>El recetario está guardado en la base del sistema. Un costo solo se calcula cuando todos sus insumos y subrecetas tienen un precio válido.</p></div><label className={styles.recipePicker}>Receta<select value={recipe?.recipe ?? ""} onChange={(event) => setSelected(event.target.value)}>{recipes.map((item) => <option key={item.recipe}>{item.recipe}</option>)}</select></label></div>{recipe && <><div className={styles.recipeMetrics}><Metric label="Rendimiento" value={recipe.yield ?? "—"} /><Metric label="Componentes" value={recipe.components} /><Metric label="Costo por unidad" value={recipe.costPerUnit === null ? "Pendiente" : money.format(recipe.costPerUnit)} /><Metric label="Estado" value={recipe.costStatus} /></div>{recipe.missingCosts.length > 0 && <div className={styles.warning}><strong>Faltan costos que completar:</strong> {recipe.missingCosts.join(", ")}</div>}<DataTable rows={recipe.items} columns={[["ingredient", "Insumo / subreceta"], ["type", "Tipo"], ["quantity", "Cantidad lote"], ["unit", "Unidad"], ["yield", "Rendimiento"], ["perUnit", "Cantidad por unidad"], ["dictionaryCheck", "Control"]]} /></>}</section>;
 }

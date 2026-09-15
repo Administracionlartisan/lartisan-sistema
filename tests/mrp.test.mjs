@@ -16,7 +16,7 @@ test("MRP appears for any authenticated role with the explicit permission", () =
 test("Google MRP integration is read-only and never calls a Sheets write endpoint", () => {
   assert.match(sync, /values:batchGet/);
   assert.doesNotMatch(sync, /values:append|values:batchUpdate|spreadsheets\.batchUpdate/);
-  assert.match(panel, /Ninguna acción de esta pantalla escribe en Google Sheets/);
+  assert.match(panel, /no modifica el archivo original/);
 });
 
 test("MRP operational records are stored separately with optimistic versioning", () => {
@@ -27,8 +27,20 @@ test("MRP operational records are stored separately with optimistic versioning",
   assert.match(api, /Otro usuario actualizó esta orden/);
 });
 
-test("MRP source refreshes automatically while retaining the last verified copy", () => {
+test("MRP reads its saved copy without Google refresh or OAuth", () => {
   assert.match(api, /route === 'mrp\/latest'/);
-  assert.match(api, /mrp_sync_from_google/);
+  const latest = api.split("$route === 'mrp/latest'")[1].split("$route === 'mrp/sync'")[0];
+  assert.doesNotMatch(latest, /mrp_sync_from_google|pnl_is_connected|pnl_access_token/);
   assert.match(api, /status='verified'/);
+  assert.doesNotMatch(panel, /Preparando importación|Conectar lectura de Google/);
+});
+
+test("One-time import requires admin and trusted origin, and verifies atomically", () => {
+  const route = api.split("$route === 'mrp/import'")[1].split("$route === 'mrp/operations'")[0];
+  assert.match(route, /require_user\(\$pdo, \['administracion'\]\)/);
+  assert.match(route, /HTTP_ORIGIN/);
+  assert.match(sync, /GET_LOCK\('lartisan_mrp_import'/);
+  assert.match(sync, /alreadyImported/);
+  assert.match(sync, /SELECT COUNT\(\*\) FROM/);
+  assert.doesNotMatch(sync, /\.\.\.\$recipeSnapshot/);
 });
