@@ -5703,17 +5703,31 @@ export default function Home() {
                 </table>
               </div>
               <div className="mt-6 space-y-4">
-                <div>
-                  <h2 className="font-bold">
-                    Permisos de reportes administrativos
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Cada administrativo verá únicamente los reportes marcados en
-                    su perfil.
-                  </p>
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h2 className="font-bold">
+                      Permisos de reportes administrativos
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Cada administrativo verá únicamente los reportes marcados en
+                      su perfil.
+                    </p>
+                  </div>
+                  <label className="text-sm font-bold">
+                    Buscar administrativo
+                    <input
+                      value={actionPermissionSearch}
+                      onChange={(event) => setActionPermissionSearch(event.target.value)}
+                      placeholder="Nombre o usuario"
+                      className="mt-1 block w-64 rounded border p-2 font-normal"
+                    />
+                  </label>
                 </div>
                 {managedUsers
-                  .filter((profile) => profile.role === "administracion")
+                  .filter((profile) => {
+                    const search = actionPermissionSearch.trim().toLocaleLowerCase("es");
+                    return profile.role === "administracion" && (!search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search));
+                  })
                   .map((profile) => (
                     <div
                       key={profile.id}
@@ -5767,6 +5781,10 @@ export default function Home() {
                       )}
                     </div>
                   ))}
+                {!managedUsers.some((profile) => {
+                  const search = actionPermissionSearch.trim().toLocaleLowerCase("es");
+                  return profile.role === "administracion" && (!search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search));
+                }) && <p className="rounded border bg-white p-4 text-sm text-slate-500">No encontramos un administrativo con esa búsqueda.</p>}
               </div>
               <div className="mt-6 space-y-4">
                 <div className="flex flex-wrap items-end justify-between gap-3">
