@@ -49,6 +49,7 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
   const [orderForm, setOrderForm] = useState({ itemName: "", providerName: "", unit: "kg", quantity: "" });
   const [controlForm, setControlForm] = useState({ weekKey: "", itemName: "", expectedQuantity: "", actualQuantity: "" });
   const [receiptByOrder, setReceiptByOrder] = useState<Record<string, string>>({});
+  const [filters, setFilters] = useState({ search: "", category: "", provider: "", status: "" });
 
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -122,10 +123,24 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
   };
 
   const rows = useMemo(() => view === "Comprar" ? snapshot?.buy : view === "Preparar" ? snapshot?.prepare : view === "Explosión y requerimientos" ? snapshot?.requirements : snapshot?.plan, [snapshot, view]);
+  const filterOptions = useMemo(() => {
+    const values = (key: string) => Array.from(new Set((rows ?? []).map((row) => String(row[key] ?? "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es"));
+    return { categories: values("category"), providers: values("provider"), statuses: values("status") };
+  }, [rows]);
+  const filteredRows = useMemo(() => {
+    const search = filters.search.trim().toLocaleLowerCase("es");
+    return (rows ?? []).filter((row) => {
+      const rowText = Object.values(row).join(" ").toLocaleLowerCase("es");
+      return (!search || rowText.includes(search))
+        && (!filters.category || String(row.category ?? "") === filters.category)
+        && (!filters.provider || String(row.provider ?? "") === filters.provider)
+        && (!filters.status || String(row.status ?? "") === filters.status);
+    });
+  }, [filters, rows]);
   const table = view === "Plan semanal" ? (
-    <DataTable rows={rows ?? []} columns={[["product", "Producto"], ["stock", "Stock"], ["safetyStock", "Seguridad"], ["confirmedOrder", "Pedido"], ["suggestedProduction", "Sugerido"], ["finalProduction", "Final"], ["status", "Estado"]]} />
+    <DataTable rows={filteredRows} columns={[["product", "Producto"], ["stock", "Stock"], ["safetyStock", "Seguridad"], ["confirmedOrder", "Pedido"], ["suggestedProduction", "Sugerido"], ["finalProduction", "Final"], ["status", "Estado"]]} />
   ) : (
-    <DataTable rows={rows ?? []} columns={view === "Explosión y requerimientos" ? [["item", "Insumo / subreceta"], ["category", "Categoría"], ["directRequirement", "Nivel directo"], ["subrecipeRequirement", "Por subrecetas"], ["required", "Requerido total"], ["stock", "Stock"], ["netNeed", "Necesidad"], ["action", "Acción"]] : [["item", "Insumo / subreceta"], ["category", "Categoría"], ["required", "Requerido"], ["stock", "Stock"], ["netNeed", "Necesidad"], ["suggestedQuantity", "Cantidad sugerida"], ["provider", "Proveedor"], ["status", "Estado"]]} />
+    <DataTable rows={filteredRows} columns={view === "Explosión y requerimientos" ? [["item", "Insumo / subreceta"], ["category", "Categoría"], ["directRequirement", "Nivel directo"], ["subrecipeRequirement", "Por subrecetas"], ["required", "Requerido total"], ["stock", "Stock"], ["netNeed", "Necesidad"], ["action", "Acción"]] : [["item", "Insumo / subreceta"], ["category", "Categoría"], ["required", "Requerido"], ["stock", "Stock"], ["netNeed", "Necesidad"], ["suggestedQuantity", "Cantidad sugerida"], ["provider", "Proveedor"], ["status", "Estado"]]} />
   );
 
   if (initialView === "Recetas y costos") return <div className={styles.panel}>
@@ -153,7 +168,7 @@ export default function MrpPanel({ initialView = "Plan semanal" }: MrpPanelProps
       <Metric label="Alertas operativas" value={snapshot?.kpis.alerts ?? "—"} />
     </div>
     <div className={styles.tabs}>{["Plan semanal", "Comprar", "Preparar", "Explosión y requerimientos", "Recetas y costos", "Operación", "Validación"].map((item) => <button key={item} onClick={() => setView(item)} className={`${styles.tab} ${view === item ? styles.tabActive : ""}`}>{item}</button>)}</div>
-    {view === "Operación" ? <OperationPanel {...{ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Recetas y costos" ? <RecipesPanel snapshot={snapshot} canEdit={canEditRecipes} onSaved={() => void load()} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${rows?.length ?? 0} registros visibles`}</p></div></div>{table}</section>}
+    {view === "Operación" ? <OperationPanel {...{ orders, controls, orderForm, setOrderForm, controlForm, setControlForm, submitOrder, submitControl, receiptByOrder, setReceiptByOrder, submitReceipt }} /> : view === "Recetas y costos" ? <RecipesPanel snapshot={snapshot} canEdit={canEditRecipes} onSaved={() => void load()} /> : view === "Validación" ? <ValidationPanel snapshot={snapshot} /> : <section className={styles.card}><div className={styles.cardHeader}><div><strong>{view}</strong><p>{loading ? "Leyendo la última copia válida…" : `${filteredRows.length} de ${rows?.length ?? 0} registros visibles`}</p></div></div><div className={styles.filterBar}><label>Buscar<input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Insumo, producto o proveedor" /></label>{filterOptions.categories.length > 0 && <label>Categoría<select value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}><option value="">Todas</option>{filterOptions.categories.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}{filterOptions.providers.length > 0 && <label>Proveedor<select value={filters.provider} onChange={(event) => setFilters({ ...filters, provider: event.target.value })}><option value="">Todos</option>{filterOptions.providers.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}{filterOptions.statuses.length > 0 && <label>Estado<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Todos</option>{filterOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}<button type="button" className={styles.filterClear} onClick={() => setFilters({ search: "", category: "", provider: "", status: "" })}>Limpiar filtros</button></div>{table}</section>}
   </div>;
 }
 
