@@ -122,8 +122,9 @@ function mrp_number($value): float
     $raw = trim((string) $value);
     if ($raw === '') return 0.0;
     $raw = preg_replace('/[^0-9,\.\-]/', '', $raw) ?? '';
-    if (str_contains($raw, ',') && str_contains($raw, '.')) $raw = str_replace('.', '', $raw);
-    if (str_contains($raw, ',')) $raw = str_replace(',', '.', $raw);
+    // Compatible with the PHP version installed on the shared hosting (PHP 7.x).
+    if (strpos($raw, ',') !== false && strpos($raw, '.') !== false) $raw = str_replace('.', '', $raw);
+    if (strpos($raw, ',') !== false) $raw = str_replace(',', '.', $raw);
     return is_numeric($raw) ? (float) $raw : 0.0;
 }
 
@@ -216,7 +217,7 @@ function mrp_recipe_snapshot(array $dictionaryValues, array $recipeValues): arra
         $cost = 0.0; $missing = [];
         foreach ($recipe['items'] as $item) {
             $ingredientKey = mrp_key($item['ingredient']);
-            $isSubrecipe = str_contains(mb_strtolower((string) $item['type'], 'UTF-8'), 'subreceta');
+            $isSubrecipe = strpos(mb_strtolower((string) $item['type'], 'UTF-8'), 'subreceta') !== false;
             if ($isSubrecipe) {
                 $child = $calculate($ingredientKey, $stack);
                 if ($child['cost'] === null) { $missing = array_merge($missing, $child['missing']); continue; }
