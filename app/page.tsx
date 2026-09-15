@@ -136,6 +136,7 @@ export default function Home() {
     [resettingUserId, setResettingUserId] = useState<string | null>(null),
     [actionPermissionDrafts, setActionPermissionDrafts] = useState<Record<string, string[]>>({}),
     [savingPermissionsFor, setSavingPermissionsFor] = useState<string | null>(null),
+    [actionPermissionSearch, setActionPermissionSearch] = useState(""),
     [priceIncrease, setPriceIncrease] = useState(0),
     [priceRounding, setPriceRounding] = useState(100),
     [priceCategory, setPriceCategory] = useState("Todos"),
@@ -5768,14 +5769,28 @@ export default function Home() {
                   ))}
               </div>
               <div className="mt-6 space-y-4">
-                <div>
-                  <h2 className="font-bold">Permisos de acciones</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Definí qué puede realizar cada perfil, además de los
-                    reportes que puede consultar.
-                  </p>
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h2 className="font-bold">Permisos de acciones</h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Definí qué puede realizar cada perfil, además de los
+                      reportes que puede consultar.
+                    </p>
+                  </div>
+                  <label className="text-sm font-bold">
+                    Buscar usuario
+                    <input
+                      value={actionPermissionSearch}
+                      onChange={(event) => setActionPermissionSearch(event.target.value)}
+                      placeholder="Nombre o usuario"
+                      className="mt-1 block w-64 rounded border p-2 font-normal"
+                    />
+                  </label>
                 </div>
-                {managedUsers.map((profile) => {
+                {managedUsers.filter((profile) => {
+                  const search = actionPermissionSearch.trim().toLocaleLowerCase("es");
+                  return !search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search);
+                }).map((profile) => {
                   const visiblePermissions =
                     actionPermissionDrafts[profile.id] ?? profile.actionPermissions;
                   const hasPendingChanges = actionPermissionDrafts[profile.id] !== undefined;
@@ -5844,6 +5859,10 @@ export default function Home() {
                     </div>
                   );
                 })}
+                {!managedUsers.filter((profile) => {
+                  const search = actionPermissionSearch.trim().toLocaleLowerCase("es");
+                  return !search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search);
+                }).length && <p className="rounded border bg-white p-4 text-sm text-slate-500">No encontramos un usuario con esa búsqueda.</p>}
               </div>
             </>
           ) : tab === "Horarios" && canManageSchedules ? (
