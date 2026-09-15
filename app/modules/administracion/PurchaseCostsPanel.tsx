@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Heading from "../shared/components/Heading";
 import { API_BASE, money2 } from "../shared/constants";
-import styles from "./MrpPanel.module.css";
+import styles from "./PurchaseCostsPanel.module.css";
 
 type Input = { key: string; name: string; unit: string; unitCost: number | null };
 type Line = { inputKey: string; quantity: string; unitCost: string };
