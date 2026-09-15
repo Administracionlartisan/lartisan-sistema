@@ -23,6 +23,7 @@ export const ACTION_PERMISSIONS = [
   { id: "transferirCaja", label: "Transferir efectivo entre cajas" },
   { id: "exportar", label: "Exportar informes" },
   { id: "mrp", label: "Operar compras y MRP" },
+  { id: "editarRecetas", label: "Editar recetas y costos" },
   { id: "comprasProduccion", label: "Cargar compras de producción" },
 ];
 
