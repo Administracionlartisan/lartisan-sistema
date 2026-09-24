@@ -91,7 +91,10 @@ function arca_wsaa_create_cms(array $arca, string $service = 'wsfe'): string
         if (file_put_contents($temporaryBase, $tra, LOCK_EX) === false) {
             throw new RuntimeException('No se pudo preparar el pedido WSAA.');
         }
-        $signed = openssl_pkcs7_sign($temporaryBase, $signedPath, $certificate, $privateKey, [], PKCS7_BINARY | PKCS7_DETACHED);
+        // WSAA recibe un CMS PKCS#7 opaco codificado en Base64. Una firma
+        // "detached" genera un multipart MIME (documento + firma), que ARCA
+        // rechaza como cms.bad.base64.
+        $signed = openssl_pkcs7_sign($temporaryBase, $signedPath, $certificate, $privateKey, [], PKCS7_BINARY);
         if (!$signed) throw new RuntimeException('ARCA no pudo firmar el pedido WSAA.');
         $smime = file_get_contents($signedPath);
         if (!is_string($smime) || !preg_match('/\r?\n\r?\n(.+)$/s', $smime, $matches)) {
@@ -116,6 +119,12 @@ function arca_wsaa_request_ticket(array $config): array
     }
     if (!function_exists('curl_init')) throw new RuntimeException('El servidor no tiene cURL para comunicar con ARCA.');
 
+    // ARCA no entrega un segundo TA para el mismo certificado y servicio mientras
+    // el primero siga vigente. El cache queda junto al certificado, fuera del webroot.
+    $cachePath = arca_wsaa_ticket_cache_path($arca);
+    $cachedTicket = arca_wsaa_read_cached_ticket($cachePath);
+    if ($cachedTicket !== null) return $cachedTicket;
+
     $cms = arca_wsaa_create_cms($arca);
     $body = '<?xml version="1.0" encoding="UTF-8"?>'
         . '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov/">'
@@ -134,7 +143,14 @@ function arca_wsaa_request_ticket(array $config): array
     $curlError = curl_error($handle);
     curl_close($handle);
     if (!is_string($response) || $statusCode < 200 || $statusCode >= 300) {
-        throw new RuntimeException('WSAA de homologación no respondió correctamente' . ($curlError !== '' ? ': ' . $curlError : '.'));
+        // El código HTTP es suficiente para diagnosticar conectividad sin mostrar
+        // CMS, tokens, firmas ni detalles de las credenciales.
+        $fault = '';
+        if (is_string($response) && preg_match('/<faultstring>(.*?)<\\/faultstring>/si', $response, $faultMatch)) {
+            $fault = trim(html_entity_decode(strip_tags($faultMatch[1]), ENT_QUOTES | ENT_XML1, 'UTF-8'));
+        }
+        $detail = $curlError !== '' ? $curlError : 'HTTP ' . $statusCode . ($fault !== '' ? ' · ' . $fault : '');
+        throw new RuntimeException('WSAA de homologación no respondió correctamente: ' . $detail);
     }
     if (!preg_match('/<loginCmsReturn>(.*?)<\/loginCmsReturn>/s', $response, $matches)) {
         throw new RuntimeException('WSAA no devolvió un Ticket de Acceso válido.');
@@ -144,11 +160,98 @@ function arca_wsaa_request_ticket(array $config): array
     if (!$ticket || !isset($ticket->credentials->token, $ticket->credentials->sign, $ticket->header->expirationTime)) {
         throw new RuntimeException('El Ticket de Acceso de ARCA es inválido.');
     }
-    return [
+    $expiresAt = new DateTimeImmutable((string) $ticket->header->expirationTime);
+    $freshTicket = [
         'token' => (string) $ticket->credentials->token,
         'sign' => (string) $ticket->credentials->sign,
-        'expiresAt' => (new DateTimeImmutable((string) $ticket->header->expirationTime))->format('Y-m-d H:i:s'),
+        'expiresAt' => $expiresAt->format('Y-m-d H:i:s'),
     ];
+    arca_wsaa_store_cached_ticket($cachePath, $freshTicket, $expiresAt->getTimestamp());
+    return $freshTicket;
+}
+
+function arca_wsaa_ticket_cache_path(array $arca): string
+{
+    $configuredPath = trim((string) ($arca['ticket_cache_path'] ?? ''));
+    if ($configuredPath !== '') return $configuredPath;
+    $certificatePath = trim((string) ($arca['certificate_path'] ?? ''));
+    if ($certificatePath === '') throw new RuntimeException('Falta la ruta del certificado ARCA.');
+    return rtrim(dirname($certificatePath), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'wsaa-ticket.json';
+}
+
+function arca_wsaa_read_cached_ticket(string $cachePath): ?array
+{
+    if (!is_file($cachePath) || !is_readable($cachePath)) return null;
+    $decoded = json_decode((string) @file_get_contents($cachePath), true);
+    if (!is_array($decoded)) return null;
+    $token = $decoded['token'] ?? null;
+    $sign = $decoded['sign'] ?? null;
+    $expiresAt = $decoded['expiresAt'] ?? null;
+    $expiresAtEpoch = $decoded['expiresAtEpoch'] ?? null;
+    if (!is_string($token) || $token === '' || !is_string($sign) || $sign === '' || !is_string($expiresAt) || !is_numeric($expiresAtEpoch)) return null;
+    // Margen para no iniciar una operación con un ticket a punto de vencer.
+    if ((int) $expiresAtEpoch <= time() + 120) return null;
+    return ['token' => $token, 'sign' => $sign, 'expiresAt' => $expiresAt];
+}
+
+function arca_wsaa_store_cached_ticket(string $cachePath, array $ticket, int $expiresAtEpoch): void
+{
+    $directory = dirname($cachePath);
+    if (!is_dir($directory) || !is_writable($directory)) {
+        throw new RuntimeException('No se pudo guardar el Ticket de Acceso de ARCA en la carpeta privada.');
+    }
+    $payload = json_encode([
+        'token' => $ticket['token'],
+        'sign' => $ticket['sign'],
+        'expiresAt' => $ticket['expiresAt'],
+        'expiresAtEpoch' => $expiresAtEpoch,
+    ], JSON_UNESCAPED_SLASHES);
+    if (!is_string($payload)) throw new RuntimeException('No se pudo preparar el Ticket de Acceso de ARCA.');
+    $temporaryPath = tempnam($directory, 'wsaa-');
+    if ($temporaryPath === false || file_put_contents($temporaryPath, $payload, LOCK_EX) === false) {
+        throw new RuntimeException('No se pudo guardar el Ticket de Acceso de ARCA en la carpeta privada.');
+    }
+    @chmod($temporaryPath, 0600);
+    if (!@rename($temporaryPath, $cachePath)) {
+        @unlink($temporaryPath);
+        throw new RuntimeException('No se pudo activar el Ticket de Acceso de ARCA guardado.');
+    }
+    @chmod($cachePath, 0600);
+}
+
+/**
+ * Consulta de solo lectura a WSFE. Sirve para verificar que WSAA, WSFE y el
+ * punto de venta puedan comunicarse antes de permitir cualquier emisión.
+ * No solicita CAE ni crea un comprobante.
+ */
+function arca_wsfe_last_voucher_number(array $config, int $pointOfSale, int $voucherType = 6): int
+{
+    if ($pointOfSale < 1 || $pointOfSale > 99999) throw new RuntimeException('Punto de venta ARCA inválido.');
+    if (!function_exists('curl_init')) throw new RuntimeException('El servidor no tiene cURL para comunicar con ARCA.');
+    $ticket = arca_wsaa_request_ticket($config);
+    $arca = is_array($config['arca'] ?? null) ? $config['arca'] : [];
+    $cuit = trim((string) ($arca['cuit'] ?? ''));
+    $body = '<?xml version="1.0" encoding="UTF-8"?>'
+        . '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">'
+        . '<soapenv:Header/><soapenv:Body><ar:FECompUltimoAutorizado><ar:Auth><ar:Token>' . arca_xml($ticket['token']) . '</ar:Token><ar:Sign>' . arca_xml($ticket['sign']) . '</ar:Sign><ar:Cuit>' . arca_xml($cuit) . '</ar:Cuit></ar:Auth><ar:PtoVta>' . $pointOfSale . '</ar:PtoVta><ar:CbteTipo>' . $voucherType . '</ar:CbteTipo></ar:FECompUltimoAutorizado></soapenv:Body></soapenv:Envelope>';
+    $handle = curl_init(arca_wsfe_endpoint('homologacion'));
+    curl_setopt_array($handle, [
+        CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 25, CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_HTTPHEADER => ['Content-Type: text/xml; charset=utf-8', 'SOAPAction: ""'],
+    ]);
+    $response = curl_exec($handle);
+    $statusCode = (int) curl_getinfo($handle, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($handle);
+    curl_close($handle);
+    if (!is_string($response) || $statusCode < 200 || $statusCode >= 300) {
+        throw new RuntimeException('WSFE de homologación no respondió correctamente' . ($curlError !== '' ? ': ' . $curlError : '.'));
+    }
+    if (!preg_match('/<CbteNro>(\d+)<\/CbteNro>/', $response, $matches)) {
+        $detail = preg_match('/<ErrMsg>(.*?)<\/ErrMsg>/', $response, $error) ? html_entity_decode(strip_tags($error[1]), ENT_QUOTES | ENT_XML1, 'UTF-8') : '';
+        throw new RuntimeException('WSFE no devolvió la última numeración' . ($detail !== '' ? ': ' . $detail : '.'));
+    }
+    return (int) $matches[1];
 }
 
 function arca_wsfe_configuration_status(array $config): array

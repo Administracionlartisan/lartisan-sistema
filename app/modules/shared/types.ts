@@ -41,6 +41,10 @@ export type Sale = {
   method: string;
   invoiceType: "Factura B" | "Factura B electrónica" | "Factura A" | "Remito interno";
   customer: string;
+  customerDocumentType?: "Consumidor final" | "DNI" | "CUIT";
+  customerDocumentNumber?: string;
+  customerTaxCondition?: string;
+  customerAddress?: string;
   invitation: boolean;
   invitedQuantities?: Record<number, number>;
   channel: "Mostrador" | "Online";
@@ -56,6 +60,10 @@ export type SavedOrder = {
   discount: number;
   payment: string;
   invoiceType: Sale["invoiceType"];
+  customerDocumentType?: Sale["customerDocumentType"];
+  customerDocumentNumber?: string;
+  customerTaxCondition?: string;
+  customerAddress?: string;
   invitation: boolean;
   invitedQuantities?: Record<number, number>;
   channel: "Mostrador" | "Online";

@@ -600,6 +600,12 @@ function ensure_normalized_operations_schema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
     }
+    // Datos de identificación fiscal. Se mantienen junto a la venta para que
+    // una futura factura no dependa de datos que puedan cambiar luego en la UI.
+    ensure_column($pdo, 'lartisan_sales', 'customer_document_type', 'VARCHAR(30) NULL AFTER customer_name');
+    ensure_column($pdo, 'lartisan_sales', 'customer_document_number', 'VARCHAR(30) NULL AFTER customer_document_type');
+    ensure_column($pdo, 'lartisan_sales', 'customer_tax_condition', 'VARCHAR(80) NULL AFTER customer_document_number');
+    ensure_column($pdo, 'lartisan_sales', 'customer_address', 'VARCHAR(220) NULL AFTER customer_tax_condition');
     if (!table_exists($pdo, 'lartisan_sale_payments')) {
         $pdo->exec(
         "CREATE TABLE IF NOT EXISTS lartisan_sale_payments (
@@ -729,11 +735,15 @@ function sync_normalized_operations(PDO $pdo, string $site, array $state, int $u
 {
     $saleStatement = $pdo->prepare(
         "INSERT INTO lartisan_sales
-        (id, site, occurred_at, gross_amount, discount_amount, net_amount, payment_method, invoice_type, customer_name, channel, status, invitation, synced_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, site, occurred_at, gross_amount, discount_amount, net_amount, payment_method, invoice_type, customer_name, customer_document_type, customer_document_number, customer_tax_condition, customer_address, channel, status, invitation, synced_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE site=VALUES(site), occurred_at=VALUES(occurred_at), gross_amount=VALUES(gross_amount),
         discount_amount=VALUES(discount_amount), net_amount=VALUES(net_amount), payment_method=VALUES(payment_method),
-        invoice_type=VALUES(invoice_type), customer_name=VALUES(customer_name), channel=VALUES(channel), status=VALUES(status),
+        invoice_type=VALUES(invoice_type), customer_name=VALUES(customer_name),
+        customer_document_type=COALESCE(VALUES(customer_document_type), customer_document_type),
+        customer_document_number=COALESCE(VALUES(customer_document_number), customer_document_number),
+        customer_tax_condition=COALESCE(VALUES(customer_tax_condition), customer_tax_condition),
+        customer_address=COALESCE(VALUES(customer_address), customer_address), channel=VALUES(channel), status=VALUES(status),
         invitation=VALUES(invitation), synced_by=VALUES(synced_by)"
     );
     $deleteItems = $pdo->prepare('DELETE FROM lartisan_sale_items WHERE sale_id = ?');
@@ -748,7 +758,12 @@ function sync_normalized_operations(PDO $pdo, string $site, array $state, int $u
         $saleStatement->execute([
             (string) $sale['id'], $site, iso_datetime($sale['createdAtISO'] ?? null), (float) ($sale['gross'] ?? 0),
             (float) ($sale['discount'] ?? 0), (float) ($sale['net'] ?? 0), (string) ($sale['method'] ?? ''),
-            (string) ($sale['invoiceType'] ?? ''), (string) ($sale['customer'] ?? ''), (string) ($sale['channel'] ?? ''),
+            (string) ($sale['invoiceType'] ?? ''), (string) ($sale['customer'] ?? ''),
+            trim((string) ($sale['customerDocumentType'] ?? '')) ?: null,
+            trim((string) ($sale['customerDocumentNumber'] ?? '')) ?: null,
+            trim((string) ($sale['customerTaxCondition'] ?? '')) ?: null,
+            trim((string) ($sale['customerAddress'] ?? '')) ?: null,
+            (string) ($sale['channel'] ?? ''),
             (string) ($sale['status'] ?? 'activa'), !empty($sale['invitation']) ? 1 : 0, $userId,
         ]);
         $deleteItems->execute([(string) $sale['id']]);

@@ -58,15 +58,49 @@ if ($method === 'POST' && $route === 'admin/arca/homologation-test') {
     ensure_arca_wsfe_schema($pdo);
     try {
         $ticket = arca_wsaa_request_ticket($config);
+        $points = arca_wsfe_configuration_status($config)['pointsOfSale'];
+        $firstPoint = (int) (reset($points) ?: 0);
+        if ($firstPoint < 1) throw new RuntimeException('No hay puntos de venta ARCA configurados.');
+        // Consulta de lectura: valida el segundo servicio fiscal, sin CAE.
+        $lastVoucherNumber = arca_wsfe_last_voucher_number($config, $firstPoint, 6);
         // El ticket se prueba y se descarta. Persistir token/sign requiere una
         // clave de cifrado separada que todavía no se configuró en el servidor.
         unset($ticket['token'], $ticket['sign']);
         audit($pdo, (int) $user['id'], 'arca_wsaa_homologation_verified', 'wsfe');
-        json_response(['ok' => true, 'environment' => 'homologacion', 'ticketExpiresAt' => $ticket['expiresAt']]);
+        json_response(['ok' => true, 'environment' => 'homologacion', 'ticketExpiresAt' => $ticket['expiresAt'], 'checkedPointOfSale' => $firstPoint, 'lastVoucherNumber' => $lastVoucherNumber]);
     } catch (Throwable $error) {
-        error_log('LARTISAN ARCA WSAA homologation test failed: ' . $error->getMessage());
+        // Esta ruta está limitada a Administración y no emite comprobantes. Mostrar
+        // la causa operativa permite corregir certificados/configuración sin tener
+        // que adivinar frente a un mensaje genérico.
+        $arcaError = $error->getMessage();
+        error_log('LARTISAN ARCA WSAA homologation test failed: ' . $arcaError);
         audit($pdo, (int) $user['id'], 'arca_wsaa_homologation_failed');
-        json_response(['ok' => false, 'error' => 'No se pudo validar ARCA en homologación. Revisá el certificado y la configuración privada.'], 422);
+        json_response(['ok' => false, 'error' => 'No se pudo validar ARCA en homologación: ' . $arcaError], 422);
+    }
+}
+
+// Cola interna de preparación fiscal. No emite comprobantes ni llama a ARCA.
+if ($method === 'GET' && $route === 'admin/arca/fiscal-documents') {
+    require_user($pdo, ['administracion']);
+    ensure_arca_wsfe_schema($pdo);
+    $rows = $pdo->query('SELECT id, sale_reference, site_name, point_of_sale, voucher_type, voucher_number, cae, cae_expires_on, environment, status, response_summary, created_at, updated_at FROM arca_fiscal_documents ORDER BY updated_at DESC LIMIT 200')->fetchAll();
+    json_response(['ok' => true, 'documents' => $rows]);
+}
+
+if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/prepare') {
+    $user = require_user($pdo, ['administracion']);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) {
+        json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    }
+    try {
+        // Se carga sólo en la operación fiscal: cualquier incompatibilidad futura
+        // no puede interrumpir salud, ventas, stock ni el resto de la API.
+        require_once __DIR__ . '/arca_fiscal_queue.php';
+        $document = arca_prepare_fiscal_document($pdo, $config, (int) $user['id'], request_body());
+        audit($pdo, (int) $user['id'], 'arca_fiscal_document_prepared', (string) ($document['sale_reference'] ?? ''));
+        json_response(['ok' => true, 'document' => $document, 'message' => 'Comprobante preparado internamente. No se emitió CAE ni se informó a ARCA.']);
+    } catch (InvalidArgumentException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     }
 }
 $pdo->exec(

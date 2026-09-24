@@ -92,6 +92,10 @@ export default function Home() {
     ),
     [invoiceType, setInvoiceType] = useState<Sale["invoiceType"]>("Factura B"),
     [customer, setCustomer] = useState("Consumidor final"),
+    [customerDocumentType, setCustomerDocumentType] = useState<NonNullable<Sale["customerDocumentType"]>>("Consumidor final"),
+    [customerDocumentNumber, setCustomerDocumentNumber] = useState(""),
+    [customerTaxCondition, setCustomerTaxCondition] = useState(""),
+    [customerAddress, setCustomerAddress] = useState(""),
     [invitedQuantities, setInvitedQuantities] = useState<Record<number, number>>({}),
     [message, setMessage] = useState(""),
     [cashAdjustmentKind, setCashAdjustmentKind] =
@@ -2107,6 +2111,10 @@ export default function Home() {
       discount,
       payment,
       invoiceType,
+      customerDocumentType,
+      customerDocumentNumber,
+      customerTaxCondition,
+      customerAddress,
       invitation,
       invitedQuantities,
       channel: saleChannel,
@@ -2124,6 +2132,10 @@ export default function Home() {
     setDiscount(order.discount);
     setPayment(order.payment);
     setInvoiceType(order.invoiceType);
+    setCustomerDocumentType(order.customerDocumentType || "Consumidor final");
+    setCustomerDocumentNumber(order.customerDocumentNumber || "");
+    setCustomerTaxCondition(order.customerTaxCondition || "");
+    setCustomerAddress(order.customerAddress || "");
     setInvitedQuantities(order.invitedQuantities ?? {});
     setSaleChannel(order.channel);
     setSavedOrders((items) => items.filter((item) => item.id !== order.id));
@@ -2277,6 +2289,12 @@ export default function Home() {
       return setMessage(
         `El descuento supera el máximo autorizado de ${siteLimits.maxDiscount}% para ${site}.`,
       );
+    if (invoiceType === "Factura A") {
+      if (customer.trim().length < 3) return setMessage("Factura A requiere razón social.");
+      if (customerDocumentType !== "CUIT" || !/^\d{11}$/.test(customerDocumentNumber.replace(/\D/g, ""))) return setMessage("Factura A requiere CUIT de 11 dígitos.");
+      if (customerTaxCondition !== "Responsable Inscripto") return setMessage("Factura A requiere condición fiscal Responsable Inscripto.");
+      if (!customerAddress.trim()) return setMessage("Factura A requiere domicilio fiscal.");
+    }
     const quantities = cart.reduce<Record<number, number>>((result, product) => {
       result[product.id] = (result[product.id] || 0) + 1;
       return result;
@@ -2300,6 +2318,10 @@ export default function Home() {
       method: splitPayment ? "Múltiple" : payment,
       invoiceType,
       customer,
+      customerDocumentType,
+      customerDocumentNumber: customerDocumentNumber.replace(/\D/g, ""),
+      customerTaxCondition,
+      customerAddress,
       invitation,
       invitedQuantities,
       channel: saleChannel,
@@ -3318,6 +3340,28 @@ export default function Home() {
                       placeholder="Consumidor final o razón social"
                     />
                   </label>
+                  <div className="mt-3 rounded border border-[#d9d4c9] bg-[#f8fafc] p-3 text-sm">
+                    <b>Datos para comprobante fiscal</b>
+                    <p className="mt-1 text-xs text-slate-600">Se guardan con la venta. Factura A exige CUIT, condición fiscal y domicilio.</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <label className="font-bold">Documento
+                        <select value={customerDocumentType} onChange={(event) => setCustomerDocumentType(event.target.value as NonNullable<Sale["customerDocumentType"]>)} className="mt-1 w-full rounded border p-2 font-normal">
+                          <option>Consumidor final</option><option>DNI</option><option>CUIT</option>
+                        </select>
+                      </label>
+                      <label className="font-bold">Número
+                        <input value={customerDocumentNumber} onChange={(event) => setCustomerDocumentNumber(event.target.value)} inputMode="numeric" className="mt-1 w-full rounded border p-2 font-normal" placeholder={customerDocumentType === "CUIT" ? "11 dígitos" : "Opcional"} />
+                      </label>
+                      <label className="font-bold">Condición fiscal
+                        <select value={customerTaxCondition} onChange={(event) => setCustomerTaxCondition(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal">
+                          <option value="">Seleccionar</option><option>Consumidor final</option><option>Responsable Inscripto</option><option>Monotributista</option><option>Exento</option>
+                        </select>
+                      </label>
+                      <label className="font-bold">Domicilio fiscal
+                        <input value={customerAddress} onChange={(event) => setCustomerAddress(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal" placeholder="Calle, número y localidad" />
+                      </label>
+                    </div>
+                  </div>
                   <button
                     onClick={pay}
                     disabled={!cashIsOpen}
