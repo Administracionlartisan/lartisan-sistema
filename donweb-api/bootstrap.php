@@ -34,6 +34,17 @@ if (is_file($privateAiPath)) {
     }
 }
 
+// La integración fiscal se configura exclusivamente fuera de public_html.
+// Este archivo puede contener únicamente rutas a certificado/clave y parámetros
+// operativos; nunca se devuelve por la API ni queda versionado en el proyecto.
+$privateArcaPath = dirname(__DIR__, 2) . '/lartisan-arca-config.php';
+if (is_file($privateArcaPath)) {
+    $privateArcaConfig = require $privateArcaPath;
+    if (is_array($privateArcaConfig)) {
+        $config['arca'] = array_replace_recursive($config['arca'] ?? [], $privateArcaConfig);
+    }
+}
+
 function json_response(array $payload, int $status = 200): never
 {
     http_response_code($status);
@@ -124,14 +135,25 @@ function public_user(array $user, array $config): array
     if (($user['report_permissions'] ?? null) !== null) {
         $result['reportPermissions'] = json_decode((string) $user['report_permissions'], true) ?: [];
     }
-    if (($user['action_permissions'] ?? null) !== null) {
-        $result['actionPermissions'] = json_decode((string) $user['action_permissions'], true) ?: [];
-    }
+    $result['actionPermissions'] = user_action_permissions($user);
+    // Habilitación operativa acotada: las compras de producción se cargan
+    // únicamente desde Villa Mitre por las dos responsables designadas.
+    if (is_production_purchase_loader($user)) $result['actionPermissions'][] = 'comprasProduccion';
+    $result['actionPermissions'] = array_values(array_unique($result['actionPermissions']));
     return $result;
 }
 
 function ensure_user_locations_schema(PDO $pdo): void
 {
+    // Algunas instalaciones iniciales definieron el cargo como ENUM sin el
+    // perfil de Compras. MySQL lo convertía silenciosamente en un valor vacío,
+    // que la interfaz mostraba como Vendedora. Se amplía el catálogo una vez
+    // para que el perfil MRP se conserve correctamente.
+    $roleColumn = $pdo->query("SHOW COLUMNS FROM users LIKE 'role'")->fetch();
+    $roleType = strtolower((string) ($roleColumn['Type'] ?? ''));
+    if (str_starts_with($roleType, 'enum(') && !str_contains($roleType, "'compras'")) {
+        $pdo->exec("ALTER TABLE users MODIFY role ENUM('vendedora','supervisora','compras','administracion') NOT NULL DEFAULT 'vendedora'");
+    }
     $column = $pdo->query("SHOW COLUMNS FROM users LIKE 'assigned_locations'")->fetch();
     if (!$column) {
         $pdo->exec('ALTER TABLE users ADD COLUMN assigned_locations TEXT NULL AFTER assigned_location');
@@ -280,6 +302,13 @@ function user_can_action(array $user, string $permission): bool
     return $user['role'] === 'administracion' || in_array($permission, user_action_permissions($user), true);
 }
 
+function is_production_purchase_loader(array $user): bool
+{
+    $username = strtolower(trim((string) ($user['username'] ?? '')));
+    return in_array($username, ['yamila.palavecino', 'valentina.parra'], true)
+        && user_can_access_site($user, 'Villa Mitre');
+}
+
 function user_can_report(array $user, string $report): bool
 {
     if ($user['role'] === 'administracion') return true;
@@ -311,6 +340,7 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
         'incidents' => ['incidencias'],
         'stockAdjustments' => ['stock'],
         'realStock' => ['stock'],
+        'stockCountComments' => ['stock'],
         'minimumStock' => ['stock'],
         'cashTransfers' => ['transferirCaja'],
         'stock' => ['cobrar', 'anular', 'pedidos', 'stock'],
@@ -349,7 +379,7 @@ function operational_snapshot_for_user(array $user, array $state): array
     if (!user_can_report($user, 'Personal')) unset($state['schedules']);
     if (!user_can_action($user, 'egresos')) unset($state['expensesLog'], $state['cashAdjustments']);
     if (!user_can_action($user, 'transferirCaja')) unset($state['cashTransfers']);
-    if (!user_can_action($user, 'stock')) unset($state['realStock'], $state['stockAdjustments']);
+    if (!user_can_action($user, 'stock')) unset($state['realStock'], $state['stockCountComments'], $state['stockAdjustments']);
     if (!user_can_action($user, 'anular')) unset($state['returnsLog']);
     if (!user_can_action($user, 'incidencias')) unset($state['incidents']);
     return $state;

@@ -125,6 +125,7 @@ export default function Home() {
     [newUserAllLocations, setNewUserAllLocations] = useState(false),
     [newUserUsername, setNewUserUsername] = useState(""),
     [newUserPassword, setNewUserPassword] = useState(""),
+    [newUserFieldErrors, setNewUserFieldErrors] = useState<Record<string, string>>({}),
     [newUserMfaRequired, setNewUserMfaRequired] = useState(false),
     [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([]),
     [createdUserCredentials, setCreatedUserCredentials] = useState<
@@ -183,6 +184,8 @@ export default function Home() {
   const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
+  const [arcaTesting, setArcaTesting] = useState(false);
+  const [arcaTestMessage, setArcaTestMessage] = useState("Pendiente de validación en homologación.");
   const [persistedReportSales, setPersistedReportSales] = useState<Sale[] | null>(null);
   const [persistedReportPayments, setPersistedReportPayments] = useState<Payment[]>([]);
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRow[]>([]);
@@ -604,6 +607,24 @@ export default function Home() {
       setExpenseSyncMessage(error instanceof Error ? error.message : "No se pudieron actualizar gastos y cuentas por pagar.");
     } finally {
       setExpenseSyncing(false);
+    }
+  };
+  const testArcaHomologation = async () => {
+    setArcaTesting(true);
+    setArcaTestMessage("Validando firma y acceso con ARCA…");
+    try {
+      const response = await fetch(`${API_BASE}/admin/arca/homologation-test`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = (await response.json()) as { ok?: boolean; ticketExpiresAt?: string; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo validar ARCA.");
+      const expiry = data.ticketExpiresAt ? new Date(data.ticketExpiresAt).toLocaleString("es-AR") : "vigencia informada por ARCA";
+      setArcaTestMessage(`Conexión de homologación validada. Ticket vigente hasta ${expiry}. No se emitió ningún comprobante.`);
+    } catch (error) {
+      setArcaTestMessage(error instanceof Error ? error.message : "No se pudo validar ARCA en homologación.");
+    } finally {
+      setArcaTesting(false);
     }
   };
   const loadOperationalData = async () => {
@@ -1404,14 +1425,19 @@ export default function Home() {
   };
   const createManagedUser = async () => {
     const cleanName = newUserName.trim();
-    if (!cleanName) return setMessage("Ingresá el nombre del nuevo usuario.");
     const cleanUsername = newUserUsername.trim().toLowerCase();
     const validInternalUsername = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(cleanUsername);
     const validWorkEmail = /^[a-z0-9._%+-]+@lartisantaller\.com$/.test(cleanUsername);
-    if (!validInternalUsername && !validWorkEmail)
-      return setMessage("Ingresá nombre.apellido o un correo @lartisantaller.com.");
-    if (newUserPassword.length < 8)
-      return setMessage("La contraseña temporal debe tener al menos 8 caracteres.");
+    const fieldErrors: Record<string, string> = {};
+    if (!cleanName) fieldErrors.fullName = "Ingresá nombre y apellido.";
+    if (!validInternalUsername && !validWorkEmail) fieldErrors.username = "Usá nombre.apellido o un correo @lartisantaller.com.";
+    if (!newUserAllLocations && newUserSites.length === 0) fieldErrors.locations = "Seleccioná al menos un local o Todos los locales.";
+    if (newUserPassword.length < 8 || !/[a-z]/.test(newUserPassword) || !/[A-Z]/.test(newUserPassword) || !/\d/.test(newUserPassword) || !/[^a-zA-Z0-9]/.test(newUserPassword)) fieldErrors.temporaryPassword = "Usá 8 o más caracteres con mayúscula, minúscula, número y símbolo.";
+    if (Object.keys(fieldErrors).length) {
+      setNewUserFieldErrors(fieldErrors);
+      setMessage("Revisá los campos marcados.");
+      return;
+    }
     if (
       managedUsers.some(
         (profile) =>
@@ -1440,6 +1466,7 @@ export default function Home() {
     });
     const data = (await response.json()) as ApiPayload;
     if (!response.ok) {
+      setNewUserFieldErrors(data.fields || {});
       setMessage(data.error || "No se pudo crear el usuario.");
       return;
     }
@@ -1452,6 +1479,7 @@ export default function Home() {
     setNewUserName("");
     setNewUserUsername("");
     setNewUserPassword("");
+    setNewUserFieldErrors({});
     setNewUserSites(["Recoleta"]);
     setNewUserAllLocations(false);
     setNewUserMfaRequired(false);
@@ -4902,12 +4930,28 @@ export default function Home() {
                       ["Respaldo externo", systemHealth.lastBackup?.status === "verified" ? "Copia verificada" : "Sin copia verificada", systemHealth.lastBackup?.status === "verified"],
                       ["Google Drive", systemHealth.driveConnected === undefined ? "Verificando" : systemHealth.driveConnected ? "Conectado · solo lectura" : "Sin conectar", systemHealth.driveConnected === true],
                       ["Alertas por correo", systemHealth.notification?.status === "sent" ? "Última alerta enviada" : systemHealth.notification?.status === "failed" ? "El correo rechazó el envío" : systemHealth.notification?.status === "disabled" ? "Correo no configurado" : "Monitoreo activo", systemHealth.notification?.status !== "failed" && systemHealth.notification?.status !== "disabled"],
-                      ["ARCA", "Pendiente de integración", false],
+                      ["ARCA", "Homologación preparada", false],
                     ].map(([label, status, ok]) => (
                       <div key={String(label)} className={`rounded border p-3 text-sm ${ok ? "border-emerald-200 bg-[#e7f4e8]" : "border-[#e7c26a] bg-[#fff5d8]"}`}>
                         <b>{label}</b><br /><span>{status}</span>
                       </div>
                     ))}
+                  </div>
+                  <div className="mt-4 rounded border border-[#d9d4c9] bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <b>Validación ARCA</b>
+                        <p className="mt-1 text-sm text-slate-600">Comprueba el certificado y la autenticación en homologación. No emite facturas, CAE ni comprobantes reales.</p>
+                      </div>
+                      <button
+                        onClick={testArcaHomologation}
+                        disabled={arcaTesting}
+                        className="rounded bg-[#183a67] px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+                      >
+                        {arcaTesting ? "Validando…" : "Probar conexión"}
+                      </button>
+                    </div>
+                    <p className="mt-3 text-sm text-slate-700">{arcaTestMessage}</p>
                   </div>
                   {systemHealth.alerts && systemHealth.alerts.length > 0 ? (
                     <div className="mt-4 space-y-2">
@@ -5373,25 +5417,27 @@ export default function Home() {
                     Nombre
                     <input
                       value={newUserName}
-                      onChange={(e) => setNewUserName(e.target.value)}
+                      onChange={(e) => { setNewUserName(e.target.value); setNewUserFieldErrors((errors) => ({ ...errors, fullName: "" })); }}
                       placeholder="Nombre y apellido"
-                      className="mt-1 block w-full rounded border p-2 font-normal"
+                      className={`mt-1 block w-full rounded border p-2 font-normal ${newUserFieldErrors.fullName ? "border-red-500" : ""}`}
                     />
+                    {newUserFieldErrors.fullName && <span className="mt-1 block text-xs font-normal text-red-700">{newUserFieldErrors.fullName}</span>}
                   </label>
                   <label className="text-sm font-bold">
                     Usuario
                     <input
                       value={newUserUsername}
-                      onChange={(e) => setNewUserUsername(e.target.value.toLowerCase().replace(/\s+/g, "."))}
+                      onChange={(e) => { setNewUserUsername(e.target.value.toLowerCase().replace(/\s+/g, ".")); setNewUserFieldErrors((errors) => ({ ...errors, username: "" })); }}
                       placeholder="nombre.apellido"
-                      className="mt-1 block w-full rounded border p-2 font-normal"
+                      className={`mt-1 block w-full rounded border p-2 font-normal ${newUserFieldErrors.username ? "border-red-500" : ""}`}
                     />
+                    {newUserFieldErrors.username && <span className="mt-1 block text-xs font-normal text-red-700">{newUserFieldErrors.username}</span>}
                   </label>
                   <label className="text-sm font-bold">
                     Cargo
                     <select
                       value={newUserRole}
-                      onChange={(e) => setNewUserRole(e.target.value as Role)}
+                      onChange={(e) => { setNewUserRole(e.target.value as Role); setNewUserFieldErrors((errors) => ({ ...errors, role: "" })); }}
                       className="mt-1 block w-full rounded border p-2 font-normal"
                     >
                       <option value="vendedora">Vendedora</option>
@@ -5400,13 +5446,13 @@ export default function Home() {
                       <option value="administracion">Administración</option>
                     </select>
                   </label>
-                  <div className="text-sm font-bold">
+                  <div className={`text-sm font-bold ${newUserFieldErrors.locations ? "text-red-700" : ""}`}>
                     Locales asignados
                     <label className="mt-2 flex items-center gap-2 font-normal">
                       <input
                         type="checkbox"
                         checked={newUserAllLocations}
-                        onChange={(e) => setNewUserAllLocations(e.target.checked)}
+                        onChange={(e) => { setNewUserAllLocations(e.target.checked); setNewUserFieldErrors((errors) => ({ ...errors, locations: "" })); }}
                       />
                       Todos los locales
                     </label>
@@ -5417,29 +5463,32 @@ export default function Home() {
                             <input
                               type="checkbox"
                               checked={newUserSites.includes(local)}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                setNewUserFieldErrors((errors) => ({ ...errors, locations: "" }));
                                 setNewUserSites((items) =>
                                   e.target.checked
                                     ? [...items, local]
                                     : items.filter((item) => item !== local),
-                                )
-                              }
+                                );
+                              }}
                             />
                             {local}
                           </label>
                         ))}
                       </div>
                     )}
+                    {newUserFieldErrors.locations && <span className="mt-1 block text-xs font-normal text-red-700">{newUserFieldErrors.locations}</span>}
                   </div>
                   <label className="text-sm font-bold">
                     Contraseña temporal
                     <input
                       value={newUserPassword}
-                      onChange={(e) => setNewUserPassword(e.target.value)}
+                      onChange={(e) => { setNewUserPassword(e.target.value); setNewUserFieldErrors((errors) => ({ ...errors, temporaryPassword: "" })); }}
                       type="password"
                       placeholder="Mínimo 8 caracteres"
-                      className="mt-1 block w-full rounded border p-2 font-normal"
+                      className={`mt-1 block w-full rounded border p-2 font-normal ${newUserFieldErrors.temporaryPassword ? "border-red-500" : ""}`}
                     />
+                    {newUserFieldErrors.temporaryPassword && <span className="mt-1 block text-xs font-normal text-red-700">{newUserFieldErrors.temporaryPassword}</span>}
                   </label>
                   <label className="flex items-center gap-2 text-sm font-bold xl:pb-3">
                     <input

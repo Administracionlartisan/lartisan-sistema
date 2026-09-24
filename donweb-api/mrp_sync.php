@@ -57,6 +57,39 @@ function ensure_mrp_schema(PDO $pdo): void
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY uq_mrp_control_week_item (week_key, item_name)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // Inventario físico vigente por insumo. Este dato es el que debe alimentar
+    // la necesidad neta del MRP; se conserva además cada toma para auditoría.
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_input_stock (
+        input_key VARCHAR(190) PRIMARY KEY,
+        input_name VARCHAR(190) NOT NULL,
+        unit VARCHAR(40) NOT NULL,
+        actual_quantity DECIMAL(16,4) NOT NULL DEFAULT 0,
+        counted_by BIGINT UNSIGNED NOT NULL,
+        counted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_input_stock_history (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        input_key VARCHAR(190) NOT NULL,
+        input_name VARCHAR(190) NOT NULL,
+        unit VARCHAR(40) NOT NULL,
+        previous_quantity DECIMAL(16,4) NULL,
+        actual_quantity DECIMAL(16,4) NOT NULL,
+        notes VARCHAR(1000) NULL,
+        counted_by BIGINT UNSIGNED NOT NULL,
+        counted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_mrp_stock_history_key_date (input_key, counted_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_production_runs (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        week_key VARCHAR(20) NOT NULL,
+        recipe_key VARCHAR(190) NOT NULL,
+        recipe_name VARCHAR(190) NOT NULL,
+        quantity_produced DECIMAL(16,4) NOT NULL,
+        notes VARCHAR(1000) NULL,
+        produced_by BIGINT UNSIGNED NOT NULL,
+        produced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_mrp_production_date (produced_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     // Catálogo propio del sistema. Google Sheets se utiliza únicamente como fuente
     // de importación; la operación diaria y los informes no dependen de editarla.
     $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_input_catalog (
@@ -108,6 +141,61 @@ function ensure_mrp_schema(PDO $pdo): void
         INDEX idx_mrp_recipe_component_run (source_run_id),
         CONSTRAINT fk_mrp_recipe_components_recipe FOREIGN KEY (recipe_id) REFERENCES mrp_recipe_catalog(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_recipe_overrides (
+        recipe_key VARCHAR(190) PRIMARY KEY,
+        recipe_json LONGTEXT NOT NULL,
+        updated_by BIGINT UNSIGNED NOT NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_recipe_change_log (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        recipe_key VARCHAR(190) NOT NULL,
+        before_json LONGTEXT NULL,
+        after_json LONGTEXT NOT NULL,
+        changed_by BIGINT UNSIGNED NOT NULL,
+        changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_mrp_recipe_log_key_date (recipe_key, changed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_recipe_review_state (
+        id TINYINT UNSIGNED PRIMARY KEY,
+        required_review TINYINT(1) NOT NULL DEFAULT 0,
+        recipe_key VARCHAR(190) NULL,
+        changed_by BIGINT UNSIGNED NULL,
+        changed_at DATETIME NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_input_cost_overrides (
+        input_key VARCHAR(190) PRIMARY KEY,
+        unit_cost DECIMAL(16,4) NOT NULL,
+        updated_by BIGINT UNSIGNED NOT NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mrp_input_cost_history (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        batch_id CHAR(36) NOT NULL,
+        input_key VARCHAR(190) NOT NULL,
+        input_name VARCHAR(190) NOT NULL,
+        unit VARCHAR(40) NOT NULL,
+        quantity DECIMAL(16,4) NOT NULL,
+        previous_unit_cost DECIMAL(16,4) NULL,
+        new_unit_cost DECIMAL(16,4) NOT NULL,
+        provider_name VARCHAR(190) NOT NULL,
+        invoice_number VARCHAR(100) NOT NULL,
+        purchase_date DATE NOT NULL,
+        variation_warning TINYINT(1) NOT NULL DEFAULT 0,
+        loaded_by BIGINT UNSIGNED NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_mrp_input_cost_history_key_date (input_key, created_at),
+        INDEX idx_mrp_input_cost_history_batch (batch_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // Datos operativos de la compra real: permiten contrastar la factura con
+    // lo solicitado por MRP sin perder el historial original de costos.
+    ensure_column($pdo, 'mrp_input_cost_history', 'expected_quantity', 'DECIMAL(16,4) NULL AFTER quantity');
+    ensure_column($pdo, 'mrp_input_cost_history', 'expected_unit_cost', 'DECIMAL(16,4) NULL AFTER previous_unit_cost');
+    ensure_column($pdo, 'mrp_input_cost_history', 'source_order_reference', 'VARCHAR(100) NULL AFTER invoice_number');
+    ensure_column($pdo, 'mrp_input_cost_history', 'payment_method', 'VARCHAR(60) NULL AFTER source_order_reference');
+    ensure_column($pdo, 'mrp_input_cost_history', 'validation_status', "VARCHAR(30) NOT NULL DEFAULT 'Pendiente' AFTER variation_warning");
+    ensure_column($pdo, 'mrp_input_cost_history', 'difference_reason', 'VARCHAR(1000) NULL AFTER validation_status');
+    ensure_column($pdo, 'mrp_input_cost_history', 'observations', 'VARCHAR(1000) NULL AFTER difference_reason');
 }
 
 function require_mrp_user(PDO $pdo): array
@@ -115,6 +203,104 @@ function require_mrp_user(PDO $pdo): array
     $user = require_user($pdo, ['administracion', 'supervisora', 'compras']);
     if (!user_can_action($user, 'mrp')) json_response(['ok' => false, 'error' => 'No tenés permiso para consultar MRP'], 403);
     return $user;
+}
+
+function mrp_can_edit_recipes(array $user): bool
+{
+    // La autorización vive en el servidor; no depende de botones ocultos en la web.
+    // Jhaiber administra el recetario operativo y Gerencia/Administración conserva
+    // facultad completa para corregirlo o crear recetas cuando sea necesario.
+    return ($user['role'] ?? '') === 'administracion'
+        || mrp_lower((string) ($user['username'] ?? '')) === 'jhaiber.brazon'
+        || user_can_action($user, 'editarRecetas');
+}
+
+function mrp_can_register_production_purchase(array $user): bool
+{
+    return ($user['role'] ?? '') === 'administracion' || is_production_purchase_loader($user);
+}
+
+function mrp_can_count_stock(array $user): bool
+{
+    $username = mrp_lower((string) ($user['username'] ?? ''));
+    return ($user['role'] ?? '') === 'administracion' || str_contains($username, 'betzi') || str_contains($username, 'betzy');
+}
+
+function mrp_apply_actual_stock(PDO $pdo, array $snapshot): array
+{
+    $stockRows = $pdo->query('SELECT input_key, actual_quantity FROM mrp_input_stock')->fetchAll();
+    if (!$stockRows) return $snapshot;
+    $stock = [];
+    foreach ($stockRows as $row) $stock[(string) $row['input_key']] = (float) $row['actual_quantity'];
+    foreach (['requirements', 'buy', 'prepare'] as $section) foreach (($snapshot[$section] ?? []) as &$row) {
+        $key = mrp_key($row['item'] ?? '');
+        if (!array_key_exists($key, $stock)) continue;
+        $actual = $stock[$key]; $required = (float) ($row['required'] ?? $row['requiredTotal'] ?? 0);
+        $row['stock'] = $actual;
+        if ($required > 0) {
+            $row['netNeed'] = max(0, $required - $actual);
+            if (isset($row['suggestedQuantity'])) $row['suggestedQuantity'] = max(0, $required - $actual);
+        }
+    } unset($row);
+    return $snapshot;
+}
+
+function mrp_apply_recipe_overrides(PDO $pdo, array $snapshot): array
+{
+    $rows = $pdo->query('SELECT recipe_key, recipe_json FROM mrp_recipe_overrides')->fetchAll();
+    $inputRows = $pdo->query('SELECT input_key, unit_cost FROM mrp_input_cost_overrides')->fetchAll();
+    if (!$rows && !$inputRows) return $snapshot;
+    $recipes = [];
+    foreach (($snapshot['recipes'] ?? []) as $recipe) $recipes[$recipe['sourceKey'] ?? mrp_key($recipe['recipe'] ?? '')] = $recipe;
+    foreach ($rows as $row) {
+        $recipe = json_decode((string) $row['recipe_json'], true);
+        if (is_array($recipe)) $recipes[(string) $row['recipe_key']] = $recipe;
+    }
+    $snapshot['recipes'] = array_values($recipes);
+    // Recalculate recipe costs from the saved ingredients and subrecipes after
+    // every override. The weekly plan itself is intentionally not rewritten: it
+    // must be reviewed before a new purchase/production decision is taken.
+    $inputCosts = [];
+    $overrides = [];
+    foreach ($inputRows as $row) $overrides[(string) $row['input_key']] = (float) $row['unit_cost'];
+    foreach (($snapshot['inputs'] ?? []) as &$input) {
+        $inputKey = mrp_key($input['item'] ?? '');
+        if (array_key_exists($inputKey, $overrides)) $input['unitCost'] = $overrides[$inputKey];
+        $inputCosts[$inputKey] = isset($input['unitCost']) ? (float) $input['unitCost'] : null;
+    }
+    unset($input);
+    $costs = [];
+    for ($pass = 0; $pass < count($snapshot['recipes']); $pass++) {
+        $changed = false;
+        foreach ($snapshot['recipes'] as &$recipe) {
+            $total = 0.0; $missing = [];
+            foreach (($recipe['items'] ?? []) as $item) {
+                $componentKey = mrp_key($item['ingredient'] ?? '');
+                $isSubrecipe = strpos(mrp_lower((string) ($item['type'] ?? '')), 'subreceta') !== false;
+                $unitCost = $isSubrecipe ? ($costs[$componentKey] ?? null) : ($inputCosts[$componentKey] ?? null);
+                if ($unitCost === null || $unitCost <= 0) $missing[] = (string) ($item['ingredient'] ?? 'Insumo sin identificar');
+                else $total += mrp_number($item['perUnit'] ?? 0) * $unitCost;
+            }
+            $newCost = $missing ? null : round($total, 4);
+            $recipe['costPerUnit'] = $newCost;
+            $recipe['costStatus'] = $newCost === null ? 'Pendiente de costo' : 'Calculado';
+            $recipe['missingCosts'] = array_values(array_unique($missing));
+            $key = mrp_key($recipe['recipe'] ?? '');
+            if ($newCost !== null && (!isset($costs[$key]) || $costs[$key] !== $newCost)) { $costs[$key] = $newCost; $changed = true; }
+        }
+        unset($recipe);
+        if (!$changed) break;
+    }
+    usort($snapshot['recipes'], static fn (array $a, array $b): int => strnatcasecmp((string) $a['recipe'], (string) $b['recipe']));
+    $snapshot['importCounts']['recipes'] = count($snapshot['recipes']);
+    $snapshot['importCounts']['components'] = array_sum(array_map(static fn (array $r): int => count($r['items'] ?? []), $snapshot['recipes']));
+    if (isset($snapshot['recipeValidation'])) {
+        $snapshot['recipeValidation']['costedRecipes'] = count(array_filter($snapshot['recipes'], static fn (array $recipe): bool => $recipe['costPerUnit'] !== null));
+        $missing = [];
+        foreach ($snapshot['recipes'] as $recipe) foreach (($recipe['missingCosts'] ?? []) as $item) $missing[] = $item;
+        $snapshot['recipeValidation']['missingCostInputs'] = array_values(array_unique($missing));
+    }
+    return $snapshot;
 }
 
 function mrp_number($value): float

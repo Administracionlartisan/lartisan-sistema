@@ -6,6 +6,7 @@ require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/pnl_sync.php';
 require __DIR__ . '/mrp_sync.php';
 require __DIR__ . '/assistant.php';
+require __DIR__ . '/arca_wsfe.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -25,14 +26,48 @@ if ($method === 'GET' && ($route === '' || $route === 'health')) {
     $pdo->query('SELECT 1');
     json_response(['ok' => true, 'service' => 'lartisan-api']);
 }
-try {
-    ensure_user_locations_schema($pdo);
-    // Mantiene listas las tablas operativas aun antes de la primera venta.
-    ensure_operations_schema($pdo);
-    ensure_mrp_schema($pdo);
-} catch (Throwable $error) {
-    error_log('LARTISAN API schema initialization failed: ' . $error->getMessage());
-    json_response(['ok' => false, 'error' => 'schema_initialization_failed', 'type' => get_class($error)], 503);
+// Una migración auxiliar nunca debe bloquear el acceso al sistema. Cada módulo
+// también valida su propia estructura justo antes de usarse, donde puede dar un
+// error específico sin dejar fuera al resto de la operación.
+foreach ([
+    'users' => static fn () => ensure_user_locations_schema($pdo),
+    'operations' => static fn () => ensure_operations_schema($pdo),
+    'mrp' => static fn () => ensure_mrp_schema($pdo),
+    'arca_wsfe' => static fn () => ensure_arca_wsfe_schema($pdo),
+] as $schema => $ensure) {
+    try {
+        $ensure();
+    } catch (Throwable $error) {
+        error_log('LARTISAN deferred ' . $schema . ' schema update: ' . $error->getMessage());
+    }
+}
+
+if ($method === 'GET' && $route === 'admin/arca/status') {
+    require_user($pdo, ['administracion']);
+    ensure_arca_wsfe_schema($pdo);
+    json_response(['ok' => true, 'arca' => arca_wsfe_configuration_status($config)]);
+}
+
+// Prueba exclusivamente en homologación: verifica firma y autenticación WSAA.
+// No solicita CAE, no crea comprobantes y no toca producción.
+if ($method === 'POST' && $route === 'admin/arca/homologation-test') {
+    $user = require_user($pdo, ['administracion']);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) {
+        json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    }
+    ensure_arca_wsfe_schema($pdo);
+    try {
+        $ticket = arca_wsaa_request_ticket($config);
+        // El ticket se prueba y se descarta. Persistir token/sign requiere una
+        // clave de cifrado separada que todavía no se configuró en el servidor.
+        unset($ticket['token'], $ticket['sign']);
+        audit($pdo, (int) $user['id'], 'arca_wsaa_homologation_verified', 'wsfe');
+        json_response(['ok' => true, 'environment' => 'homologacion', 'ticketExpiresAt' => $ticket['expiresAt']]);
+    } catch (Throwable $error) {
+        error_log('LARTISAN ARCA WSAA homologation test failed: ' . $error->getMessage());
+        audit($pdo, (int) $user['id'], 'arca_wsaa_homologation_failed');
+        json_response(['ok' => false, 'error' => 'No se pudo validar ARCA en homologación. Revisá el certificado y la configuración privada.'], 422);
+    }
 }
 $pdo->exec(
     "CREATE TABLE IF NOT EXISTS password_recovery_codes (
@@ -170,14 +205,88 @@ if ($method === 'GET' && $route === 'mrp/latest') {
     $latest = $pdo->query("SELECT payload_json, rows_imported, started_at, finished_at FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetch();
     // Reading the catalog never triggers imports, OAuth or background replacement.
     $lastAttempt = $pdo->query("SELECT id, status, error_message, started_at FROM mrp_sync_runs ORDER BY id DESC LIMIT 1")->fetch();
+    $review = $pdo->query('SELECT required_review, recipe_key, changed_at FROM mrp_recipe_review_state WHERE id=1')->fetch();
+    $data = $latest ? mrp_apply_actual_stock($pdo, mrp_apply_recipe_overrides($pdo, json_decode((string) $latest['payload_json'], true) ?: [])) : null;
+    if ($data && $review && (int) $review['required_review'] === 1) $data['recipeReview'] = ['required' => true, 'recipeKey' => $review['recipe_key'], 'changedAt' => $review['changed_at']];
     json_response(['ok' => true, 'importMode' => 'one_time_file',
         'canImport' => $mrpUser['role'] === 'administracion',
         'lastAttempt' => $lastAttempt ? ['id' => $lastAttempt['id'], 'status' => $lastAttempt['status'], 'startedAt' => $lastAttempt['started_at']] : null,
         'snapshot' => $latest ? [
-        'data' => json_decode((string) $latest['payload_json'], true) ?: [],
+        'data' => $data,
         'rowsImported' => (int) $latest['rows_imported'],
         'updatedAt' => $latest['finished_at'] ?: $latest['started_at'],
-    ] : null]);
+    ] : null, 'canEditRecipes' => mrp_can_edit_recipes($mrpUser)]);
+}
+
+if ($method === 'GET' && $route === 'mrp/recipes/history') {
+    require_mrp_user($pdo); ensure_mrp_schema($pdo);
+    $rows = $pdo->query("SELECT l.recipe_key, l.before_json, l.after_json, l.changed_at, COALESCE(NULLIF(u.full_name, ''), u.username, 'Sistema') AS changed_by
+        FROM mrp_recipe_change_log l LEFT JOIN users u ON u.id=l.changed_by ORDER BY l.changed_at DESC, l.id DESC LIMIT 50")->fetchAll();
+    $history = array_map(static function (array $row): array {
+        $before = $row['before_json'] ? json_decode((string) $row['before_json'], true) : null;
+        $after = json_decode((string) $row['after_json'], true) ?: [];
+        return ['recipe' => $after['recipe'] ?? $row['recipe_key'], 'changedBy' => $row['changed_by'], 'changedAt' => $row['changed_at'], 'previousCost' => $before['costPerUnit'] ?? null, 'currentCost' => $after['costPerUnit'] ?? null, 'components' => $after['components'] ?? 0];
+    }, $rows);
+    json_response(['ok' => true, 'history' => $history]);
+}
+
+if ($method === 'GET' && $route === 'purchase-costs/catalog') {
+    $user = require_user($pdo, ['administracion', 'vendedora', 'supervisora', 'compras']); ensure_mrp_schema($pdo);
+    if (!mrp_can_register_production_purchase($user)) json_response(['ok' => false, 'error' => 'Solo Yamila y Valentina de Villa Mitre pueden cargar compras de producción.'], 403);
+    $latest = $pdo->query("SELECT payload_json FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
+    $snapshot = mrp_apply_recipe_overrides($pdo, json_decode((string) $latest, true) ?: []);
+    $inputs = array_map(static fn (array $input): array => ['key' => mrp_key($input['item'] ?? ''), 'name' => (string) ($input['item'] ?? ''), 'unit' => (string) ($input['unit'] ?? $input['stockUnit'] ?? 'unidad'), 'unitCost' => $input['unitCost'] ?? null], $snapshot['inputs'] ?? []);
+    usort($inputs, static fn (array $a, array $b): int => strnatcasecmp($a['name'], $b['name']));
+    $history = $pdo->query("SELECT h.*, COALESCE(NULLIF(u.full_name,''),u.username) AS loaded_by_name FROM mrp_input_cost_history h LEFT JOIN users u ON u.id=h.loaded_by ORDER BY h.created_at DESC, h.id DESC LIMIT 200")->fetchAll();
+    $orders = $pdo->query("SELECT id, source_order_id, item_name, provider_name, unit, quantity, status FROM mrp_purchase_orders WHERE status IN ('Por pedir','Pedido','Recibido') ORDER BY created_at DESC LIMIT 300")->fetchAll();
+    json_response(['ok' => true, 'inputs' => $inputs, 'history' => $history, 'orders' => $orders, 'canLoad' => true]);
+}
+
+if ($method === 'POST' && $route === 'purchase-costs') {
+    $user = require_user($pdo, ['administracion', 'vendedora', 'supervisora', 'compras']); ensure_mrp_schema($pdo);
+    if (!mrp_can_register_production_purchase($user)) json_response(['ok' => false, 'error' => 'Solo Yamila y Valentina de Villa Mitre pueden cargar compras de producción.'], 403);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    $body = request_body(); $provider = mrp_clean_text($body['provider'] ?? '', 190); $invoice = mrp_clean_text($body['invoice'] ?? '', 100); $date = mrp_clean_text($body['purchaseDate'] ?? '', 10); $paymentMethod = mrp_clean_text($body['paymentMethod'] ?? '', 60); $lines = $body['lines'] ?? [];
+    if ($provider === '' || $invoice === '' || !preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $date) || !is_array($lines) || count($lines) < 1 || count($lines) > 100) json_response(['ok' => false, 'error' => 'Indicá fecha, proveedor, factura y al menos un insumo válido.'], 422);
+    $latest = $pdo->query("SELECT payload_json FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetchColumn(); $base = json_decode((string) $latest, true) ?: [];
+    $known = []; foreach (($base['inputs'] ?? []) as $input) $known[mrp_key($input['item'] ?? '')] = $input;
+    $clean = []; foreach ($lines as $line) { $key = mrp_key($line['inputKey'] ?? ''); $quantity = (float) ($line['quantity'] ?? 0); $cost = (float) ($line['unitCost'] ?? 0); $expectedQuantity = ($line['expectedQuantity'] ?? '') === '' ? null : (float) $line['expectedQuantity']; $expectedCost = ($line['expectedUnitCost'] ?? '') === '' ? null : (float) $line['expectedUnitCost']; $orderReference = mrp_clean_text($line['sourceOrderReference'] ?? '', 100); $observations = mrp_clean_text($line['observations'] ?? '', 1000); if (!isset($known[$key]) || !is_finite($quantity) || $quantity <= 0 || !is_finite($cost) || $cost <= 0 || ($expectedQuantity !== null && (!is_finite($expectedQuantity) || $expectedQuantity < 0)) || ($expectedCost !== null && (!is_finite($expectedCost) || $expectedCost <= 0))) json_response(['ok' => false, 'error' => 'Cada línea debe usar un insumo válido, cantidad y costo positivos; los valores esperados deben ser válidos.'], 422); $clean[] = [$key, $quantity, $cost, $expectedQuantity, $expectedCost, $orderReference ?: null, $observations ?: null]; }
+    $batch = sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0,65535), mt_rand(0,65535), mt_rand(0,65535), mt_rand(0,65535), mt_rand(16384,20479), mt_rand(0,65535), mt_rand(0,65535), mt_rand(0,65535)); $warnings = [];
+    $pdo->beginTransaction(); try { foreach ($clean as [$key, $quantity, $cost, $expectedQuantity, $expectedCost, $orderReference, $observations]) { $previousStmt=$pdo->prepare('SELECT unit_cost FROM mrp_input_cost_overrides WHERE input_key=?'); $previousStmt->execute([$key]); $previous=$previousStmt->fetchColumn(); if ($previous === false) $previous=$known[$key]['unitCost'] ?? null; $previous=$previous === null ? null : (float)$previous; $warning=$previous && ($cost/$previous >= 2 || $cost/$previous <= .5); if ($warning) $warnings[]=$known[$key]['item'] ?? $key; $unit=mrp_clean_text($known[$key]['unit'] ?? $known[$key]['stockUnit'] ?? 'unidad',40); $differences=[]; if ($expectedQuantity !== null && abs($quantity-$expectedQuantity) > 0.0001) $differences[]='cantidad real distinta a la solicitada'; if ($expectedCost !== null && abs($cost-$expectedCost) > 0.0001) $differences[]='precio real distinto al previsto'; $validation = $expectedQuantity === null && $expectedCost === null ? 'Sin referencia' : ($differences ? 'Con diferencia' : 'Validada'); $reason = $differences ? implode('; ', $differences) : null; $pdo->prepare('INSERT INTO mrp_input_cost_history (batch_id,input_key,input_name,unit,quantity,expected_quantity,previous_unit_cost,expected_unit_cost,new_unit_cost,provider_name,invoice_number,source_order_reference,payment_method,purchase_date,variation_warning,validation_status,difference_reason,observations,loaded_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([$batch,$key,$known[$key]['item'] ?? $key,$unit,$quantity,$expectedQuantity,$previous,$expectedCost,$cost,$provider,$invoice,$orderReference,$paymentMethod ?: null,$date,$warning?1:0,$validation,$reason,$observations,$user['id']]); $pdo->prepare('INSERT INTO mrp_input_cost_overrides (input_key,unit_cost,updated_by) VALUES (?,?,?) ON DUPLICATE KEY UPDATE unit_cost=VALUES(unit_cost),updated_by=VALUES(updated_by),updated_at=NOW()')->execute([$key,$cost,$user['id']]); } $pdo->prepare('INSERT INTO mrp_recipe_review_state (id,required_review,recipe_key,changed_by,changed_at) VALUES (1,1,?,?,NOW()) ON DUPLICATE KEY UPDATE required_review=1,recipe_key=VALUES(recipe_key),changed_by=VALUES(changed_by),changed_at=NOW()')->execute(['costos-de-insumos',$user['id']]); audit($pdo,(int)$user['id'],'production_purchase_loaded','factura='.$invoice.'; lote='.$batch); $pdo->commit(); } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+    json_response(['ok'=>true,'batchId'=>$batch,'warnings'=>$warnings]);
+}
+
+if ($method === 'PUT' && preg_match('#^mrp/recipes/([a-z0-9 -]+)$#i', $route, $matches)) {
+    $mrpUser = require_mrp_user($pdo);
+    if (!mrp_can_edit_recipes($mrpUser)) json_response(['ok' => false, 'error' => 'Solo Jhaiber o Gerencia pueden modificar recetas.'], 403);
+    ensure_mrp_schema($pdo);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    $body = request_body(); $key = mrp_key(rawurldecode($matches[1]));
+    $name = mrp_clean_text($body['recipe'] ?? '', 190); $yield = (float) ($body['yield'] ?? 0); $items = $body['items'] ?? [];
+    if ($key === '' || $name === '' || !is_finite($yield) || $yield <= 0 || !is_array($items) || count($items) < 1 || count($items) > 100) json_response(['ok' => false, 'error' => 'Indicá receta, rendimiento y al menos un componente válido.'], 422);
+    $cleanItems = [];
+    foreach ($items as $line) {
+        $ingredient = mrp_clean_text($line['ingredient'] ?? '', 190); $quantity = (float) ($line['quantity'] ?? 0); $unit = mrp_clean_text($line['unit'] ?? '', 40);
+        if ($ingredient === '' || $unit === '' || !is_finite($quantity) || $quantity <= 0) json_response(['ok' => false, 'error' => 'Cada componente requiere insumo, cantidad y unidad válidos.'], 422);
+        $cleanItems[] = ['sourceLine' => count($cleanItems) + 1, 'ingredient' => $ingredient, 'quantity' => $quantity, 'unit' => $unit, 'yield' => $yield, 'perUnit' => $quantity / $yield, 'expectedPerUnit' => $quantity / $yield, 'type' => mrp_clean_text($line['type'] ?? 'Insumo', 80), 'dictionaryCheck' => '', 'unitCheck' => ''];
+    }
+    $latestPayload = $pdo->query("SELECT payload_json FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
+    $latestData = json_decode((string) $latestPayload, true) ?: []; $inputCosts = []; $recipeCosts = [];
+    foreach (($latestData['inputs'] ?? []) as $input) $inputCosts[mrp_key($input['item'] ?? '')] = $input['unitCost'] ?? null;
+    foreach (mrp_apply_recipe_overrides($pdo, $latestData)['recipes'] ?? [] as $known) $recipeCosts[mrp_key($known['recipe'] ?? '')] = $known['costPerUnit'] ?? null;
+    $cost = 0.0; $missing = [];
+    foreach ($cleanItems as $item) { $componentKey = mrp_key($item['ingredient']); $componentCost = strpos(mrp_lower($item['type']), 'subreceta') !== false ? ($recipeCosts[$componentKey] ?? null) : ($inputCosts[$componentKey] ?? null); if ($componentCost === null || (float) $componentCost <= 0) $missing[] = $item['ingredient']; else $cost += $item['perUnit'] * (float) $componentCost; }
+    $recipe = ['sourceKey' => $key, 'recipe' => $name, 'yield' => $yield, 'components' => count($cleanItems), 'costPerUnit' => $missing ? null : round($cost, 4), 'costStatus' => $missing ? 'Pendiente de costo' : 'Calculado', 'missingCosts' => array_values(array_unique($missing)), 'items' => $cleanItems];
+    $old = $pdo->prepare('SELECT recipe_json FROM mrp_recipe_overrides WHERE recipe_key=?'); $old->execute([$key]); $before = $old->fetchColumn();
+    $json = json_encode($recipe, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('INSERT INTO mrp_recipe_overrides (recipe_key,recipe_json,updated_by) VALUES (?,?,?) ON DUPLICATE KEY UPDATE recipe_json=VALUES(recipe_json),updated_by=VALUES(updated_by),updated_at=NOW()')->execute([$key, $json, $mrpUser['id']]);
+        $pdo->prepare('INSERT INTO mrp_recipe_change_log (recipe_key,before_json,after_json,changed_by) VALUES (?,?,?,?)')->execute([$key, $before ?: null, $json, $mrpUser['id']]);
+        $pdo->prepare('INSERT INTO mrp_recipe_review_state (id,required_review,recipe_key,changed_by,changed_at) VALUES (1,1,?,?,NOW()) ON DUPLICATE KEY UPDATE required_review=1,recipe_key=VALUES(recipe_key),changed_by=VALUES(changed_by),changed_at=NOW()')->execute([$key, $mrpUser['id']]);
+        audit($pdo, (int) $mrpUser['id'], 'mrp_recipe_saved', $key); $pdo->commit();
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+    json_response(['ok' => true, 'recipe' => $recipe]);
 }
 
 if ($method === 'POST' && $route === 'mrp/sync') {
@@ -211,7 +320,43 @@ if ($method === 'GET' && $route === 'mrp/operations') {
     ensure_mrp_schema($pdo);
     $orders = $pdo->query("SELECT o.*, COALESCE(SUM(r.quantity_received),0) AS received_quantity FROM mrp_purchase_orders o LEFT JOIN mrp_receipts r ON r.purchase_order_id=o.id GROUP BY o.id ORDER BY o.created_at DESC LIMIT 200")->fetchAll();
     $controls = $pdo->query("SELECT * FROM mrp_weekly_controls ORDER BY updated_at DESC LIMIT 200")->fetchAll();
-    json_response(['ok' => true, 'orders' => $orders, 'controls' => $controls]);
+    $stocks = $pdo->query("SELECT s.*, COALESCE(NULLIF(u.full_name,''),u.username) AS counted_by_name FROM mrp_input_stock s LEFT JOIN users u ON u.id=s.counted_by ORDER BY s.input_name LIMIT 500")->fetchAll();
+    json_response(['ok' => true, 'orders' => $orders, 'controls' => $controls, 'stocks' => $stocks, 'canCountStock' => mrp_can_count_stock(require_mrp_user($pdo))]);
+}
+
+if ($method === 'POST' && $route === 'mrp/stock-counts') {
+    $mrpUser = require_mrp_user($pdo);
+    if (!mrp_can_count_stock($mrpUser)) json_response(['ok' => false, 'error' => 'Solo Betzi o Administración pueden actualizar el stock real.'], 403);
+    ensure_mrp_schema($pdo);
+    $body = request_body();
+    $key = mrp_clean_text($body['inputKey'] ?? '', 190);
+    $name = mrp_clean_text($body['inputName'] ?? '', 190);
+    $unit = mrp_clean_text($body['unit'] ?? '', 40);
+    $actual = (float) ($body['actualQuantity'] ?? -1);
+    $notes = mrp_clean_text($body['notes'] ?? '', 1000);
+    if ($key === '' || $name === '' || $unit === '' || !is_finite($actual) || $actual < 0) json_response(['ok' => false, 'error' => 'Completá insumo, unidad y stock real válido.'], 422);
+    $previousStmt = $pdo->prepare('SELECT actual_quantity FROM mrp_input_stock WHERE input_key=?'); $previousStmt->execute([$key]);
+    $previous = $previousStmt->fetchColumn();
+    $pdo->beginTransaction(); try {
+        $pdo->prepare('INSERT INTO mrp_input_stock (input_key,input_name,unit,actual_quantity,counted_by) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE input_name=VALUES(input_name),unit=VALUES(unit),actual_quantity=VALUES(actual_quantity),counted_by=VALUES(counted_by),counted_at=NOW()')->execute([$key,$name,$unit,$actual,$mrpUser['id']]);
+        $pdo->prepare('INSERT INTO mrp_input_stock_history (input_key,input_name,unit,previous_quantity,actual_quantity,notes,counted_by) VALUES (?,?,?,?,?,?,?)')->execute([$key,$name,$unit,$previous === false ? null : $previous,$actual,$notes ?: null,$mrpUser['id']]);
+        audit($pdo, (int) $mrpUser['id'], 'mrp_actual_stock_counted', $key . '=' . $actual . ' ' . $unit); $pdo->commit();
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+    json_response(['ok' => true]);
+}
+
+if ($method === 'POST' && $route === 'mrp/production-runs') {
+    $mrpUser = require_mrp_user($pdo); ensure_mrp_schema($pdo); $body = request_body();
+    $week = mrp_clean_text($body['weekKey'] ?? '', 20); $recipeKey = mrp_clean_text($body['recipeKey'] ?? '', 190); $quantity = (float) ($body['quantityProduced'] ?? 0); $notes = mrp_clean_text($body['notes'] ?? '', 1000);
+    if (!preg_match('/^\d{4}-S\d{1,2}$/', $week) || $recipeKey === '' || !is_finite($quantity) || $quantity <= 0) json_response(['ok'=>false,'error'=>'Indicá semana, receta y producción válida.'],422);
+    $latest = $pdo->query("SELECT payload_json FROM mrp_sync_runs WHERE status='completed' ORDER BY id DESC LIMIT 1")->fetchColumn();
+    $snapshot = $latest ? mrp_apply_recipe_overrides($pdo, json_decode((string)$latest,true) ?: []) : []; $recipe = null;
+    foreach (($snapshot['recipes'] ?? []) as $row) if (($row['sourceKey'] ?? mrp_key($row['recipe'] ?? '')) === $recipeKey) { $recipe=$row; break; }
+    if (!$recipe) json_response(['ok'=>false,'error'=>'Receta no encontrada.'],404);
+    $pdo->beginTransaction(); try {
+        foreach (($recipe['items'] ?? []) as $item) { if (strpos(mrp_lower((string)($item['type'] ?? '')), 'subreceta') !== false) continue; $key=mrp_key($item['ingredient'] ?? ''); $used=(float)($item['perUnit'] ?? 0)*$quantity; if ($key==='' || $used<=0) continue; $st=$pdo->prepare('SELECT actual_quantity,input_name,unit FROM mrp_input_stock WHERE input_key=? FOR UPDATE'); $st->execute([$key]); $current=$st->fetch(); if (!$current) continue; $after=max(0,(float)$current['actual_quantity']-$used); $pdo->prepare('UPDATE mrp_input_stock SET actual_quantity=?,counted_by=?,counted_at=NOW() WHERE input_key=?')->execute([$after,$mrpUser['id'],$key]); $pdo->prepare('INSERT INTO mrp_input_stock_history (input_key,input_name,unit,previous_quantity,actual_quantity,notes,counted_by) VALUES (?,?,?,?,?,?,?)')->execute([$key,$current['input_name'],$current['unit'],$current['actual_quantity'],$after,'Consumo producción: '.($recipe['recipe'] ?? $recipeKey),$mrpUser['id']]); }
+        $pdo->prepare('INSERT INTO mrp_production_runs (week_key,recipe_key,recipe_name,quantity_produced,notes,produced_by) VALUES (?,?,?,?,?,?)')->execute([$week,$recipeKey,$recipe['recipe'],$quantity,$notes ?: null,$mrpUser['id']]); audit($pdo,(int)$mrpUser['id'],'mrp_production_confirmed',$recipeKey.'='.$quantity); $pdo->commit();
+    } catch(Throwable $error){if($pdo->inTransaction())$pdo->rollBack();throw $error;} json_response(['ok'=>true],201);
 }
 
 if ($method === 'POST' && $route === 'mrp/orders') {
@@ -324,6 +469,26 @@ if ($method === 'POST' && $route === 'auth/logout') {
 if ($method === 'GET' && $route === 'auth/me') {
     $user = require_user($pdo);
     json_response(['ok' => true, 'user' => public_user($user, $config)]);
+}
+
+// Registra accesos a áreas sensibles sin convertir cada actualización de página
+// en ruido. La misma persona queda asentada una vez por módulo cada 30 minutos.
+if ($method === 'POST' && $route === 'activity/module-opened') {
+    $user = require_user($pdo);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) {
+        json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    }
+    $module = trim((string) (request_body()['module'] ?? ''));
+    $allowedModules = ['MRP semanal', 'Recetas y costos', 'Compras de producción', 'Reportes'];
+    if (!in_array($module, $allowedModules, true)) {
+        json_response(['ok' => false, 'error' => 'Módulo inválido.'], 422);
+    }
+    $recent = $pdo->prepare("SELECT 1 FROM audit_log WHERE user_id = ? AND event_type = 'module_opened' AND event_detail = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE) LIMIT 1");
+    $recent->execute([(int) $user['id'], $module]);
+    if (!$recent->fetchColumn()) {
+        audit($pdo, (int) $user['id'], 'module_opened', $module);
+    }
+    json_response(['ok' => true]);
 }
 
 if ($method === 'POST' && $route === 'assistant/chat') {
@@ -960,7 +1125,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar', 'mrp'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion'], true))));
     $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : $existing['mfa_required'];
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
@@ -1115,11 +1280,14 @@ if ($method === 'POST' && $route === 'admin/users') {
     $reportPermissions = is_array($body['reportPermissions'] ?? null) ? array_values(array_filter($body['reportPermissions'], 'is_string')) : null;
     $actionPermissions = is_array($body['actionPermissions'] ?? null) ? array_values(array_filter($body['actionPermissions'], 'is_string')) : null;
     $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : null;
-    if (!valid_username($username)
-        || $fullName === ''
-        || !in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)
-        || !valid_password($temporaryPassword) || !$locations) {
-        json_response(['ok' => false, 'error' => 'Los datos del usuario no son válidos'], 422);
+    $fieldErrors = [];
+    if ($fullName === '') $fieldErrors['fullName'] = 'Ingresá nombre y apellido.';
+    if (!valid_username($username)) $fieldErrors['username'] = 'Usá nombre.apellido o un correo @lartisantaller.com.';
+    if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) $fieldErrors['role'] = 'Seleccioná un cargo válido.';
+    if (!$locations) $fieldErrors['locations'] = 'Seleccioná al menos un local o Todos los locales.';
+    if (!valid_password($temporaryPassword)) $fieldErrors['temporaryPassword'] = 'Debe tener 8 o más caracteres, mayúscula, minúscula, número y símbolo.';
+    if ($fieldErrors) {
+        json_response(['ok' => false, 'error' => 'Revisá los campos marcados.', 'fields' => $fieldErrors], 422);
     }
     $stmt = $pdo->prepare(
         'INSERT INTO users (username, full_name, password_hash, role, assigned_location, assigned_locations, access_all_locations, report_permissions, action_permissions, mfa_required)
@@ -1129,7 +1297,7 @@ if ($method === 'POST' && $route === 'admin/users') {
         $stmt->execute([$username, $fullName, password_hash($temporaryPassword, PASSWORD_DEFAULT), $role, $locations[0], json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations, $reportPermissions === null ? null : json_encode($reportPermissions, JSON_UNESCAPED_UNICODE), $actionPermissions === null ? null : json_encode($actionPermissions, JSON_UNESCAPED_UNICODE), $mfaRequired]);
     } catch (PDOException $error) {
         if ((string) $error->getCode() === '23000') {
-            json_response(['ok' => false, 'error' => 'Ese nombre de usuario ya existe'], 409);
+            json_response(['ok' => false, 'error' => 'Ese nombre de usuario ya existe', 'fields' => ['username' => 'Ese usuario ya está en uso.']], 409);
         }
         throw $error;
     }

@@ -46,4 +46,18 @@ return [
         'api_key' => 'CONFIGURAR_EN_ARCHIVO_PRIVADO',
         'model' => 'gpt-5.6-luna',
     ],
+    // Los archivos firmados de ARCA no van aquí ni dentro de public_html.
+    // En producción se completan en lartisan-arca-config.php, fuera del webroot.
+    'arca' => [
+        'enabled' => false,
+        'environment' => 'homologacion',
+        'cuit' => '30716293471',
+        'certificate_path' => '',
+        'private_key_path' => '',
+        'points_of_sale' => [
+            'Recoleta' => 20,
+            'Congreso' => 21,
+            'Maure' => 8,
+        ],
+    ],
 ];

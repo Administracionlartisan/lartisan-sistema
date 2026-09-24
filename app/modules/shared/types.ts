@@ -186,6 +186,7 @@ export type ApiUser = {
 
 export type ApiPayload = {
   error?: string;
+  fields?: Record<string, string>;
   message?: string;
   user: ApiUser;
   users?: ApiUser[];
