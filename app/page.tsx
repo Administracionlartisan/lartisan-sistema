@@ -626,13 +626,18 @@ export default function Home() {
         method: "POST",
         credentials: "include",
       });
-      const data = (await response.json()) as { ok?: boolean; ticketExpiresAt?: string; checkedPointOfSale?: number; lastVoucherNumber?: number; error?: string };
+      const data = (await response.json()) as {
+        ok?: boolean;
+        ticketExpiresAt?: string;
+        checks?: Array<{ site: string; pointOfSale: number; voucherLabel: string; lastVoucherNumber: number }>;
+        error?: string;
+      };
       if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo validar ARCA.");
       const expiry = data.ticketExpiresAt ? new Date(data.ticketExpiresAt).toLocaleString("es-AR") : "vigencia informada por ARCA";
-      const sequence = typeof data.lastVoucherNumber === "number" && data.checkedPointOfSale
-        ? ` Último comprobante informado para el punto ${String(data.checkedPointOfSale).padStart(5, "0")}: ${data.lastVoucherNumber}.`
-        : "";
-      setArcaTestMessage(`Conexión de homologación validada. Ticket vigente hasta ${expiry}.${sequence} No se emitió ningún comprobante.`);
+      const sequence = (data.checks || []).map((check) =>
+        `${check.site} ${String(check.pointOfSale).padStart(5, "0")} · ${check.voucherLabel}: ${check.lastVoucherNumber}`,
+      ).join(" | ");
+      setArcaTestMessage(`Conexión de homologación validada. Ticket vigente hasta ${expiry}.${sequence ? ` Última numeración: ${sequence}.` : ""} No se emitió ningún comprobante.`);
     } catch (error) {
       setArcaTestMessage(error instanceof Error ? error.message : "No se pudo validar ARCA en homologación.");
     } finally {

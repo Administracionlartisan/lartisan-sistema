@@ -59,15 +59,27 @@ if ($method === 'POST' && $route === 'admin/arca/homologation-test') {
     try {
         $ticket = arca_wsaa_request_ticket($config);
         $points = arca_wsfe_configuration_status($config)['pointsOfSale'];
-        $firstPoint = (int) (reset($points) ?: 0);
-        if ($firstPoint < 1) throw new RuntimeException('No hay puntos de venta ARCA configurados.');
-        // Consulta de lectura: valida el segundo servicio fiscal, sin CAE.
-        $lastVoucherNumber = arca_wsfe_last_voucher_number($config, $firstPoint, 6);
+        if (!$points) throw new RuntimeException('No hay puntos de venta ARCA configurados.');
+        // Consultas de lectura: validan todos los puntos configurados para
+        // Factura A y B. No solicitan CAE ni reservan numeración.
+        $checks = [];
+        foreach ($points as $site => $configuredPoint) {
+            $pointOfSale = (int) $configuredPoint;
+            foreach ([1 => 'Factura A', 6 => 'Factura B'] as $voucherType => $label) {
+                $checks[] = [
+                    'site' => (string) $site,
+                    'pointOfSale' => $pointOfSale,
+                    'voucherType' => $voucherType,
+                    'voucherLabel' => $label,
+                    'lastVoucherNumber' => arca_wsfe_last_voucher_number($config, $pointOfSale, $voucherType),
+                ];
+            }
+        }
         // El ticket se prueba y se descarta. Persistir token/sign requiere una
         // clave de cifrado separada que todavía no se configuró en el servidor.
         unset($ticket['token'], $ticket['sign']);
         audit($pdo, (int) $user['id'], 'arca_wsaa_homologation_verified', 'wsfe');
-        json_response(['ok' => true, 'environment' => 'homologacion', 'ticketExpiresAt' => $ticket['expiresAt'], 'checkedPointOfSale' => $firstPoint, 'lastVoucherNumber' => $lastVoucherNumber]);
+        json_response(['ok' => true, 'environment' => 'homologacion', 'ticketExpiresAt' => $ticket['expiresAt'], 'checks' => $checks]);
     } catch (Throwable $error) {
         // Esta ruta está limitada a Administración y no emite comprobantes. Mostrar
         // la causa operativa permite corregir certificados/configuración sin tener
