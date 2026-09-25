@@ -238,14 +238,28 @@ function arca_wsfe_last_voucher_number(array $config, int $pointOfSale, int $vou
     curl_setopt_array($handle, [
         CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 25, CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_HTTPHEADER => ['Content-Type: text/xml; charset=utf-8', 'SOAPAction: ""'],
+        CURLOPT_HTTPHEADER => ['Content-Type: text/xml; charset=utf-8', 'SOAPAction: "http://ar.gov.afip.dif.FEV1/FECompUltimoAutorizado"'],
     ]);
     $response = curl_exec($handle);
     $statusCode = (int) curl_getinfo($handle, CURLINFO_HTTP_CODE);
     $curlError = curl_error($handle);
     curl_close($handle);
     if (!is_string($response) || $statusCode < 200 || $statusCode >= 300) {
-        throw new RuntimeException('WSFE de homologación no respondió correctamente' . ($curlError !== '' ? ': ' . $curlError : '.'));
+        // Conservamos un diagnóstico útil para homologación sin devolver el XML
+        // completo (podría contener datos de autenticación o infraestructura).
+        $detail = '';
+        if (is_string($response) && $response !== '') {
+            if (preg_match('/<(?:\w+:)?faultstring[^>]*>(.*?)<\/(?:\w+:)?faultstring>/is', $response, $fault)
+                || preg_match('/<(?:\w+:)?ErrMsg[^>]*>(.*?)<\/(?:\w+:)?ErrMsg>/is', $response, $fault)) {
+                $detail = html_entity_decode(strip_tags($fault[1]), ENT_QUOTES | ENT_XML1, 'UTF-8');
+            }
+        }
+        $detail = trim(preg_replace('/\s+/', ' ', $detail) ?? '');
+        if (strlen($detail) > 240) $detail = substr($detail, 0, 240) . '…';
+        $suffix = 'HTTP ' . $statusCode;
+        if ($curlError !== '') $suffix .= ' · ' . $curlError;
+        elseif ($detail !== '') $suffix .= ' · ' . $detail;
+        throw new RuntimeException('WSFE de homologación no respondió correctamente: ' . $suffix);
     }
     if (!preg_match('/<CbteNro>(\d+)<\/CbteNro>/', $response, $matches)) {
         $detail = preg_match('/<ErrMsg>(.*?)<\/ErrMsg>/', $response, $error) ? html_entity_decode(strip_tags($error[1]), ENT_QUOTES | ENT_XML1, 'UTF-8') : '';

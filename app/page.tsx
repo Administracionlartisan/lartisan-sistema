@@ -185,7 +185,7 @@ export default function Home() {
   const [pendingSync, setPendingSync] = useState(0);
   const [backupFrequency, setBackupFrequency] = useState("Dos veces por semana · lunes y jueves 21:00");
   const [retentionYears, setRetentionYears] = useState(7);
-  const [backupStatus, setBackupStatus] = useState("Pendiente de conectar Drive y correo.");
+  const [backupStatus, setBackupStatus] = useState("El estado del respaldo se verifica automáticamente desde el servidor.");
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
   const [arcaTesting, setArcaTesting] = useState(false);
@@ -500,20 +500,25 @@ export default function Home() {
           await response.json();
           data = { database: "Disponible", users: { active: managedUsers.filter((item) => item.active).length, total: managedUsers.length } };
         }
-        if (active) setSystemHealth({
-          api: "Disponible",
-          database: data.database,
-          activeUsers: data.users?.active,
-          totalUsers: data.users?.total,
-          freeSpaceMb: typeof data.space === "number" ? Math.round(data.space / 1024 / 1024) : null,
-          databaseLatencyMs: data.database_latency_ms,
-          events24h: data.events_24h,
-          failedSyncs24h: data.failed_syncs_24h,
-          driveConnected: data.drive_connected,
-          lastBackup: data.last_backup,
-          alerts: data.alerts || [],
-          checkedAt: new Date().toLocaleString("es-AR"),
-        });
+        if (active) {
+          setSystemHealth({
+            api: "Disponible",
+            database: data.database,
+            activeUsers: data.users?.active,
+            totalUsers: data.users?.total,
+            freeSpaceMb: typeof data.space === "number" ? Math.round(data.space / 1024 / 1024) : null,
+            databaseLatencyMs: data.database_latency_ms,
+            events24h: data.events_24h,
+            failedSyncs24h: data.failed_syncs_24h,
+            driveConnected: data.drive_connected,
+            lastBackup: data.last_backup,
+            alerts: data.alerts || [],
+            checkedAt: new Date().toLocaleString("es-AR"),
+          });
+          if (data.last_backup?.status === "verified") {
+            setBackupStatus("Último respaldo externo verificado correctamente.");
+          }
+        }
       } catch {
         if (active) setSystemHealth({ api: "Sin respuesta", checkedAt: new Date().toLocaleString("es-AR") });
       }
@@ -621,10 +626,13 @@ export default function Home() {
         method: "POST",
         credentials: "include",
       });
-      const data = (await response.json()) as { ok?: boolean; ticketExpiresAt?: string; error?: string };
+      const data = (await response.json()) as { ok?: boolean; ticketExpiresAt?: string; checkedPointOfSale?: number; lastVoucherNumber?: number; error?: string };
       if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo validar ARCA.");
       const expiry = data.ticketExpiresAt ? new Date(data.ticketExpiresAt).toLocaleString("es-AR") : "vigencia informada por ARCA";
-      setArcaTestMessage(`Conexión de homologación validada. Ticket vigente hasta ${expiry}. No se emitió ningún comprobante.`);
+      const sequence = typeof data.lastVoucherNumber === "number" && data.checkedPointOfSale
+        ? ` Último comprobante informado para el punto ${String(data.checkedPointOfSale).padStart(5, "0")}: ${data.lastVoucherNumber}.`
+        : "";
+      setArcaTestMessage(`Conexión de homologación validada. Ticket vigente hasta ${expiry}.${sequence} No se emitió ningún comprobante.`);
     } catch (error) {
       setArcaTestMessage(error instanceof Error ? error.message : "No se pudo validar ARCA en homologación.");
     } finally {
@@ -4939,7 +4947,7 @@ export default function Home() {
                   </label>
                   <button
                     onClick={() => {
-                      setBackupStatus(`Respaldo ${backupFrequency.toLowerCase()} preparado: se enviará a Drive y al correo autorizado al conectar el backend.`);
+                      setBackupStatus(`Política ${backupFrequency.toLowerCase()} registrada. El estado real se confirma en el monitoreo.`);
                       recordAudit("Política de respaldo actualizada", `${backupFrequency} · retención ${retentionYears} años`);
                     }}
                     className="mt-4 rounded bg-[#183a67] px-4 py-2 font-bold text-white"
@@ -4954,7 +4962,7 @@ export default function Home() {
                     La recuperación se realizará desde una copia verificada de la base de datos, respaldos en Drive y el correo designado. Se probará antes de habilitar el uso diario.
                   </p>
                   <p className="mt-4 rounded bg-[#fff5d8] p-3 text-sm">
-                    Pendiente técnico: conectar D1/base de datos, Drive y envío de correo. Esta pantalla ya deja definida la política operativa.
+                    Para recuperar, primero se identifica la última copia verificada y se prueba en un entorno separado. Las credenciales de respaldo no se muestran en esta pantalla.
                   </p>
                 </div>
                 <div className="rounded-2xl border bg-white p-5 lg:col-span-2">
