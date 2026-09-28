@@ -1,0 +1,1 @@
+import*as e from"node:async_hooks";import{AsyncLocalStorage as t}from"node:async_hooks";globalThis.AsyncLocalStorage=e.AsyncLocalStorage;var n=globalThis,r=class{getStore(){}run(e,t,...n){return t(...n)}exit(e,...t){return e(...t)}enterWith(e){}disable(){}};function i(e){let i=Symbol.for(e);return n[i]??=typeof t==`function`?new t:new r}export{i as t};
