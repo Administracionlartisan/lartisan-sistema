@@ -190,6 +190,9 @@ export default function Home() {
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
   const [arcaTesting, setArcaTesting] = useState(false);
   const [arcaTestMessage, setArcaTestMessage] = useState("Pendiente de validación en producción.");
+  const [fiscalSales, setFiscalSales] = useState<Array<{ id: string; site: string; occurred_at: string; net_amount: number; invoice_type: string; customer_name: string; document_id?: number; fiscal_status?: string; voucher_number?: number; cae?: string }>>([]);
+  const [fiscalBusy, setFiscalBusy] = useState<string | null>(null);
+  const [fiscalMessage, setFiscalMessage] = useState("");
   const [persistedReportSales, setPersistedReportSales] = useState<Sale[] | null>(null);
   const [persistedReportPayments, setPersistedReportPayments] = useState<Payment[]>([]);
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRow[]>([]);
@@ -644,6 +647,53 @@ export default function Home() {
       setArcaTesting(false);
     }
   };
+  const loadFiscalSales = async () => {
+    if (user?.role !== "administracion") return;
+    try {
+      const response = await fetch(`${API_BASE}/admin/arca/eligible-sales`, { credentials: "include", cache: "no-store" });
+      const data = (await response.json()) as { sales?: typeof fiscalSales; error?: string };
+      if (!response.ok) throw new Error(data.error || "No se pudo cargar la cola fiscal.");
+      setFiscalSales(data.sales || []);
+    } catch (error) { setFiscalMessage(error instanceof Error ? error.message : "No se pudo cargar la cola fiscal."); }
+  };
+  const issueFiscalSale = async (sale: typeof fiscalSales[number]) => {
+    setFiscalBusy(sale.id); setFiscalMessage("");
+    try {
+      let documentId = sale.document_id;
+      if (!documentId || sale.fiscal_status === "rejected") {
+        const prepared = await fetch(`${API_BASE}/admin/arca/fiscal-documents/prepare`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ saleReference: sale.id }) });
+        const preparedData = (await prepared.json()) as { document?: { id?: number; status?: string }; error?: string };
+        if (!prepared.ok || !preparedData.document?.id) throw new Error(preparedData.error || "No se pudo preparar el comprobante.");
+        documentId = preparedData.document.id;
+        if (preparedData.document.status === "authorized") { setFiscalMessage("Ese comprobante ya fue autorizado por ARCA."); await loadFiscalSales(); return; }
+      }
+      if (!window.confirm(`Vas a solicitar a ARCA el CAE de ${sale.invoice_type} por ${money.format(sale.net_amount)} para ${sale.site}. Esta acción es fiscal y no se puede deshacer. ¿Confirmás la emisión?`)) { setFiscalMessage("Emisión cancelada. El comprobante queda preparado y no se informó a ARCA."); return; }
+      const issued = await fetch(`${API_BASE}/admin/arca/fiscal-documents/issue`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentId }) });
+      const issuedData = (await issued.json()) as { document?: { voucher_number?: number; cae?: string }; error?: string };
+      if (!issued.ok || !issuedData.document?.cae) throw new Error(issuedData.error || "ARCA no autorizó el comprobante.");
+      setFiscalMessage(`CAE autorizado: ${issuedData.document.cae} · comprobante ${String(issuedData.document.voucher_number).padStart(8, "0")}.`);
+      await loadFiscalSales();
+    } catch (error) { setFiscalMessage(error instanceof Error ? error.message : "No se pudo emitir el comprobante."); }
+    finally { setFiscalBusy(null); }
+  };
+  const prepareCreditNote = async (sale: typeof fiscalSales[number]) => {
+    if (!sale.document_id || sale.fiscal_status !== "authorized") return;
+    const amountText = window.prompt("Importe total de la nota de crédito (IVA incluido):", String(sale.net_amount)); if (amountText === null) return;
+    const reason = window.prompt("Motivo de la nota de crédito fiscal:"); if (!reason) return;
+    setFiscalBusy(sale.id); setFiscalMessage("");
+    try {
+      const prepared = await fetch(`${API_BASE}/admin/arca/fiscal-documents/credit-note/prepare`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceDocumentId: sale.document_id, amount: Number(amountText.replace(",", ".")), reason }) });
+      const data = (await prepared.json()) as { document?: { id?: number }; error?: string };
+      if (!prepared.ok || !data.document?.id) throw new Error(data.error || "No se pudo preparar la nota de crédito.");
+      if (!window.confirm(`Vas a solicitar a ARCA el CAE de una nota de crédito por ${amountText}. ¿Confirmás la emisión?`)) { setFiscalMessage("Nota de crédito preparada; no se informó a ARCA."); return; }
+      const issued = await fetch(`${API_BASE}/admin/arca/fiscal-documents/issue`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentId: data.document.id }) });
+      const issuedData = (await issued.json()) as { document?: { cae?: string; voucher_number?: number }; error?: string };
+      if (!issued.ok || !issuedData.document?.cae) throw new Error(issuedData.error || "ARCA no autorizó la nota de crédito.");
+      setFiscalMessage(`Nota de crédito autorizada: CAE ${issuedData.document.cae} · comprobante ${String(issuedData.document.voucher_number).padStart(8, "0")}.`); await loadFiscalSales();
+    } catch (error) { setFiscalMessage(error instanceof Error ? error.message : "No se pudo emitir la nota de crédito."); }
+    finally { setFiscalBusy(null); }
+  };
+  useEffect(() => { void loadFiscalSales(); }, [user?.id, user?.role]);
   const loadOperationalData = async () => {
     const response = await fetch(`${API_BASE}/operations/states`, {
       credentials: "include",
@@ -5009,6 +5059,27 @@ export default function Home() {
                       </button>
                     </div>
                     <p className="mt-3 text-sm text-slate-700">{arcaTestMessage}</p>
+                  </div>
+                  <div className="mt-4 rounded border border-[#d9d4c9] bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <b>Emisión fiscal ARCA</b>
+                        <p className="mt-1 text-sm text-slate-600">Prepará la venta y confirmá en pantalla antes de solicitar el CAE. Si ARCA no confirma una respuesta, queda bloqueada para conciliación: nunca se reintenta en automático.</p>
+                      </div>
+                      <button onClick={() => void loadFiscalSales()} className="rounded border px-3 py-1.5 text-sm font-bold">Actualizar cola</button>
+                    </div>
+                    {fiscalMessage && <p className="mt-3 rounded bg-[#f8fafc] p-3 text-sm text-slate-700">{fiscalMessage}</p>}
+                    <div className="mt-3 max-h-80 overflow-auto rounded border">
+                      {fiscalSales.length === 0 ? <p className="p-3 text-sm text-slate-600">No hay ventas A/B pendientes en los últimos registros sincronizados.</p> : fiscalSales.map((sale) => (
+                        <div key={sale.id} className="flex flex-wrap items-center justify-between gap-3 border-b p-3 last:border-b-0">
+                          <div className="text-sm"><b>{sale.site} · {sale.invoice_type}</b><br /><span>{sale.customer_name || "Consumidor final"} · {money.format(sale.net_amount)} · {new Date(sale.occurred_at).toLocaleString("es-AR")}</span><br /><span className="text-xs text-slate-500">{sale.fiscal_status === "authorized" ? `Autorizada · CAE ${sale.cae || ""}` : sale.fiscal_status === "requires_reconciliation" ? "Requiere conciliación: no reintentar" : sale.fiscal_status === "issuing" ? "Emisión en curso" : "Pendiente de emisión"}</span></div>
+                          <div className="flex flex-wrap gap-2">
+                            {sale.fiscal_status !== "authorized" && sale.fiscal_status !== "issuing" && sale.fiscal_status !== "requires_reconciliation" && <button disabled={fiscalBusy === sale.id} onClick={() => void issueFiscalSale(sale)} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{fiscalBusy === sale.id ? "Procesando…" : "Emitir con CAE"}</button>}
+                            {sale.fiscal_status === "authorized" && <button disabled={fiscalBusy === sale.id} onClick={() => void prepareCreditNote(sale)} className="rounded border px-3 py-2 text-sm font-bold disabled:opacity-50">Nota de crédito</button>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   {systemHealth.alerts && systemHealth.alerts.length > 0 ? (
                     <div className="mt-4 space-y-2">
