@@ -4,7 +4,9 @@ declare(strict_types=1);
 /* El navegador sólo identifica la venta. El servidor reconstruye importe,
  * cliente, punto y número. Si ARCA no confirma, no se reintenta a ciegas. */
 function arca_fiscal_document_type(string $invoiceType): int {
-    return match ($invoiceType) { 'Factura A' => 1, 'Factura B', 'Factura B electrónica' => 6, default => throw new InvalidArgumentException('El tipo de comprobante debe ser Factura A o Factura B.') };
+    if ($invoiceType === 'Factura A') return 1;
+    if ($invoiceType === 'Factura B' || $invoiceType === 'Factura B electrónica') return 6;
+    throw new InvalidArgumentException('El tipo de comprobante debe ser Factura A o Factura B.');
 }
 function arca_fiscal_amounts(float $total): array {
     $cents = (int) round($total * 100); if ($cents < 1) throw new InvalidArgumentException('El comprobante debe tener un importe mayor a cero.');
@@ -31,7 +33,12 @@ function arca_fiscal_lock(PDO $pdo, int $point, int $voucherType): string {
 }
 function arca_fiscal_unlock(PDO $pdo, string $name): void { try { $s = $pdo->prepare('SELECT RELEASE_LOCK(?)'); $s->execute([$name]); } catch (Throwable) {} }
 function arca_fiscal_doc_code(string $type): int { return $type === 'CUIT' ? 80 : ($type === 'DNI' ? 96 : 99); }
-function arca_fiscal_receiver_condition(string $condition): int { return match ($condition) { 'Responsable Inscripto' => 1, 'Exento' => 4, 'Monotributista' => 6, default => 5 }; }
+function arca_fiscal_receiver_condition(string $condition): int {
+    if ($condition === 'Responsable Inscripto') return 1;
+    if ($condition === 'Exento') return 4;
+    if ($condition === 'Monotributista') return 6;
+    return 5;
+}
 function arca_fiscal_cutover(array $config): ?string {
     $value = trim((string) (($config['arca']['issuance_start_at'] ?? '')));
     $date = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $value);

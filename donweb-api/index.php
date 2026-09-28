@@ -145,6 +145,7 @@ if ($method === 'GET' && $route === 'admin/arca/eligible-sales') {
     try {
         ensure_normalized_operations_schema($pdo);
         ensure_arca_wsfe_schema($pdo);
+        require_once __DIR__ . '/arca_fiscal_queue.php';
 
         // Esta consulta sólo usa columnas presentes desde la primera versión de
         // ambas tablas. Así la cola no queda fuera de servicio mientras el
