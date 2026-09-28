@@ -31,7 +31,7 @@ function arca_fiscal_lock(PDO $pdo, int $point, int $voucherType): string {
     $name = 'lartisan_arca_' . $point . '_' . $voucherType; $s = $pdo->prepare('SELECT GET_LOCK(?, 20)'); $s->execute([$name]);
     if ((int) $s->fetchColumn() !== 1) throw new RuntimeException('Hay otra emisión en curso para este punto de venta. Esperá unos segundos y volvé a revisar el estado.'); return $name;
 }
-function arca_fiscal_unlock(PDO $pdo, string $name): void { try { $s = $pdo->prepare('SELECT RELEASE_LOCK(?)'); $s->execute([$name]); } catch (Throwable) {} }
+function arca_fiscal_unlock(PDO $pdo, string $name): void { try { $s = $pdo->prepare('SELECT RELEASE_LOCK(?)'); $s->execute([$name]); } catch (Throwable $ignored) {} }
 function arca_fiscal_doc_code(string $type): int { return $type === 'CUIT' ? 80 : ($type === 'DNI' ? 96 : 99); }
 function arca_fiscal_receiver_condition(string $condition): int {
     if ($condition === 'Responsable Inscripto') return 1;
