@@ -154,7 +154,7 @@ if ($method === 'GET' && $route === 'admin/arca/eligible-sales') {
         // que no hace falta depender de document_kind para excluirlas.
         $cutover = arca_fiscal_cutover($config);
         if (!$cutover) json_response(['ok' => true, 'sales' => [], 'cutoverRequired' => true]);
-        $statement = $pdo->prepare("SELECT s.id,s.site,s.occurred_at,s.net_amount,s.invoice_type,s.customer_name,s.status,d.id AS document_id,d.status AS fiscal_status,d.voucher_number,d.cae FROM lartisan_sales s LEFT JOIN arca_fiscal_documents d ON CONVERT(d.sale_reference USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(s.id USING utf8mb4) COLLATE utf8mb4_unicode_ci WHERE s.status='activa' AND s.occurred_at >= ? AND s.invoice_type IN ('Factura A','Factura B','Factura B electrónica') ORDER BY s.occurred_at DESC LIMIT 50");
+        $statement = $pdo->prepare("SELECT s.id,s.site,s.occurred_at,s.net_amount,s.invoice_type,s.customer_name,s.status,d.id AS document_id,d.status AS fiscal_status,d.voucher_number,d.cae FROM lartisan_sales s LEFT JOIN arca_fiscal_documents d ON CAST(d.sale_reference AS BINARY) = CAST(s.id AS BINARY) WHERE s.status='activa' AND s.occurred_at >= ? AND s.invoice_type IN ('Factura A','Factura B','Factura B electrónica') ORDER BY s.occurred_at DESC LIMIT 50");
         $statement->execute([$cutover]);
         json_response(['ok' => true, 'sales' => $statement->fetchAll(), 'cutover' => $cutover]);
     } catch (Throwable $error) {
