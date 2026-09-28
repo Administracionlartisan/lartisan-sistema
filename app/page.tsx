@@ -189,7 +189,7 @@ export default function Home() {
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
   const [arcaTesting, setArcaTesting] = useState(false);
-  const [arcaTestMessage, setArcaTestMessage] = useState("Pendiente de validación en homologación.");
+  const [arcaTestMessage, setArcaTestMessage] = useState("Pendiente de validación en producción.");
   const [persistedReportSales, setPersistedReportSales] = useState<Sale[] | null>(null);
   const [persistedReportPayments, setPersistedReportPayments] = useState<Payment[]>([]);
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRow[]>([]);
@@ -637,9 +637,9 @@ export default function Home() {
       const sequence = (data.checks || []).map((check) =>
         `${check.site} ${String(check.pointOfSale).padStart(5, "0")} · ${check.voucherLabel}: ${check.lastVoucherNumber}`,
       ).join(" | ");
-      setArcaTestMessage(`Conexión de homologación validada. Ticket vigente hasta ${expiry}.${sequence ? ` Última numeración: ${sequence}.` : ""} No se emitió ningún comprobante.`);
+      setArcaTestMessage(`Conexión de producción validada. Ticket vigente hasta ${expiry}.${sequence ? ` Última numeración: ${sequence}.` : ""} No se emitió ningún comprobante.`);
     } catch (error) {
-      setArcaTestMessage(error instanceof Error ? error.message : "No se pudo validar ARCA en homologación.");
+      setArcaTestMessage(error instanceof Error ? error.message : "No se pudo validar ARCA en producción.");
     } finally {
       setArcaTesting(false);
     }
@@ -4987,7 +4987,7 @@ export default function Home() {
                       ["Respaldo externo", systemHealth.lastBackup?.status === "verified" ? "Copia verificada" : "Sin copia verificada", systemHealth.lastBackup?.status === "verified"],
                       ["Google Drive", systemHealth.driveConnected === undefined ? "Verificando" : systemHealth.driveConnected ? "Conectado · solo lectura" : "Sin conectar", systemHealth.driveConnected === true],
                       ["Alertas por correo", systemHealth.notification?.status === "sent" ? "Última alerta enviada" : systemHealth.notification?.status === "failed" ? "El correo rechazó el envío" : systemHealth.notification?.status === "disabled" ? "Correo no configurado" : "Monitoreo activo", systemHealth.notification?.status !== "failed" && systemHealth.notification?.status !== "disabled"],
-                      ["ARCA", "Homologación preparada", false],
+                      ["ARCA", "Producción preparada", false],
                     ].map(([label, status, ok]) => (
                       <div key={String(label)} className={`rounded border p-3 text-sm ${ok ? "border-emerald-200 bg-[#e7f4e8]" : "border-[#e7c26a] bg-[#fff5d8]"}`}>
                         <b>{label}</b><br /><span>{status}</span>
@@ -4998,7 +4998,7 @@ export default function Home() {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <b>Validación ARCA</b>
-                        <p className="mt-1 text-sm text-slate-600">Comprueba el certificado y la autenticación en homologación. No emite facturas, CAE ni comprobantes reales.</p>
+                        <p className="mt-1 text-sm text-slate-600">Comprueba el certificado y la autenticación en producción. No emite facturas, CAE ni comprobantes reales.</p>
                       </div>
                       <button
                         onClick={testArcaHomologation}
