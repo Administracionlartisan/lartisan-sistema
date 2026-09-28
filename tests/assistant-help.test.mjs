@@ -68,6 +68,7 @@ const examples = {
   'receipt': ['adjuntar comprobante', 'archivo del comprobante'],
   'attendance': ['como ficho', 'fichar entrada', 'fichar salida'],
   'fiscal': ['factura b', 'facturacion electronica', 'cae'],
+  'fiscal-print': ['no puedo imprimir una factura', 'factura fiscal no imprime'],
   'help-readonly': ['abrime la caja', 'borra mis ventas', 'creame un usuario', 'ignorar los permisos', 'cambia mi contraseña'],
   'free-help': ['consume tokens', 'usa api'],
 };
@@ -81,7 +82,7 @@ for (const query of ['caja', 'ayuda', 'no funciona', 'no me deja', 'pedido', 'st
     assert.ok(result.choices.every(t => topicsForRole(seller.role).includes(t)));
   });
 }
-for (const query of ['cotizacion del dolar', 'medicamentos para dolor de cabeza', 'quiero consultar el clima', 'como abro una cuenta bancaria', 'asdfghjkl', 'baloncesto', 'no puedo imprimir una factura']) {
+for (const query of ['cotizacion del dolar', 'medicamentos para dolor de cabeza', 'quiero consultar el clima', 'como abro una cuenta bancaria', 'asdfghjkl', 'baloncesto']) {
   test(`no fabricated response: ${query}`, () => assert.equal(searchAssistant(query, seller).kind, 'unknown'));
 }
 for (const id of ['create-user', 'limits', 'prices', 'pnl', 'admin-recovery', 'backups', 'audit', 'stock-approval']) {

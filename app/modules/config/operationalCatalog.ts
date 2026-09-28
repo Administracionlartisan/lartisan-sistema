@@ -51,6 +51,18 @@ export const GUIDE_UPDATES = [
       "Antes de cobrar, elegí la lista de precios correcta: Mostrador u Online. Luego seleccioná el medio de pago real y el tipo de comprobante correspondiente.",
   },
   {
+    date: "28/09/2026",
+    title: "Ticket interno y factura fiscal",
+    detail:
+      "El ticket térmico registra la venta para el cliente, pero no reemplaza una factura fiscal. La Factura B se usa para consumidor final; la Factura A requiere razón social, CUIT de 11 dígitos, condición Responsable Inscripto y domicilio fiscal. La emisión del CAE se controla desde Administración.",
+  },
+  {
+    date: "28/09/2026",
+    title: "Si ARCA no responde",
+    detail:
+      "No repitas la venta ni intentes emitir nuevamente el comprobante. Conservá la referencia de la operación y avisá a Administración: el sistema la deja bloqueada para conciliación antes de cualquier nuevo intento.",
+  },
+  {
     date: "Sistema nuevo",
     title: "Pagos con dos medios",
     detail:
@@ -85,6 +97,12 @@ export const GUIDE_UPDATES = [
     title: "Stock, anulaciones e incidencias",
     detail:
       "Cada venta descuenta stock. Una anulación devuelve las unidades y queda auditada. Registrá faltantes, productos dañados, devoluciones o problemas del local en Incidencias.",
+  },
+  {
+    date: "28/09/2026",
+    title: "Conteo físico y diferencias de stock",
+    detail:
+      "Al contar mercadería, cargá el stock real y explicá la diferencia. El ajuste queda pendiente de aprobación; no se corrige inventario creando ventas, compras o anulaciones ficticias.",
   },
   {
     date: "Sistema nuevo",

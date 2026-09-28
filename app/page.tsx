@@ -4907,16 +4907,17 @@ export default function Home() {
                     <li>Guardá comandas si necesitás atender varias ventas.</li>
                     <li>Aplicá descuentos o invitaciones por producto cuando corresponda.</li>
                     <li>Cobrá con el medio real; si son dos, usá Pago dividido y verificá que los importes completen el total.</li>
-                    <li>Revisá el ticket y, si el cliente lo solicita, imprimilo en la térmica de 80 mm.</li>
+                    <li>Revisá el tipo de comprobante. Factura A requiere razón social, CUIT, condición Responsable Inscripto y domicilio; el CAE fiscal se controla desde Administración.</li>
+                    <li>Revisá el ticket y, si el cliente lo solicita, imprimilo en la térmica de 80 mm. El ticket no reemplaza una factura fiscal.</li>
                     <li>Registrá egresos, devoluciones o incidencias durante el día.</li>
                     <li>Revisá Stock y enviá pedidos sugeridos cuando haga falta.</li>
                     <li>Cerrá o cobrá todas las comandas antes del cierre.</li>
                     <li>Controlá medios de pago, efectivo, sobre y diferencias antes de confirmar.</li>
                     <li>Si trabajaste en Contingencia, sincronizá y comprobá los pendientes antes de cerrar caja.</li>
                   </ol>
-                  <p className="mt-5 rounded-lg bg-[#eef2f6] p-3 text-xs leading-5 text-slate-600">
-                    Nunca compartas tu contraseña. Si la olvidás, solicitá la recuperación desde la pantalla de ingreso.
-                  </p>
+                <p className="mt-5 rounded-lg bg-[#eef2f6] p-3 text-xs leading-5 text-slate-600">
+                    Nunca compartas tu contraseña. Si ARCA no confirma una factura, no repitas la venta ni la emisión: guardá la referencia y avisá a Administración para conciliación. Si olvidaste tu contraseña, solicitá la recuperación desde la pantalla de ingreso.
+                </p>
                 </div>
                 <div className="rounded-2xl border bg-white p-6">
                   <h2 className="font-bold">Novedades</h2>
