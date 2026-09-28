@@ -186,6 +186,7 @@ export default function Home() {
   const [backupFrequency, setBackupFrequency] = useState("Dos veces por semana · lunes y jueves 21:00");
   const [retentionYears, setRetentionYears] = useState(7);
   const [backupStatus, setBackupStatus] = useState("El estado del respaldo se verifica automáticamente desde el servidor.");
+  const [backupRunning, setBackupRunning] = useState(false);
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({ api: "Verificando", checkedAt: "" });
   const [healthRefreshKey, setHealthRefreshKey] = useState(0);
   const [arcaTesting, setArcaTesting] = useState(false);
@@ -5010,6 +5011,28 @@ export default function Home() {
                     className="mt-4 rounded bg-[#183a67] px-4 py-2 font-bold text-white"
                   >
                     Guardar política
+                  </button>
+                  <button
+                    disabled={backupRunning}
+                    onClick={async () => {
+                      setBackupRunning(true);
+                      setBackupStatus("Generando una copia nueva y verificando su integridad…");
+                      try {
+                        const response = await fetch(`${API_BASE}/admin/backups/run`, { method: "POST", credentials: "include" });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo completar el respaldo.");
+                        setBackupStatus("Copia nueva verificada y enviada al resguardo externo.");
+                        recordAudit("Respaldo verificado manualmente", "Copia nueva generada antes de la puesta operativa.");
+                        setHealthRefreshKey((value) => value + 1);
+                      } catch (error) {
+                        setBackupStatus(error instanceof Error ? error.message : "No se pudo completar el respaldo.");
+                      } finally {
+                        setBackupRunning(false);
+                      }
+                    }}
+                    className="mt-4 ml-0 rounded border border-[#183a67] px-4 py-2 font-bold text-[#183a67] disabled:cursor-not-allowed disabled:opacity-60 sm:ml-2"
+                  >
+                    {backupRunning ? "Verificando copia…" : "Generar y verificar ahora"}
                   </button>
                   <p className="mt-3 text-sm text-slate-600">{backupStatus}</p>
                 </div>
