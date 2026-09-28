@@ -91,12 +91,75 @@ if ($method === 'POST' && $route === 'admin/arca/homologation-test') {
     }
 }
 
+// Consulta de producción estrictamente de lectura. Valida WSAA y WSFE para
+// todos los puntos configurados mediante FECompUltimoAutorizado: no solicita
+// CAE, no reserva numeración y no crea comprobantes.
+if (in_array($method, ['GET', 'POST'], true) && $route === 'admin/arca/production-preflight') {
+    $user = require_user($pdo, ['administracion']);
+    // La variante GET se limita a una consulta autenticada de lectura para
+    // permitir la verificación operativa desde Administración. POST conserva
+    // la protección de origen para cualquier cliente web.
+    if ($method === 'POST' && !in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) {
+        json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    }
+    ensure_arca_wsfe_schema($pdo);
+    try {
+        $status = arca_wsfe_configuration_status($config);
+        if ($status['environment'] !== 'produccion' || !$status['readyForProductionTest']) {
+            throw new RuntimeException('Producción no está configurada para una consulta segura.');
+        }
+        $ticket = arca_wsaa_request_ticket($config);
+        $checks = [];
+        foreach ($status['pointsOfSale'] as $site => $configuredPoint) {
+            foreach ([1 => 'Factura A', 6 => 'Factura B'] as $voucherType => $label) {
+                $checks[] = [
+                    'site' => (string) $site,
+                    'pointOfSale' => (int) $configuredPoint,
+                    'voucherType' => $voucherType,
+                    'voucherLabel' => $label,
+                    'lastVoucherNumber' => arca_wsfe_last_voucher_number($config, (int) $configuredPoint, $voucherType),
+                ];
+            }
+        }
+        unset($ticket['token'], $ticket['sign']);
+        audit($pdo, (int) $user['id'], 'arca_wsfe_production_preflight_verified', 'read_only');
+        json_response(['ok' => true, 'environment' => 'produccion', 'ticketExpiresAt' => $ticket['expiresAt'], 'checks' => $checks, 'message' => 'Consulta de producción validada. No se emitió ningún comprobante.']);
+    } catch (Throwable $error) {
+        $arcaError = $error->getMessage();
+        error_log('LARTISAN ARCA production preflight failed: ' . $arcaError);
+        audit($pdo, (int) $user['id'], 'arca_wsfe_production_preflight_failed');
+        json_response(['ok' => false, 'error' => 'No se pudo validar ARCA en producción: ' . $arcaError], 422);
+    }
+}
+
 // Cola interna de preparación fiscal. No emite comprobantes ni llama a ARCA.
 if ($method === 'GET' && $route === 'admin/arca/fiscal-documents') {
     require_user($pdo, ['administracion']);
     ensure_arca_wsfe_schema($pdo);
     $rows = $pdo->query('SELECT id, sale_reference, site_name, point_of_sale, voucher_type, voucher_number, cae, cae_expires_on, environment, status, response_summary, created_at, updated_at FROM arca_fiscal_documents ORDER BY updated_at DESC LIMIT 200')->fetchAll();
     json_response(['ok' => true, 'documents' => $rows]);
+}
+
+if ($method === 'GET' && $route === 'admin/arca/eligible-sales') {
+    require_user($pdo, ['administracion']);
+    try {
+        ensure_normalized_operations_schema($pdo);
+        ensure_arca_wsfe_schema($pdo);
+
+        // Esta consulta sólo usa columnas presentes desde la primera versión de
+        // ambas tablas. Así la cola no queda fuera de servicio mientras el
+        // servidor completa migraciones no esenciales de datos de cliente.
+        // Las notas de crédito usan una referencia distinta a la venta, por lo
+        // que no hace falta depender de document_kind para excluirlas.
+        $cutover = arca_fiscal_cutover($config);
+        if (!$cutover) json_response(['ok' => true, 'sales' => [], 'cutoverRequired' => true]);
+        $statement = $pdo->prepare("SELECT s.id,s.site,s.occurred_at,s.net_amount,s.invoice_type,s.customer_name,s.status,d.id AS document_id,d.status AS fiscal_status,d.voucher_number,d.cae FROM lartisan_sales s LEFT JOIN arca_fiscal_documents d ON CONVERT(d.sale_reference USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(s.id USING utf8mb4) COLLATE utf8mb4_unicode_ci WHERE s.status='activa' AND s.occurred_at >= ? AND s.invoice_type IN ('Factura A','Factura B','Factura B electrónica') ORDER BY s.occurred_at DESC LIMIT 50");
+        $statement->execute([$cutover]);
+        json_response(['ok' => true, 'sales' => $statement->fetchAll(), 'cutover' => $cutover]);
+    } catch (Throwable $error) {
+        error_log('LARTISAN fiscal eligible sales failed: ' . $error->getMessage());
+        json_response(['ok' => false, 'error' => 'No se pudo cargar la cola fiscal. Intentá nuevamente o revisá la salud de la API.'], 500);
+    }
 }
 
 if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/prepare') {
@@ -114,6 +177,28 @@ if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/prepare') {
     } catch (InvalidArgumentException $error) {
         json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     }
+}
+
+if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/issue') {
+    $user = require_user($pdo, ['administracion']);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    try {
+        require_once __DIR__ . '/arca_fiscal_queue.php';
+        $document = arca_issue_fiscal_document($pdo, $config, (int) $user['id'], (int) (request_body()['documentId'] ?? 0));
+        audit($pdo, (int) $user['id'], 'arca_fiscal_document_authorized', (string) ($document['id'] ?? ''));
+        json_response(['ok' => true, 'document' => $document, 'message' => 'Comprobante autorizado por ARCA con CAE.']);
+    } catch (InvalidArgumentException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
+}
+
+if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/credit-note/prepare') {
+    $user = require_user($pdo, ['administracion']);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    try {
+        require_once __DIR__ . '/arca_fiscal_queue.php';
+        $document = arca_prepare_credit_note($pdo, $config, (int) $user['id'], request_body());
+        audit($pdo, (int) $user['id'], 'arca_credit_note_prepared', (string) ($document['id'] ?? ''));
+        json_response(['ok' => true, 'document' => $document, 'message' => 'Nota de crédito preparada. Requiere confirmación explícita antes de solicitar CAE.']);
+    } catch (InvalidArgumentException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
 }
 $pdo->exec(
     "CREATE TABLE IF NOT EXISTS password_recovery_codes (

@@ -50,14 +50,22 @@ return [
     // En producción se completan en lartisan-arca-config.php, fuera del webroot.
     'arca' => [
         'enabled' => false,
+        // Sólo se cambia a true en el archivo privado cuando Administración
+        // habilita formalmente la emisión real de CAE.
+        'issuance_enabled' => false,
+        // Fecha y hora desde la que este sistema toma ventas para emisión. Las
+        // anteriores pertenecen al sistema fiscal previo y nunca se reenvían.
+        'issuance_start_at' => '',
         'environment' => 'homologacion',
         'cuit' => '30716293471',
         'certificate_path' => '',
         'private_key_path' => '',
+        'ticket_cache_path' => '',
         'points_of_sale' => [
             'Recoleta' => 20,
             'Congreso' => 21,
             'Maure' => 8,
+            'Villa Mitre' => 6,
         ],
     ],
 ];

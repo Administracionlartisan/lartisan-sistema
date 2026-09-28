@@ -651,9 +651,10 @@ export default function Home() {
     if (user?.role !== "administracion") return;
     try {
       const response = await fetch(`${API_BASE}/admin/arca/eligible-sales`, { credentials: "include", cache: "no-store" });
-      const data = (await response.json()) as { sales?: typeof fiscalSales; error?: string };
+      const data = (await response.json()) as { sales?: typeof fiscalSales; error?: string; cutoverRequired?: boolean; cutover?: string };
       if (!response.ok) throw new Error(data.error || "No se pudo cargar la cola fiscal.");
       setFiscalSales(data.sales || []);
+      setFiscalMessage(data.cutoverRequired ? "La emisión fiscal está protegida hasta que se configure la fecha de corte. Las ventas anteriores nunca se enviarán nuevamente a ARCA." : data.cutover ? `Se muestran solamente ventas posteriores al corte fiscal: ${new Date(data.cutover.replace(" ", "T")).toLocaleString("es-AR")}.` : "");
     } catch (error) { setFiscalMessage(error instanceof Error ? error.message : "No se pudo cargar la cola fiscal."); }
   };
   const issueFiscalSale = async (sale: typeof fiscalSales[number]) => {

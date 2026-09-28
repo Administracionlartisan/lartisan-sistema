@@ -45,6 +45,16 @@ if (is_file($privateArcaPath)) {
     }
 }
 
+// Villa Mitre (Tres Arroyos 1902) opera con el punto RECE Web Services 00006.
+// Se incorpora como valor seguro por defecto sin reemplazar una eventual
+// configuración específica guardada en el archivo privado del servidor.
+if (is_array($config['arca'] ?? null)) {
+    $config['arca']['points_of_sale'] ??= [];
+    if (is_array($config['arca']['points_of_sale']) && !array_key_exists('Villa Mitre', $config['arca']['points_of_sale'])) {
+        $config['arca']['points_of_sale']['Villa Mitre'] = 6;
+    }
+}
+
 function json_response(array $payload, int $status = 200): never
 {
     http_response_code($status);
