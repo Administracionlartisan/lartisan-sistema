@@ -1281,7 +1281,10 @@ export default function Home() {
     user?.role === "supervisora" && user.reportPermissions.length > 0;
   const managesCentralOrders =
     can("pedidos") &&
-    (user?.role === "supervisora" || user?.location === "Villa Mitre");
+    (user?.role === "supervisora" ||
+      user?.accessAllLocations ||
+      user?.location === "Villa Mitre" ||
+      user?.locations?.includes("Villa Mitre"));
   const pendingResetFor = (profile: ManagedUser) =>
     resetRequests.find(
       (request) =>
