@@ -4703,13 +4703,18 @@ export default function Home() {
                           );
                         })}
                       </div>
-                      <button
-                        onClick={() => confirmCentralDispatch(selectedRequest)}
-                        disabled={selectedRequest.status === "Entregado"}
-                        className="no-print mt-4 w-full rounded bg-[#ec3a35] px-3 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                      >
-                        Confirmar despacho
-                      </button>
+                      {["Pendiente", "En preparación"].includes(selectedRequest.status) ? (
+                        <button
+                          onClick={() => confirmCentralDispatch(selectedRequest)}
+                          className="no-print mt-4 w-full rounded bg-[#ec3a35] px-3 py-3 text-sm font-bold text-white"
+                        >
+                          Confirmar despacho
+                        </button>
+                      ) : (
+                        <p className="mt-4 rounded bg-[#eef5ef] p-3 text-sm font-semibold text-[#183a67]">
+                          {selectedRequest.status === "Entregado" ? "Pedido recibido por el local." : "Despacho confirmado: el local debe validar la recepción con lectora."}
+                        </p>
+                      )}
                       <div className="no-print mt-4 grid gap-2 sm:grid-cols-2">
                         <button
                           onClick={() => exportRequestCsv(selectedRequest)}
