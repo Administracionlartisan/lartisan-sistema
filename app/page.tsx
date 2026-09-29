@@ -177,6 +177,8 @@ export default function Home() {
   const serverRevision = useRef<Record<string, number>>({});
   const persistQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingReceiptRef = useRef<Sale | null>(null);
+  const scannerInputRef = useRef<HTMLInputElement | null>(null);
+  const scannerBufferRef = useRef<{ value: string; lastKeyAt: number; input: HTMLInputElement | HTMLTextAreaElement | null; originalValue: string }>({ value: "", lastKeyAt: 0, input: null, originalValue: "" });
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
   const [cashLedger, setCashLedger] = useState<CashLedgerEntry[]>([]);
@@ -1148,6 +1150,44 @@ export default function Home() {
         : `No se agregó: ${product.name} no tiene stock disponible en ${site}.`,
     );
   };
+  useEffect(() => {
+    if (tab !== "Ventas") return;
+    const onScannerKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.altKey || event.metaKey || event.key.length !== 1) return;
+      const now = Date.now();
+      const active = document.activeElement;
+      const activeInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active : null;
+      const buffer = scannerBufferRef.current;
+      if (now - buffer.lastKeyAt > 120) {
+        buffer.value = "";
+        buffer.input = activeInput;
+        buffer.originalValue = activeInput?.value ?? "";
+      }
+      buffer.lastKeyAt = now;
+      buffer.value += event.key;
+      const normalizedCode = buffer.value.trim().toUpperCase().replace(/^LART[-'’_\s]*/, "");
+      if (!PRODUCTS.some((product) => product.code === normalizedCode)) return;
+      event.preventDefault();
+      const scanned = buffer.value;
+      const sourceInput = buffer.input;
+      const originalValue = buffer.originalValue;
+      buffer.value = "";
+      buffer.input = null;
+      if (sourceInput && sourceInput !== scannerInputRef.current) {
+        requestAnimationFrame(() => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+          if (sourceInput instanceof HTMLTextAreaElement) {
+            const textAreaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+            textAreaSetter?.call(sourceInput, originalValue);
+          } else setter?.call(sourceInput, originalValue);
+          sourceInput.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      }
+      addScannedProduct(scanned);
+    };
+    window.addEventListener("keydown", onScannerKey, true);
+    return () => window.removeEventListener("keydown", onScannerKey, true);
+  }, [tab, site, cashIsOpen, stock, prices, onlinePrices, saleChannel]);
   const siteLimits = limitsBySite[site];
   const currentCashLedger = cashLedger.filter(
     (entry) => entry.site === site && entry.shiftId === activeShift?.id,
@@ -3294,6 +3334,7 @@ export default function Home() {
                     <label className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       <span className="font-bold text-[#183a67]">Escanear código</span>
                       <input
+                        ref={scannerInputRef}
                         value={barcodeInput}
                         onChange={(event) => {
                           const nextBarcode = event.target.value;
