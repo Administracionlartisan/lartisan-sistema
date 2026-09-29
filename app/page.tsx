@@ -61,7 +61,11 @@ const LEGACY_SCAN_CODE_ALIASES: Record<string, string> = {
 };
 const productFromScannedCode = (rawBarcode: string) => {
   const scanned = rawBarcode.trim().toUpperCase();
-  const code = scanned.replace(/^LART[-'’_\s]*/, "");
+  // La lectora puede comenzar a escribir inmediatamente después de una tecla
+  // anterior. Tomamos el último LART-XXX de la secuencia, en lugar de exigir
+  // que sea el único texto recibido.
+  const embeddedBarcode = scanned.match(/LART[-'’_\s]*(\d+)$/);
+  const code = embeddedBarcode?.[1] ?? scanned.replace(/^LART[-'’_\s]*/, "");
   const officialCode = LEGACY_SCAN_CODE_ALIASES[code] ?? code;
   return PRODUCTS.find(
     (item) => item.barcode.toUpperCase() === scanned || item.code === officialCode,
