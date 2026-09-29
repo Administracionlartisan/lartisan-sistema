@@ -5,7 +5,6 @@ import { ADMIN_REPORTS, adminReportGuides, supervisionReportGuide, availableRepo
 import { searchAssistant } from '../app/data/assistantKnowledge.ts';
 const admin = { role:'administracion', reportPermissions:ADMIN_REPORTS.map(r=>r.id), supervisorReports:false };
 const manager = { ...admin };
-const limited = { ...admin, reportPermissions:['DetalleVentas','HorariosVenta'] };
 const supervisorWithReports = { role:'supervisora', reportPermissions:[], supervisorReports:true };
 const supervisorWithoutReports = { role:'supervisora', reportPermissions:[], supervisorReports:false };
 const seller = { role:'vendedora', reportPermissions:[], supervisorReports:false };
@@ -26,7 +25,7 @@ test('every rendered admin report has exactly one audited entry',()=>{
   assert.match(page,/import \{ ADMIN_REPORTS, canOpenReport \}/);
   for(const r of adminReportGuides){assert.ok(r.source&&r.questions.length>=6&&r.filters&&r.limits);}
 });
-for(const [name,access] of Object.entries({admin,manager,limited,supervisorWithReports,supervisorWithoutReports,seller})){
+for(const [name,access] of Object.entries({admin,manager,supervisorWithReports,supervisorWithoutReports,seller})){
   for(const r of availableReportGuides(access)){
     test(`${name} canonical ${r.id}`,()=>expectReport(reportQuestion(r),r.id,access,{force:true}));
   }
@@ -59,8 +58,8 @@ test('ambiguous profit asks for clarification instead of choosing margin or mont
   assert.equal(r.kind,'clarify');assert.ok(r.choices.length>1&&r.choices.length<=3);
 });
 test('broad report request offers allowed choices',()=>{
-  const r=locateReport('que informe uso',limited);
-  assert.equal(r.kind,'clarify');assert.ok(r.choices.every(x=>limited.reportPermissions.includes(x.id)));
+  const r=locateReport('que informe uso',supervisorWithReports);
+  assert.equal(r.kind,'clarify');assert.deepEqual(r.choices.map(x=>x.id),['Supervision']);
 });
 test('filters and export follow-up stay with last allowed report',()=>{
   const result=locateReport('que filtros uso',admin,{previousId:'HorariosVenta'});
@@ -70,9 +69,9 @@ test('filters and export follow-up stay with last allowed report',()=>{
   assert.match(pdf.content,/No exporto ni envío/);
 });
 test('previous report never survives a permission denial',()=>{
-  const result=locateReport('como lo exporto',limited,{previousId:'PLConsolidado',force:true});
+  const result=locateReport('como lo exporto',supervisorWithoutReports,{previousId:'PLConsolidado',force:true});
   assert.notEqual(result.kind,'answer');
-  assert.equal(canOpenReport(limited,'PLConsolidado'),false);
+  assert.equal(canOpenReport(supervisorWithoutReports,'PLConsolidado'),false);
 });
 for(const q of ['cuanto vendio cada local','cajas abiertas','pedidos pendientes'])test(`supervisor route ${q}`,()=>expectReport(q,'Supervision',supervisorWithReports,{force:true}));
 test('no implicit admin report permissions for supervisor or seller',()=>{
@@ -81,12 +80,12 @@ test('no implicit admin report permissions for supervisor or seller',()=>{
     assert.equal(canOpenReport(access,'PLConsolidado'),false);
   }
   assert.deepEqual(availableReportGuides(supervisorWithoutReports),[]);
-  assert.deepEqual(availableReportGuides({...admin,reportPermissions:[]}),[]);
+  assert.equal(availableReportGuides({...admin,reportPermissions:[]}).length,ADMIN_REPORTS.length);
   assert.deepEqual(availableReportGuides({...seller,supervisorReports:true,reportPermissions:admin.reportPermissions}),[]);
 });
-for(const r of adminReportGuides.filter(r=>!limited.reportPermissions.includes(r.id)))test(`restricted ${r.id}`,()=>{
-  const result=locateReport(reportQuestion(r),limited,{force:true});
-  assert.equal(result.kind,'unavailable'); assert.equal(canOpenReport(limited,r.id),false);
+for(const r of adminReportGuides)test(`restricted ${r.id}`,()=>{
+  const result=locateReport(reportQuestion(r),supervisorWithoutReports,{force:true});
+  assert.equal(result.kind,'unavailable'); assert.equal(canOpenReport(supervisorWithoutReports,r.id),false);
 });
 for(const q of ['liquidacion salarial','ranking de vendedores','informe produccion','stock por lotes'])test(`unimplemented request ${q}`,()=>{
   const r=locateReport(q,admin,{force:true});assert.equal(r.kind,'unavailable');assert.match(r.content,/No hay un informe terminado/);
