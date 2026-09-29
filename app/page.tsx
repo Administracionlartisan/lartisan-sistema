@@ -45,6 +45,14 @@ const initialReportRange = () => {
     to: dateKey(today),
   };
 };
+const safeStockQuantity = (value: unknown) => {
+  const quantity = Number(value);
+  return Number.isFinite(quantity) && quantity >= 0 ? quantity : 0;
+};
+const completeStockMap = (saved: Record<number, unknown> | undefined) =>
+  Object.fromEntries(
+    PRODUCTS.map((product) => [product.id, safeStockQuantity(saved?.[product.id])]),
+  ) as Record<number, number>;
 export default function Home() {
   // En producción el portal se determina por el subdominio. El parámetro
   // ?portal=admin o ?portal=ventas permite revisar ambos accesos localmente.
@@ -718,7 +726,10 @@ export default function Home() {
       setStock((items) => ({
         ...items,
         ...Object.fromEntries(
-          entries.map(([local, entry]) => [local, entry.state.stock || items[local]]),
+          entries.map(([local, entry]) => [
+            local,
+            completeStockMap(entry.state.stock as Record<number, unknown> | undefined),
+          ]),
         ),
       }));
       setMinimumStock((items) => ({
@@ -2321,7 +2332,7 @@ export default function Home() {
         ...items[site],
         [movementProductId]: Math.max(
           0,
-          items[site][movementProductId] + signedQuantity,
+          safeStockQuantity(items[site]?.[movementProductId]) + signedQuantity,
         ),
       },
     }));
@@ -3992,7 +4003,7 @@ export default function Home() {
                           <b>{p.name}</b>
                         </td>
                         <td className="p-3">{p.detail}</td>
-                        <td className="p-3 text-center">{stock[site][p.id]}</td>
+                        <td className="p-3 text-center">{safeStockQuantity(stock[site]?.[p.id])}</td>
                         <td className="p-3 text-center">
                           {canAdjustStock ? (
                             <input
@@ -4041,7 +4052,7 @@ export default function Home() {
                         <td className="p-3 text-center font-bold">
                           {realStock[site][p.id] === ""
                             ? "—"
-                            : Number(realStock[site][p.id]) - stock[site][p.id]}
+                            : Number(realStock[site][p.id]) - safeStockQuantity(stock[site]?.[p.id])}
                         </td>
                         <td className="p-3">
                           {canCountRealStock ? (
