@@ -1283,6 +1283,7 @@ export default function Home() {
     user?.role === "supervisora" && user.reportPermissions.length > 0;
   const managesCentralOrders =
     can("pedidos") &&
+    site === "Villa Mitre" &&
     (user?.role === "supervisora" ||
       user?.accessAllLocations ||
       user?.location === "Villa Mitre" ||
