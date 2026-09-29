@@ -12,7 +12,8 @@ const database = () => (env as unknown as { DB: D1Database }).DB;
 async function identity(request: Request): Promise<{ user: ApiUser; cookie: string } | Response> {
   const cookie = request.headers.get("cookie")?.split(";").map((v) => v.trim()).find((v) => /^lartisan_session=[a-f0-9]+$/i.test(v));
   if (!cookie) return json({ error: "Sesión requerida." }, 401);
-  const response = await fetch(`${API_BASE}/auth/me`, { headers: { Cookie: cookie }, redirect: "error", signal: AbortSignal.timeout(10000) });
+  // workerd admite "manual", no "error". Nunca seguir redirecciones con la cookie.
+  const response = await fetch(`${API_BASE}/auth/me`, { headers: { Cookie: cookie }, redirect: "manual", signal: AbortSignal.timeout(10000) });
   if (!response.ok) return json({ error: "No se pudo validar la sesión." }, response.status === 401 ? 401 : 503);
   const data = await response.json() as { user?: ApiUser };
   if (!data.user || data.user.mustChangePassword || data.user.must_change_password) return json({ error: "Primero completá el cambio de contraseña." }, 403);
@@ -21,7 +22,7 @@ async function identity(request: Request): Promise<{ user: ApiUser; cookie: stri
 
 async function initialCatalog(cookie: string): Promise<CatalogDocument> {
   // Solo se usa antes del primer guardado central. Recupera los precios vigentes.
-  const response = await fetch(`${API_BASE}/operations/states`, { headers: { Cookie: cookie }, redirect: "error", signal: AbortSignal.timeout(15000) });
+  const response = await fetch(`${API_BASE}/operations/states`, { headers: { Cookie: cookie }, redirect: "manual", signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error("No se recuperaron los precios actuales.");
   const data = await response.json() as { states?: Record<string, { state: OperationalSnapshot }> };
   const configuration = Object.values(data.states ?? {}).find((v) => v.state.prices)?.state;
@@ -38,7 +39,10 @@ export async function GET(request: Request) {
     const auth = await identity(request);
     if (auth instanceof Response) return auth;
     return json(await readCatalog(database()) ?? await initialCatalog(auth.cookie));
-  } catch { return json({ error: "No se pudo cargar el catálogo central. Intentá nuevamente." }, 503); }
+  } catch (error) {
+    console.error("catalog_load_failed", error instanceof Error ? error.message : "unknown_error");
+    return json({ error: "No se pudo cargar el catálogo central. Intentá nuevamente." }, 503);
+  }
 }
 
 export async function PUT(request: Request) {
@@ -63,5 +67,8 @@ export async function PUT(request: Request) {
       throw error;
     }
     return json(doc);
-  } catch { return json({ error: "No se confirmó el guardado. Recargá el catálogo para comprobarlo; tus cambios siguen en el formulario." }, 503); }
+  } catch (error) {
+    console.error("catalog_save_failed", error instanceof Error ? error.message : "unknown_error");
+    return json({ error: "No se confirmó el guardado. Recargá el catálogo para comprobarlo; tus cambios siguen en el formulario." }, 503);
+  }
 }

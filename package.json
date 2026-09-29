@@ -6,7 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "test:catalog": "node --test tests/catalog.test.mjs",
+    "test:catalog": "node --test tests/catalog.test.mjs tests/catalog-runtime.test.mjs",
     "test:help": "node --experimental-strip-types --test tests/assistant-help.test.mjs tests/report-guide.test.mjs",
     "test:security": "node --test tests/security.test.mjs tests/reliability-history.test.mjs",
     "test:structure": "node --test tests/module-structure.test.mjs",

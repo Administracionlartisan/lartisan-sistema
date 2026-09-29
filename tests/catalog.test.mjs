@@ -35,6 +35,7 @@ let role = 'administracion', mustChange = false, upstreamStatus = 200;
 globalThis.fetch = async (url, options) => {
   assert.match(String(url), /^https:\/\/www\.lartisantaller\.com\/sistema-api\/(auth\/me|operations\/states)$/);
   assert.equal(options.headers.Cookie, 'lartisan_session=abc123');
+  assert.equal(options.redirect, 'manual', 'workerd no acepta redirect:error; tampoco seguir redirecciones con la cookie');
   if (String(url).endsWith('/auth/me')) return Response.json({ user: { id: 1, role, mustChangePassword: mustChange } }, { status: upstreamStatus });
   return Response.json({ states: { Recoleta: { state: { prices: { 1: 9000 }, onlinePrices: { 1: 11000 } } } } });
 };
@@ -79,6 +80,12 @@ test('API exige sesión, origen válido y Administración para guardar', async (
   assert.equal((await api.GET(request())).status, 403);
   mustChange = false; upstreamStatus = 401;
   assert.equal((await api.GET(request())).status, 401);
+  upstreamStatus = 200;
+});
+test('una redirección de identidad no concede acceso ni se sigue con la cookie', async () => {
+  upstreamStatus = 302;
+  assert.equal((await api.GET(request())).status, 503);
+  assert.equal((await api.PUT(request('PUT', {}))).status, 503);
   upstreamStatus = 200;
 });
 test('migración guarda precios vigentes; recarga persiste y conflicto no sobrescribe', async () => {
