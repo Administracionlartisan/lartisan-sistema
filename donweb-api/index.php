@@ -605,6 +605,75 @@ if ($method === 'GET' && $route === 'auth/me') {
     json_response(['ok' => true, 'user' => public_user($user, $config)]);
 }
 
+if ($method === 'GET' && $route === 'catalog') {
+    require_user($pdo);
+    ensure_catalog_schema($pdo);
+    $row = $pdo->query('SELECT document_json FROM catalog_documents WHERE id = 1')->fetch();
+    $catalog = $row ? json_decode((string) $row['document_json'], true) : null;
+    json_response(['ok' => true, 'catalog' => is_array($catalog) ? $catalog : null]);
+}
+
+if ($method === 'PUT' && $route === 'catalog') {
+    $user = require_user($pdo, ['administracion']);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) {
+        json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    }
+    if (!empty($user['must_change_password'])) {
+        json_response(['ok' => false, 'error' => 'Primero debés cambiar la contraseña temporal.'], 403);
+    }
+    ensure_catalog_schema($pdo);
+    $body = request_body();
+    $expectedRevision = max(0, (int) ($body['revision'] ?? -1));
+    $products = $body['products'] ?? null;
+    $priceChanges = $body['priceChanges'] ?? [];
+    if (!is_array($products) || count($products) < 1 || count($products) > 1000 || !is_array($priceChanges)) {
+        json_response(['ok' => false, 'error' => 'Catálogo inválido.'], 422);
+    }
+    $ids = [];
+    $codes = [];
+    foreach ($products as $product) {
+        if (!is_array($product) || !is_numeric($product['id'] ?? null) || (int) $product['id'] < 1 || !is_string($product['name'] ?? null) || trim((string) $product['name']) === '' || !is_string($product['category'] ?? null) || trim((string) $product['category']) === '' || !is_string($product['barcode'] ?? null) || !preg_match('/^LART-\\d{3}$/', $product['barcode']) || !is_numeric($product['price'] ?? null) || !is_numeric($product['onlinePrice'] ?? null) || (float) $product['price'] < 0 || (float) $product['onlinePrice'] < 0) {
+            json_response(['ok' => false, 'error' => 'Un producto del catálogo no es válido.'], 422);
+        }
+        $id = (int) $product['id'];
+        if (isset($ids[$id])) json_response(['ok' => false, 'error' => 'Hay identificadores de producto duplicados.'], 422);
+        $ids[$id] = true;
+        $labels = array_merge([$product['barcode']], is_array($product['barcodeAliases'] ?? null) ? $product['barcodeAliases'] : []);
+        foreach ($labels as $label) {
+            if (!is_string($label) || !preg_match('/^LART-\\d{3}$/', $label) || isset($codes[$label])) json_response(['ok' => false, 'error' => 'Hay códigos de barras duplicados o inválidos.'], 422);
+            $codes[$label] = true;
+        }
+    }
+    $pdo->beginTransaction();
+    try {
+        $row = $pdo->query('SELECT revision, document_json FROM catalog_documents WHERE id = 1 FOR UPDATE')->fetch();
+        $currentRevision = $row ? (int) $row['revision'] : 0;
+        if ($currentRevision !== $expectedRevision) {
+            $pdo->rollBack();
+            json_response(['ok' => false, 'error' => 'Otra persona actualizó el catálogo. Recargá y revisá los cambios.'], 409);
+        }
+        $previous = $row ? json_decode((string) $row['document_json'], true) : null;
+        if (is_array($previous['products'] ?? null)) {
+            $incoming = array_fill_keys(array_map(static fn(array $p): int => (int) $p['id'], $products), true);
+            foreach ($previous['products'] as $old) if (is_array($old) && isset($old['id']) && !isset($incoming[(int) $old['id']])) {
+                $pdo->rollBack();
+                json_response(['ok' => false, 'error' => 'No se pueden eliminar productos con historial.'], 422);
+            }
+        }
+        $catalog = ['revision' => $currentRevision + 1, 'products' => array_values($products), 'priceChanges' => array_values($priceChanges), 'updatedAt' => gmdate('c')];
+        $json = json_encode($catalog, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false || strlen($json) > 1_000_000) throw new RuntimeException('El catálogo supera el tamaño permitido.');
+        if ($row) $pdo->prepare('UPDATE catalog_documents SET revision = ?, document_json = ?, updated_by = ? WHERE id = 1')->execute([$catalog['revision'], $json, $user['id']]);
+        else $pdo->prepare('INSERT INTO catalog_documents (id, revision, document_json, updated_by) VALUES (1, ?, ?, ?)')->execute([$catalog['revision'], $json, $user['id']]);
+        audit($pdo, (int) $user['id'], 'catalog_updated');
+        $pdo->commit();
+        json_response(['ok' => true, 'catalog' => $catalog]);
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+}
+
 // Registra accesos a áreas sensibles sin convertir cada actualización de página
 // en ruido. La misma persona queda asentada una vez por módulo cada 30 minutos.
 if ($method === 'POST' && $route === 'activity/module-opened') {

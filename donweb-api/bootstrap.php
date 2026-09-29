@@ -438,6 +438,21 @@ function ensure_operations_schema(PDO $pdo): void
     ensure_normalized_operations_schema($pdo);
 }
 
+function ensure_catalog_schema(PDO $pdo): void
+{
+    if (!table_exists($pdo, 'catalog_documents')) {
+        $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS catalog_documents (
+            id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+            revision INT UNSIGNED NOT NULL,
+            document_json LONGTEXT NOT NULL,
+            updated_by BIGINT UNSIGNED NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+    }
+}
+
 function operational_item_key(string $field, array $item, int $index): string
 {
     if ($field === 'payments') {

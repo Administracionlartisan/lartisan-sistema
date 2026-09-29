@@ -3,9 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PRODUCTS } from "./operationalCatalog";
 import type { CatalogDocument } from "./catalogModel";
 import type { Product } from "../shared/types";
+import { API_BASE } from "../shared/constants";
 
 const seed: CatalogDocument = {
-  revision: -1,
+  revision: 0,
   products: PRODUCTS.map((p) => ({ ...p, onlinePrice: Math.round(p.price * 1.25), barcodeAliases: p.code === "501" ? ["LART-401"] : [] })),
   priceChanges: [],
 };
@@ -31,9 +32,10 @@ export function useCatalog(userId?: string) {
     if (!userId || saving.current) return;
     const session = generation.current;
     try {
-      const response = await fetch("/api/catalog", { credentials: "include", cache: "no-store", signal: AbortSignal.timeout(20000) });
-      const doc = await response.json() as CatalogDocument & { error?: string };
-      if (!response.ok || !Array.isArray(doc.products)) throw new Error(doc.error || "No se pudo cargar el catálogo central.");
+      const response = await fetch(`${API_BASE}/catalog`, { credentials: "include", cache: "no-store", signal: AbortSignal.timeout(20000) });
+      const data = await response.json() as { catalog?: CatalogDocument | null; error?: string };
+      if (!response.ok) throw new Error(data.error || "No se pudo cargar el catálogo central.");
+      const doc = data.catalog ?? seed;
       if (session === generation.current && !saving.current) accept(doc);
     } catch (cause) {
       if (session === generation.current) setError(cause instanceof Error ? cause.message : "No se pudo actualizar el catálogo.");
@@ -60,9 +62,10 @@ export function useCatalog(userId?: string) {
     setBusy(true);
     const session = generation.current;
     try {
-      const response = await fetch("/api/catalog", { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: expectedRevision, products, priceChanges }), signal: AbortSignal.timeout(25000) });
-      const doc = await response.json() as CatalogDocument & { error?: string };
-      if (!response.ok) throw new Error(doc.error || "No se confirmó el guardado. Recargá el catálogo para comprobarlo.");
+      const response = await fetch(`${API_BASE}/catalog`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: expectedRevision, products, priceChanges }), signal: AbortSignal.timeout(25000) });
+      const data = await response.json() as { catalog?: CatalogDocument; error?: string };
+      if (!response.ok || !data.catalog) throw new Error(data.error || "No se confirmó el guardado. Recargá el catálogo para comprobarlo.");
+      const doc = data.catalog;
       if (session !== generation.current) throw new Error("La sesión cambió. Volvé a ingresar para verificar el guardado.");
       accept(doc);
       return doc;
