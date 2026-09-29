@@ -88,6 +88,7 @@ export default function Home() {
     [navOpen, setNavOpen] = useState(false),
     [productSearch, setProductSearch] = useState(""),
     [barcodeInput, setBarcodeInput] = useState(""),
+    [scannerResult, setScannerResult] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
     [payment, setPayment] = useState("Efectivo"),
@@ -1111,13 +1112,14 @@ export default function Home() {
   const addProductToCart = (product: Product) => {
     if (!cashIsOpen) {
       setMessage("Abrí la caja antes de agregar productos a la venta.");
-      return;
+      return false;
     }
     if ((stock[site]?.[product.id] ?? 0) < 1) {
       setMessage(`${product.name} no tiene stock disponible en ${site}. Cargá o confirmá el stock antes de venderlo.`);
-      return;
+      return false;
     }
     setCart((items) => [...items, { ...product, price: selectedPrice(product) }]);
+    return true;
   };
   const addScannedProduct = () => {
     const scanned = barcodeInput.trim().toUpperCase();
@@ -1130,11 +1132,21 @@ export default function Home() {
       (item) => item.barcode.toUpperCase() === scanned || item.code === normalizedCode,
     );
     if (!product) {
-      setMessage(`No reconocemos el código “${barcodeInput.trim()}”. Verificá que la etiqueta tenga el código de barras vigente.`);
+      const notice = `No reconocemos el código “${barcodeInput.trim()}”. Verificá la etiqueta.`;
+      setScannerResult(notice);
+      setMessage(notice);
       return;
     }
-    setBarcodeInput("");
-    addProductToCart(product);
+    if (addProductToCart(product)) {
+      setBarcodeInput("");
+      setScannerResult(`Agregado: ${product.name} · ${product.detail}.`);
+      return;
+    }
+    setScannerResult(
+      !cashIsOpen
+        ? "No se agregó: primero abrí la caja del local seleccionado."
+        : `No se agregó: ${product.name} no tiene stock disponible en ${site}.`,
+    );
   };
   const siteLimits = limitsBySite[site];
   const currentCashLedger = cashLedger.filter(
@@ -3283,7 +3295,7 @@ export default function Home() {
                       <span className="font-bold text-[#183a67]">Escanear código</span>
                       <input
                         value={barcodeInput}
-                        onChange={(event) => setBarcodeInput(event.target.value)}
+                        onChange={(event) => { setBarcodeInput(event.target.value); setScannerResult(""); }}
                         placeholder="Leé la etiqueta (ej.: LART-501)"
                         className="min-w-0 flex-1 rounded-lg border bg-white px-3 py-2"
                         autoComplete="off"
@@ -3291,6 +3303,7 @@ export default function Home() {
                       <button type="submit" className="rounded-lg bg-[#183a67] px-4 py-2 font-bold text-white">Agregar</button>
                     </label>
                     <p className="mt-2 text-xs text-slate-600">La lectora USB escribe el código y Enter agrega una unidad. La etiqueta debe tener un código de barras Code 128, no solo el texto “COD”.</p>
+                    {scannerResult && <p className="mt-2 text-sm font-semibold text-[#183a67]" role="status">{scannerResult}</p>}
                   </form>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {visible.map((p) => (
