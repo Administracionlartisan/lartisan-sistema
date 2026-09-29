@@ -232,6 +232,9 @@ export default function Home() {
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(
     null,
   );
+  const [receivingRequestId, setReceivingRequestId] = useState<string | null>(null);
+  const [receivedScanCounts, setReceivedScanCounts] = useState<Record<number, number>>({});
+  const [receivingScanNotice, setReceivingScanNotice] = useState("");
   const [expensesLog, setExpensesLog] = useState<Expense[]>([]);
   const [returnsLog, setReturnsLog] = useState<ReturnTransaction[]>([]);
   const [cashTransfers, setCashTransfers] = useState<CashTransfer[]>([]);
@@ -1147,8 +1150,48 @@ export default function Home() {
         : `No se agregó: ${product.name} no tiene stock disponible en ${site}.`,
     );
   };
+  const startScannedReception = (request: StockRequest) => {
+    setReceivingRequestId(request.id);
+    setReceivedScanCounts({});
+    setReceivingScanNotice(`Pedido ${request.id.slice(0, 8)} listo para recibir. Escaneá cada unidad entregada.`);
+  };
+  const scanReceivedProduct = (rawBarcode: string) => {
+    const scanned = rawBarcode.trim().toUpperCase();
+    const code = scanned.replace(/^LART[-'’_\s]*/, "");
+    const product = PRODUCTS.find((item) => item.barcode.toUpperCase() === scanned || item.code === code);
+    const request = stockRequests.find((item) => item.id === receivingRequestId);
+    if (!request || !product) {
+      setReceivingScanNotice(`Código no reconocido: ${rawBarcode}.`);
+      return;
+    }
+    const line = request.lines.find((item) => item.productId === product.id);
+    if (!line) {
+      setReceivingScanNotice(`${product.name} no está incluido en este pedido. No se ingresó al stock.`);
+      return;
+    }
+    const expected = line.preparedQuantity ?? line.quantity;
+    const received = receivedScanCounts[product.id] || 0;
+    if (received >= expected) {
+      setReceivingScanNotice(`${product.name}: ya se escanearon las ${expected} unidades esperadas.`);
+      return;
+    }
+    const next = received + 1;
+    setReceivedScanCounts((items) => ({ ...items, [product.id]: next }));
+    setReceivingScanNotice(`Validado: ${product.name} · ${next} de ${expected} unidad${expected === 1 ? "" : "es"}.`);
+  };
+  const confirmScannedReception = (request: StockRequest) => {
+    const missing = request.lines.find((line) => (receivedScanCounts[line.productId] || 0) !== (line.preparedQuantity ?? line.quantity));
+    if (missing) {
+      const product = PRODUCTS.find((item) => item.id === missing.productId);
+      return setReceivingScanNotice(`Falta validar ${product?.name || "un producto"}. El stock no se modificó.`);
+    }
+    confirmRequestReception(request);
+    setReceivingRequestId(null);
+    setReceivedScanCounts({});
+    setReceivingScanNotice("");
+  };
   useEffect(() => {
-    if (tab !== "Ventas") return;
+    if (tab !== "Ventas" && tab !== "Pedido") return;
     const onScannerKey = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.altKey || event.metaKey || event.key.length !== 1) return;
       const now = Date.now();
@@ -1180,11 +1223,12 @@ export default function Home() {
           sourceInput.dispatchEvent(new Event("input", { bubbles: true }));
         });
       }
-      addScannedProduct(scanned);
+      if (tab === "Pedido") scanReceivedProduct(scanned);
+      else addScannedProduct(scanned);
     };
     window.addEventListener("keydown", onScannerKey, true);
     return () => window.removeEventListener("keydown", onScannerKey, true);
-  }, [tab, site, cashIsOpen, stock, prices, onlinePrices, saleChannel]);
+  }, [tab, site, cashIsOpen, stock, prices, onlinePrices, saleChannel, receivingRequestId, stockRequests, receivedScanCounts]);
   const siteLimits = limitsBySite[site];
   const currentCashLedger = cashLedger.filter(
     (entry) => entry.site === site && entry.shiftId === activeShift?.id,
@@ -4486,12 +4530,27 @@ export default function Home() {
                               request.status,
                             ) &&
                               can("pedidos") && (
-                              <button
-                                onClick={() => confirmRequestReception(request)}
-                                className="mt-2 rounded bg-[#183a67] px-3 py-2 font-bold text-white"
-                              >
-                                Confirmar recepción
-                              </button>
+                              <>
+                                <button onClick={() => startScannedReception(request)} className="mt-2 rounded bg-[#183a67] px-3 py-2 font-bold text-white">
+                                  Recibir con lectora
+                                </button>
+                                {receivingRequestId === request.id && (
+                                  <div className="mt-3 rounded border border-[#b8c8dd] bg-white p-3">
+                                    <b>Validación por escaneo</b>
+                                    <p className="mt-1 text-xs text-slate-600">Escaneá cada unidad entregada. El stock se actualiza sólo cuando la lista coincide con el despacho.</p>
+                                    <div className="mt-2 space-y-1 text-xs">
+                                      {request.lines.map((line) => {
+                                        const product = PRODUCTS.find((item) => item.id === line.productId);
+                                        const expected = line.preparedQuantity ?? line.quantity;
+                                        const received = receivedScanCounts[line.productId] || 0;
+                                        return <p key={line.productId}><b>{product?.name || "Producto"}</b>: {received}/{expected} {received === expected ? "✓" : "pendiente"}</p>;
+                                      })}
+                                    </div>
+                                    {receivingScanNotice && <p className="mt-2 text-xs font-semibold text-[#183a67]" role="status">{receivingScanNotice}</p>}
+                                    <button onClick={() => confirmScannedReception(request)} className="mt-3 rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar ingreso a stock</button>
+                                  </div>
+                                )}
+                              </>
                             )}
                         </div>
                       ))
