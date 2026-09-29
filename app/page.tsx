@@ -1111,7 +1111,10 @@ export default function Home() {
   const addScannedProduct = () => {
     const scanned = barcodeInput.trim().toUpperCase();
     if (!scanned) return;
-    const normalizedCode = scanned.replace(/^LART-/, "");
+    // Algunas lectoras configuradas con teclado US envían el guion como apóstrofe
+    // en equipos con distribución española. Aceptamos ambas lecturas sin cambiar
+    // el valor oficial impreso en la etiqueta (LART-XXX).
+    const normalizedCode = scanned.replace(/^LART[-'’_\s]*/, "");
     const product = PRODUCTS.find(
       (item) => item.barcode.toUpperCase() === scanned || item.code === normalizedCode,
     );
