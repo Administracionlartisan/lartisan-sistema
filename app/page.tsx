@@ -53,6 +53,20 @@ const completeStockMap = (saved: Record<number, unknown> | undefined) =>
   Object.fromEntries(
     PRODUCTS.map((product) => [product.id, safeStockQuantity(saved?.[product.id])]),
   ) as Record<number, number>;
+
+// Algunas etiquetas históricas ya impresas conservan su COD anterior. Se
+// aceptan como alias para no obligar a reetiquetar mercadería vigente.
+const LEGACY_SCAN_CODE_ALIASES: Record<string, string> = {
+  "401": "501",
+};
+const productFromScannedCode = (rawBarcode: string) => {
+  const scanned = rawBarcode.trim().toUpperCase();
+  const code = scanned.replace(/^LART[-'’_\s]*/, "");
+  const officialCode = LEGACY_SCAN_CODE_ALIASES[code] ?? code;
+  return PRODUCTS.find(
+    (item) => item.barcode.toUpperCase() === scanned || item.code === officialCode,
+  );
+};
 export default function Home() {
   // En producción el portal se determina por el subdominio. El parámetro
   // ?portal=admin o ?portal=ventas permite revisar ambos accesos localmente.
@@ -1134,10 +1148,7 @@ export default function Home() {
     // Algunas lectoras configuradas con teclado US envían el guion como apóstrofe
     // en equipos con distribución española. Aceptamos ambas lecturas sin cambiar
     // el valor oficial impreso en la etiqueta (LART-XXX).
-    const normalizedCode = scanned.replace(/^LART[-'’_\s]*/, "");
-    const product = PRODUCTS.find(
-      (item) => item.barcode.toUpperCase() === scanned || item.code === normalizedCode,
-    );
+    const product = productFromScannedCode(scanned);
     if (!product) {
       const notice = `No reconocemos el código “${rawBarcode.trim()}”. Verificá la etiqueta.`;
       setScannerResult(notice);
@@ -1163,8 +1174,7 @@ export default function Home() {
   };
   const scanReceivedProduct = (rawBarcode: string) => {
     const scanned = rawBarcode.trim().toUpperCase();
-    const code = scanned.replace(/^LART[-'’_\s]*/, "");
-    const product = PRODUCTS.find((item) => item.barcode.toUpperCase() === scanned || item.code === code);
+    const product = productFromScannedCode(scanned);
     const request = stockRequests.find((item) => item.id === receivingRequestId);
     if (!request || !product) {
       setReceivingScanNotice(`Código no reconocido: ${rawBarcode}.`);
@@ -1215,8 +1225,8 @@ export default function Home() {
       }
       buffer.lastKeyAt = now;
       buffer.value += event.key;
-      const normalizedCode = buffer.value.trim().toUpperCase().replace(/^LART[-'’_\s]*/, "");
-      if (!PRODUCTS.some((product) => product.code === normalizedCode)) return;
+      const product = productFromScannedCode(buffer.value);
+      if (!product) return;
       event.preventDefault();
       const scanned = buffer.value;
       const sourceInput = buffer.input;
