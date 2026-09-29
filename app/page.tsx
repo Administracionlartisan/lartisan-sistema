@@ -235,6 +235,8 @@ export default function Home() {
   const [receivingRequestId, setReceivingRequestId] = useState<string | null>(null);
   const [receivedScanCounts, setReceivedScanCounts] = useState<Record<number, number>>({});
   const [receivingScanNotice, setReceivingScanNotice] = useState("");
+  const [centralExtraProductId, setCentralExtraProductId] = useState(PRODUCTS[0].id);
+  const [centralExtraQuantity, setCentralExtraQuantity] = useState(1);
   const [expensesLog, setExpensesLog] = useState<Expense[]>([]);
   const [returnsLog, setReturnsLog] = useState<ReturnTransaction[]>([]);
   const [cashTransfers, setCashTransfers] = useState<CashTransfer[]>([]);
@@ -2006,6 +2008,8 @@ export default function Home() {
     productId: number,
     preparedQuantity: number,
   ) => {
+    const request = stockRequests.find((item) => item.id === requestId);
+    if (!request || request.status === "Entregado") return;
     setStockRequests((items) =>
       items.map((request) =>
         request.id === requestId
@@ -2026,6 +2030,18 @@ export default function Home() {
           : request,
       ),
     );
+  };
+  const addCentralExtraItem = (request: StockRequest) => {
+    if (!managesCentralOrders || request.status === "Entregado" || centralExtraQuantity <= 0) return;
+    const product = PRODUCTS.find((item) => item.id === centralExtraProductId);
+    if (!product) return;
+    setStockRequests((items) => items.map((item) => item.id !== request.id ? item : {
+      ...item,
+      lines: item.lines.some((line) => line.productId === product.id)
+        ? item.lines.map((line) => line.productId === product.id ? { ...line, preparedQuantity: (line.preparedQuantity ?? line.quantity) + centralExtraQuantity } : line)
+        : [...item.lines, { productId: product.id, quantity: 0, preparedQuantity: centralExtraQuantity }],
+    }));
+    recordAudit("Artículo agregado al despacho", `${request.site} · ${product.name} × ${centralExtraQuantity} · ${request.id.slice(0, 8)}`);
   };
   const updateMissingReason = (
     requestId: string,
@@ -4665,11 +4681,10 @@ export default function Home() {
                               </span>
                               <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_96px] sm:items-center">
                                 <label className="text-xs font-bold">
-                                  Solicitado: {line.quantity} · Enviado
+                                  {line.quantity ? `Solicitado: ${line.quantity} · Enviado` : "Agregado por Central · Enviado"}
                                   <input
                                     type="number"
                                     min="0"
-                                    max={line.quantity}
                                     value={line.preparedQuantity ?? line.quantity}
                                     onChange={(event) =>
                                       updatePreparedQuantity(
@@ -4682,7 +4697,7 @@ export default function Home() {
                                   />
                                 </label>
                                 <p className="rounded bg-[#fff5d8] p-2 text-center text-xs font-bold">
-                                  Faltan {line.quantity - (line.preparedQuantity ?? line.quantity)}
+                                  {(line.preparedQuantity ?? line.quantity) > line.quantity ? `Extra ${(line.preparedQuantity ?? line.quantity) - line.quantity}` : `Faltan ${line.quantity - (line.preparedQuantity ?? line.quantity)}`}
                                 </p>
                               </div>
                               {(line.preparedQuantity ?? line.quantity) < line.quantity && (
@@ -4703,6 +4718,18 @@ export default function Home() {
                           );
                         })}
                       </div>
+                      {selectedRequest.status !== "Entregado" && (
+                        <div className="no-print mt-4 rounded border bg-[#eef2f6] p-3">
+                          <b className="text-sm">Agregar artículo al despacho</b>
+                          <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_92px_auto]">
+                            <select value={centralExtraProductId} onChange={(event) => setCentralExtraProductId(Number(event.target.value))} className="rounded border p-2 text-sm">
+                              {PRODUCTS.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.detail}</option>)}
+                            </select>
+                            <input type="number" min="1" value={centralExtraQuantity} onChange={(event) => setCentralExtraQuantity(Math.max(1, Number(event.target.value) || 1))} className="rounded border p-2 text-center text-sm" />
+                            <button onClick={() => addCentralExtraItem(selectedRequest)} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white">Agregar</button>
+                          </div>
+                        </div>
+                      )}
                       {["Pendiente", "En preparación"].includes(selectedRequest.status) ? (
                         <button
                           onClick={() => confirmCentralDispatch(selectedRequest)}
