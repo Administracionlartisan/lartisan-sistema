@@ -176,6 +176,7 @@ export default function Home() {
   const serverRevision = useRef<Record<string, number>>({});
   const persistQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingReceiptRef = useRef<Sale | null>(null);
+  const receptionScannerRef = useRef<HTMLInputElement | null>(null);
   const scannerBufferRef = useRef<{ value: string; lastKeyAt: number; input: HTMLInputElement | HTMLTextAreaElement | null; originalValue: string }>({ value: "", lastKeyAt: 0, input: null, originalValue: "" });
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
@@ -235,6 +236,7 @@ export default function Home() {
   const [receivingRequestId, setReceivingRequestId] = useState<string | null>(null);
   const [receivedScanCounts, setReceivedScanCounts] = useState<Record<number, number>>({});
   const [receivingScanNotice, setReceivingScanNotice] = useState("");
+  const [receivingBarcodeInput, setReceivingBarcodeInput] = useState("");
   const [centralExtraProductId, setCentralExtraProductId] = useState(PRODUCTS[0].id);
   const [centralExtraQuantity, setCentralExtraQuantity] = useState(1);
   const [expensesLog, setExpensesLog] = useState<Expense[]>([]);
@@ -1156,6 +1158,8 @@ export default function Home() {
     setReceivingRequestId(request.id);
     setReceivedScanCounts({});
     setReceivingScanNotice(`Pedido ${request.id.slice(0, 8)} listo para recibir. Escaneá cada unidad entregada.`);
+    setReceivingBarcodeInput("");
+    requestAnimationFrame(() => receptionScannerRef.current?.focus());
   };
   const scanReceivedProduct = (rawBarcode: string) => {
     const scanned = rawBarcode.trim().toUpperCase();
@@ -1179,6 +1183,7 @@ export default function Home() {
     }
     const next = received + 1;
     setReceivedScanCounts((items) => ({ ...items, [product.id]: next }));
+    setReceivingBarcodeInput("");
     setReceivingScanNotice(`Validado: ${product.name} · ${next} de ${expected} unidad${expected === 1 ? "" : "es"}.`);
   };
   const confirmScannedReception = (request: StockRequest) => {
@@ -1199,6 +1204,9 @@ export default function Home() {
       const now = Date.now();
       const active = document.activeElement;
       const activeInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active : null;
+      // Durante la recepción, el foco lo toma el capturador invisible. Su onChange
+      // procesa la lectura para que no se contabilice dos veces.
+      if (activeInput === receptionScannerRef.current) return;
       const buffer = scannerBufferRef.current;
       if (now - buffer.lastKeyAt > 120) {
         buffer.value = "";
@@ -4557,6 +4565,21 @@ export default function Home() {
                                 {receivingRequestId === request.id && (
                                   <div className="mt-3 rounded border border-[#b8c8dd] bg-white p-3">
                                     <b>Validación por escaneo</b>
+                                    <input
+                                      ref={receptionScannerRef}
+                                      value={receivingBarcodeInput}
+                                      onChange={(event) => {
+                                        const value = event.target.value;
+                                        setReceivingBarcodeInput(value);
+                                        const code = value.trim().toUpperCase().replace(/^LART[-'’_\s]*/, "");
+                                        if (PRODUCTS.some((product) => product.code === code)) {
+                                          scanReceivedProduct(value);
+                                        }
+                                      }}
+                                      aria-label="Escáner de recepción activo"
+                                      className="sr-only"
+                                      autoComplete="off"
+                                    />
                                     <p className="mt-1 text-xs text-slate-600">Escaneá cada unidad entregada. El stock se actualiza sólo cuando la lista coincide con el despacho.</p>
                                     <div className="mt-2 space-y-1 text-xs">
                                       {request.lines.map((line) => {
