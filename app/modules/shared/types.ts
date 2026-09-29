@@ -4,6 +4,8 @@ export type Product = {
   detail: string;
   category: string;
   price: number;
+  code: string;
+  barcode: string;
 };
 
 export type Role = "vendedora" | "supervisora" | "compras" | "administracion";
@@ -141,6 +143,7 @@ export type OperationalSnapshot = {
   audit?: AuditEvent[];
   cash?: CashFields;
   cashOpen?: boolean;
+  priceCatalogVersion?: string;
   prices?: Record<number, number>;
   onlinePrices?: Record<number, number>;
   limitsBySite?: Record<string, OperationalLimits>;

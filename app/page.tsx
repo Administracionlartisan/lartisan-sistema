@@ -79,6 +79,7 @@ export default function Home() {
     [tab, setTab] = useState("Ventas"),
     [navOpen, setNavOpen] = useState(false),
     [productSearch, setProductSearch] = useState(""),
+    [barcodeInput, setBarcodeInput] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
     [payment, setPayment] = useState("Efectivo"),
@@ -256,6 +257,7 @@ export default function Home() {
   const [prices, setPrices] = useState<Record<number, number>>(
     Object.fromEntries(PRODUCTS.map((product) => [product.id, product.price])),
   );
+  const [priceCatalogVersion, setPriceCatalogVersion] = useState("2026-09-29");
   const [onlinePrices, setOnlinePrices] = useState<Record<number, number>>(
     Object.fromEntries(
       PRODUCTS.map((product) => [product.id, Math.round(product.price * 1.25)]),
@@ -788,14 +790,32 @@ export default function Home() {
         entries.map(([local, entry]) => [local, entry.revision]),
       );
       const configuration = entries.find(([, entry]) => entry.state.prices || entry.state.limitsBySite || entry.state.schedules)?.[1].state;
-      if (configuration?.prices) setPrices(configuration.prices);
-      if (configuration?.onlinePrices) setOnlinePrices(configuration.onlinePrices);
+      const currentCatalogVersion = "2026-09-29";
+      const mustRefreshCatalog = Boolean(configuration) && configuration?.priceCatalogVersion !== currentCatalogVersion;
+      if (mustRefreshCatalog) {
+        // La lista pública fue confirmada por Administración. Esta migración se ejecuta una vez
+        // y no vuelve a pisar futuras modificaciones de precios hechas desde Administración.
+        setPrices(Object.fromEntries(PRODUCTS.map((product) => [product.id, product.price])));
+        setOnlinePrices(Object.fromEntries(PRODUCTS.map((product) => [product.id, Math.round(product.price * 1.25)])));
+        setPriceCatalogVersion(currentCatalogVersion);
+      } else {
+        if (configuration?.prices) setPrices(configuration.prices);
+        if (configuration?.onlinePrices) setOnlinePrices(configuration.onlinePrices);
+        if (configuration?.priceCatalogVersion) setPriceCatalogVersion(configuration.priceCatalogVersion);
+      }
       if (configuration?.limitsBySite) setLimitsBySite(configuration.limitsBySite);
       if (configuration?.schedules) setSchedules(configuration.schedules);
       if (configuration?.priceChanges) setPriceChanges(configuration.priceChanges);
       if (configuration?.monthlyTargets) {
         setMonthlyTargets((targets) => ({ ...targets, ...configuration.monthlyTargets }));
         setMonthlyTargetDrafts((targets) => ({ ...targets, ...configuration.monthlyTargets }));
+      }
+      if (mustRefreshCatalog) {
+        operationalEventRef.current = {
+          action: "Catálogo público actualizado",
+          detail: "Se aplicó la lista pública vigente de 58 productos y sus códigos de lectura.",
+        };
+        setOperationalVersion((version) => version + 1);
       }
     }
     setOperationalReady(true);
@@ -881,6 +901,7 @@ export default function Home() {
       audit: filterBySite(audit),
       cash: cashFieldsBySite[local] || EMPTY_CASH_FIELDS,
       cashOpen: Boolean(cashOpenBySite[local]),
+      priceCatalogVersion,
       prices,
       onlinePrices,
       limitsBySite,
@@ -988,6 +1009,7 @@ export default function Home() {
     audit,
     cashFieldsBySite,
     cashOpenBySite,
+    priceCatalogVersion,
     prices,
     onlinePrices,
     limitsBySite,
@@ -1021,12 +1043,14 @@ export default function Home() {
     [cat, setCat] = useState("Todos");
   const visible = PRODUCTS.filter((product) =>
     (cat === "Todos" || product.category === cat) &&
-    `${product.name} ${product.detail} ${product.category}`.toLowerCase().includes(productSearch.trim().toLowerCase()),
+    `${product.name} ${product.detail} ${product.category} ${product.code} ${product.barcode}`.toLowerCase().includes(productSearch.trim().toLowerCase()),
   );
   const total = cart.reduce((a, p) => a + p.price, 0);
   const isOnlineChannel = saleChannel === "Online";
   const selectedPrice = (product: Product) =>
-    isOnlineChannel ? onlinePrices[product.id] : prices[product.id];
+    isOnlineChannel
+      ? (onlinePrices[product.id] ?? Math.round(product.price * 1.25))
+      : (prices[product.id] ?? product.price);
   const lines = useMemo(
     () =>
       Array.from(
@@ -1073,6 +1097,31 @@ export default function Home() {
   }));
   const requiresEnvelope = site !== "Novo Pacheco";
   const cashIsOpen = Boolean(cashOpenBySite[site]);
+  const addProductToCart = (product: Product) => {
+    if (!cashIsOpen) {
+      setMessage("Abrí la caja antes de agregar productos a la venta.");
+      return;
+    }
+    if ((stock[site]?.[product.id] ?? 0) < 1) {
+      setMessage(`${product.name} no tiene stock disponible en ${site}. Cargá o confirmá el stock antes de venderlo.`);
+      return;
+    }
+    setCart((items) => [...items, { ...product, price: selectedPrice(product) }]);
+  };
+  const addScannedProduct = () => {
+    const scanned = barcodeInput.trim().toUpperCase();
+    if (!scanned) return;
+    const normalizedCode = scanned.replace(/^LART-/, "");
+    const product = PRODUCTS.find(
+      (item) => item.barcode.toUpperCase() === scanned || item.code === normalizedCode,
+    );
+    if (!product) {
+      setMessage(`No reconocemos el código “${barcodeInput.trim()}”. Verificá que la etiqueta tenga el código de barras vigente.`);
+      return;
+    }
+    setBarcodeInput("");
+    addProductToCart(product);
+  };
   const siteLimits = limitsBySite[site];
   const currentCashLedger = cashLedger.filter(
     (entry) => entry.site === site && entry.shiftId === activeShift?.id,
@@ -3212,17 +3261,29 @@ export default function Home() {
                     <span className="sr-only">Buscar producto</span>
                     <input value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Buscar producto o categoría…" className="w-full rounded-xl border bg-white p-3 text-base" />
                   </label>
+                  <form
+                    className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#f4f8fc] p-3"
+                    onSubmit={(event) => { event.preventDefault(); addScannedProduct(); }}
+                  >
+                    <label className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <span className="font-bold text-[#183a67]">Escanear código</span>
+                      <input
+                        value={barcodeInput}
+                        onChange={(event) => setBarcodeInput(event.target.value)}
+                        placeholder="Leé la etiqueta (ej.: LART-501)"
+                        className="min-w-0 flex-1 rounded-lg border bg-white px-3 py-2"
+                        autoComplete="off"
+                      />
+                      <button type="submit" className="rounded-lg bg-[#183a67] px-4 py-2 font-bold text-white">Agregar</button>
+                    </label>
+                    <p className="mt-2 text-xs text-slate-600">La lectora USB escribe el código y Enter agrega una unidad. La etiqueta debe tener un código de barras Code 128, no solo el texto “COD”.</p>
+                  </form>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {visible.map((p) => (
                       <button
                         key={p.id}
                         disabled={!cashIsOpen || !stock[site][p.id]}
-                        onClick={() =>
-                          setCart((c) => [
-                            ...c,
-                            { ...p, price: selectedPrice(p) },
-                          ])
-                        }
+                        onClick={() => addProductToCart(p)}
                         className="rounded-xl border bg-white p-4 text-left shadow-sm disabled:opacity-30"
                       >
                         <b>{p.name}</b>
