@@ -106,6 +106,7 @@ export default function Home() {
     [navOpen, setNavOpen] = useState(false),
     [productSearch, setProductSearch] = useState(""),
     [scannerResult, setScannerResult] = useState(""),
+    [salesScannerValue, setSalesScannerValue] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
     [payment, setPayment] = useState("Efectivo"),
@@ -194,6 +195,7 @@ export default function Home() {
   const serverRevision = useRef<Record<string, number>>({});
   const persistQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingReceiptRef = useRef<Sale | null>(null);
+  const salesScannerRef = useRef<HTMLInputElement | null>(null);
   const receptionScannerRef = useRef<HTMLInputElement | null>(null);
   const scannerBufferRef = useRef<{ value: string; lastKeyAt: number; input: HTMLInputElement | HTMLTextAreaElement | null; originalValue: string }>({ value: "", lastKeyAt: 0, input: null, originalValue: "" });
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
@@ -1169,6 +1171,12 @@ export default function Home() {
         : `No se agregó: ${product.name} no tiene stock disponible en ${site}.`,
     );
   };
+  const captureSalesScan = (rawBarcode: string) => {
+    if (!productFromScannedCode(rawBarcode)) return;
+    setSalesScannerValue("");
+    addScannedProduct(rawBarcode);
+    requestAnimationFrame(() => salesScannerRef.current?.focus());
+  };
   const startScannedReception = (request: StockRequest) => {
     setReceivingRequestId(request.id);
     setReceivedScanCounts({});
@@ -1212,6 +1220,10 @@ export default function Home() {
     setReceivingScanNotice("");
   };
   useEffect(() => {
+    if (tab !== "Ventas") return;
+    requestAnimationFrame(() => salesScannerRef.current?.focus());
+  }, [tab]);
+  useEffect(() => {
     if (tab !== "Ventas" && tab !== "Pedido") return;
     const onScannerKey = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.altKey || event.metaKey || event.key.length !== 1) return;
@@ -1220,7 +1232,7 @@ export default function Home() {
       const activeInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active : null;
       // Durante la recepción, el foco lo toma el capturador invisible. Su onChange
       // procesa la lectura para que no se contabilice dos veces.
-      if (activeInput === receptionScannerRef.current) return;
+      if (activeInput === receptionScannerRef.current || activeInput === salesScannerRef.current) return;
       const buffer = scannerBufferRef.current;
       // Algunas lectoras USB envían los caracteres más despacio que otras.
       // Conservamos la lectura como una misma secuencia durante 800 ms para
@@ -1251,7 +1263,7 @@ export default function Home() {
         });
       }
       if (tab === "Pedido") scanReceivedProduct(scanned);
-      else addScannedProduct(scanned);
+      else captureSalesScan(scanned);
     };
     window.addEventListener("keydown", onScannerKey, true);
     return () => window.removeEventListener("keydown", onScannerKey, true);
@@ -3413,6 +3425,19 @@ export default function Home() {
                     <span className="sr-only">Buscar producto</span>
                     <input value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Buscar producto o categoría…" className="w-full rounded-xl border bg-white p-3 text-base" />
                   </label>
+                  <input
+                    ref={salesScannerRef}
+                    value={salesScannerValue}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setSalesScannerValue(value);
+                      captureSalesScan(value);
+                    }}
+                    aria-label="Captura automática de lectora"
+                    autoComplete="off"
+                    tabIndex={-1}
+                    className="fixed left-[-10000px] top-0 h-px w-px opacity-0"
+                  />
                   {scannerResult && <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#f4f8fc] px-4 py-3 text-sm font-semibold text-[#183a67]" role="status">{scannerResult}</p>}
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {visible.map((p) => (
