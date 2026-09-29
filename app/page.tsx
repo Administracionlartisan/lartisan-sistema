@@ -87,7 +87,6 @@ export default function Home() {
     [tab, setTab] = useState("Ventas"),
     [navOpen, setNavOpen] = useState(false),
     [productSearch, setProductSearch] = useState(""),
-    [barcodeInput, setBarcodeInput] = useState(""),
     [scannerResult, setScannerResult] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
@@ -177,7 +176,6 @@ export default function Home() {
   const serverRevision = useRef<Record<string, number>>({});
   const persistQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingReceiptRef = useRef<Sale | null>(null);
-  const scannerInputRef = useRef<HTMLInputElement | null>(null);
   const scannerBufferRef = useRef<{ value: string; lastKeyAt: number; input: HTMLInputElement | HTMLTextAreaElement | null; originalValue: string }>({ value: "", lastKeyAt: 0, input: null, originalValue: "" });
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
@@ -1123,7 +1121,7 @@ export default function Home() {
     setCart((items) => [...items, { ...product, price: selectedPrice(product) }]);
     return true;
   };
-  const addScannedProduct = (rawBarcode = barcodeInput) => {
+  const addScannedProduct = (rawBarcode: string) => {
     const scanned = rawBarcode.trim().toUpperCase();
     if (!scanned) return;
     // Algunas lectoras configuradas con teclado US envían el guion como apóstrofe
@@ -1140,7 +1138,6 @@ export default function Home() {
       return;
     }
     if (addProductToCart(product)) {
-      setBarcodeInput("");
       setScannerResult(`Agregado: ${product.name} · ${product.detail}.`);
       return;
     }
@@ -1173,7 +1170,7 @@ export default function Home() {
       const originalValue = buffer.originalValue;
       buffer.value = "";
       buffer.input = null;
-      if (sourceInput && sourceInput !== scannerInputRef.current) {
+      if (sourceInput) {
         requestAnimationFrame(() => {
           const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
           if (sourceInput instanceof HTMLTextAreaElement) {
@@ -3327,33 +3324,7 @@ export default function Home() {
                     <span className="sr-only">Buscar producto</span>
                     <input value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Buscar producto o categoría…" className="w-full rounded-xl border bg-white p-3 text-base" />
                   </label>
-                  <form
-                    className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#f4f8fc] p-3"
-                    onSubmit={(event) => { event.preventDefault(); addScannedProduct(); }}
-                  >
-                    <label className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <span className="font-bold text-[#183a67]">Escanear código</span>
-                      <input
-                        ref={scannerInputRef}
-                        value={barcodeInput}
-                        onChange={(event) => {
-                          const nextBarcode = event.target.value;
-                          setBarcodeInput(nextBarcode);
-                          setScannerResult("");
-                          const normalized = nextBarcode.trim().toUpperCase().replace(/^LART[-'’_\s]*/, "");
-                          if (PRODUCTS.some((product) => product.code === normalized)) {
-                            addScannedProduct(nextBarcode);
-                          }
-                        }}
-                        placeholder="Leé la etiqueta (ej.: LART-501)"
-                        className="min-w-0 flex-1 rounded-lg border bg-white px-3 py-2"
-                        autoComplete="off"
-                      />
-                      <button type="submit" className="rounded-lg bg-[#183a67] px-4 py-2 font-bold text-white">Agregar</button>
-                    </label>
-                    <p className="mt-2 text-xs text-slate-600">La lectora USB agrega una unidad al terminar de leer el código; no necesita Enter. La etiqueta debe tener un código de barras Code 128, no solo el texto “COD”.</p>
-                    {scannerResult && <p className="mt-2 text-sm font-semibold text-[#183a67]" role="status">{scannerResult}</p>}
-                  </form>
+                  {scannerResult && <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#f4f8fc] px-4 py-3 text-sm font-semibold text-[#183a67]" role="status">{scannerResult}</p>}
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {visible.map((p) => (
                       <button
