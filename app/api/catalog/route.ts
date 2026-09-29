@@ -12,10 +12,13 @@ const database = () => (env as unknown as { DB: D1Database }).DB;
 async function upstream(path: "auth/me" | "operations/states", cookie: string) {
   const options: RequestInit = { headers: { Cookie: cookie }, redirect: "manual", signal: AbortSignal.timeout(15000) };
   const response = await fetch(`${API_BASE}/${path}`, options);
-  // El dominio raíz es el mismo backend de DonWeb. Mantener HTTPS verificado;
-  // nunca degradar a HTTP ni reenviar la sesión a destinos de una redirección.
-  if (response.status === 526) return fetch(`https://lartisantaller.com/sistema-api/${path}`, options);
+  // No degradar a HTTP ni omitir la validación TLS para reenviar una sesión.
+  if (response.status === 525 || response.status === 526) throw new CatalogConnectionError();
   return response;
+}
+
+class CatalogConnectionError extends Error {
+  constructor() { super("El catálogo no puede conectarse de forma segura al servidor. Es necesario revisar su certificado de conexión."); }
 }
 
 async function identity(request: Request): Promise<{ user: ApiUser; cookie: string } | Response> {
@@ -24,7 +27,7 @@ async function identity(request: Request): Promise<{ user: ApiUser; cookie: stri
   // workerd admite "manual", no "error". Nunca seguir redirecciones con la cookie.
   const response = await upstream("auth/me", cookie);
   if (!response.ok) {
-    if (response.status !== 401) console.error("catalog_identity_rejected", JSON.stringify({ status: response.status, contentType: response.headers.get("content-type"), location: response.headers.get("location"), server: response.headers.get("server") }));
+    if (response.status !== 401) console.error("catalog_identity_rejected", JSON.stringify({ status: response.status, contentType: response.headers.get("content-type"), server: response.headers.get("server") }));
     return json({ error: "No se pudo validar la sesión." }, response.status === 401 ? 401 : 503);
   }
   const data = await response.json() as { user?: ApiUser };
@@ -53,7 +56,7 @@ export async function GET(request: Request) {
     return json(await readCatalog(database()) ?? await initialCatalog(auth.cookie));
   } catch (error) {
     console.error("catalog_load_failed", error instanceof Error ? error.message : "unknown_error");
-    return json({ error: "No se pudo cargar el catálogo central. Intentá nuevamente." }, 503);
+    return json({ error: error instanceof CatalogConnectionError ? error.message : "No se pudo cargar el catálogo central. Intentá nuevamente." }, 503);
   }
 }
 
@@ -81,6 +84,6 @@ export async function PUT(request: Request) {
     return json(doc);
   } catch (error) {
     console.error("catalog_save_failed", error instanceof Error ? error.message : "unknown_error");
-    return json({ error: "No se confirmó el guardado. Recargá el catálogo para comprobarlo; tus cambios siguen en el formulario." }, 503);
+    return json({ error: error instanceof CatalogConnectionError ? error.message : "No se confirmó el guardado. Recargá el catálogo para comprobarlo; tus cambios siguen en el formulario." }, 503);
   }
 }

@@ -19,3 +19,12 @@
 `node tests/catalog-browser.mjs`: copia aislada solo en 127.0.0.1:8971. No usa operaciones reales. Permite probar alta/edición y ver el catálogo en Ventas, Pedido y Stock con `?role=vendedora`.
 
 Construcción y pruebas de catálogo, seguridad, estructura y ayuda verificadas. El chequeo global TypeScript mantiene errores previos en MRP y la lectura de diagnóstico de la página; no están introducidos por el catálogo.
+
+## Incidente de conexión del 29/09/2026
+
+- Corregido `redirect: "error"`, no soportado por workerd: se usa `manual` y no se siguen redirecciones con cookies.
+- Agregada una prueba de la ruta compilada dentro de workerd/Miniflare y D1, además de SQLite. Son pruebas aisladas, no acreditan acceso autenticado a producción.
+- El servidor publicado devolvió HTTP 526 al consultar el `auth/me` de DonWeb. El navegador/local IPv4 sí obtiene respuesta; esto no demuestra que todos los destinos o cadenas TLS del hosting estén correctos. El dominio raíz alternativo también fue probado y no solucionó el problema.
+- Se mantiene la validación TLS y la autorización: no se usan HTTP, certificados ignorados ni una identidad proporcionada por el navegador. El mensaje del catálogo distingue ahora la falla del certificado.
+- Pendiente: revisar certificado/cadena y configuración IPv4/IPv6 en DonWeb. La sesión del panel estaba vencida; se solicitó al propietario iniciar sesión. Después se debe verificar GET autenticado, revisión inicial y apertura de edición sin modificar precios reales para pruebas.
+- La tabla central estaba vacía durante el diagnóstico. No se cambió stock, no se cobraron ventas y no se agregaron productos de prueba en producción.

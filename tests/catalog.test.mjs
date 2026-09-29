@@ -31,12 +31,11 @@ globalThis.__testCatalogEnv = { DB: { prepare(query) {
 } } };
 const api = await import(moduleUrl(resolve(root, 'app/api/catalog/route.ts')));
 const nativeFetch = globalThis.fetch;
-let role = 'administracion', mustChange = false, upstreamStatus = 200, wwwTlsFailure = false;
+let role = 'administracion', mustChange = false, upstreamStatus = 200;
 globalThis.fetch = async (url, options) => {
-  assert.match(String(url), /^https:\/\/(www\.)?lartisantaller\.com\/sistema-api\/(auth\/me|operations\/states)$/);
+  assert.match(String(url), /^https:\/\/www\.lartisantaller\.com\/sistema-api\/(auth\/me|operations\/states)$/);
   assert.equal(options.headers.Cookie, 'lartisan_session=abc123');
   assert.equal(options.redirect, 'manual', 'workerd no acepta redirect:error; tampoco seguir redirecciones con la cookie');
-  if (wwwTlsFailure && new URL(url).hostname === 'www.lartisantaller.com') return new Response('', { status: 526 });
   if (String(url).endsWith('/auth/me')) return Response.json({ user: { id: 1, role, mustChangePassword: mustChange } }, { status: upstreamStatus });
   return Response.json({ states: { Recoleta: { state: { prices: { 1: 9000 }, onlinePrices: { 1: 11000 } } } } });
 };
@@ -90,13 +89,14 @@ test('una redirección de identidad no concede acceso ni se sigue con la cookie'
   upstreamStatus = 200;
 });
 
-test('una falla TLS en www usa únicamente el dominio raíz HTTPS del mismo backend', async () => {
-  wwwTlsFailure = true;
+test('una falla TLS bloquea carga y guardado con explicación, sin omitir seguridad', async () => {
+  upstreamStatus = 526;
   try {
     const response = await api.GET(request());
-    assert.equal(response.status, 200);
-    assert.equal((await response.json()).products[0].price, 9000);
-  } finally { wwwTlsFailure = false; }
+    assert.equal(response.status, 503);
+    assert.match((await response.json()).error, /certificado/);
+    assert.equal((await api.PUT(request('PUT', seed))).status, 503);
+  } finally { upstreamStatus = 200; }
 });
 test('migración guarda precios vigentes; recarga persiste y conflicto no sobrescribe', async () => {
   const initial = await (await api.GET(request())).json();
