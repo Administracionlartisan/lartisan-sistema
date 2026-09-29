@@ -1,3 +1,12 @@
+import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core";
+
+export const catalogRevisions = sqliteTable("catalog_revisions", {
+  revision: integer("revision").primaryKey(),
+  documentJson: text("document_json").notNull(),
+  actor: text("actor").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
 export const PILOT_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS pilot_users (
     id TEXT PRIMARY KEY,

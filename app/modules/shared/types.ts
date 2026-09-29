@@ -6,6 +6,8 @@ export type Product = {
   price: number;
   code: string;
   barcode: string;
+  barcodeAliases?: string[];
+  onlinePrice?: number;
 };
 
 export type Role = "vendedora" | "supervisora" | "compras" | "administracion";

@@ -6,6 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "test:catalog": "node --test tests/catalog.test.mjs",
     "test:help": "node --experimental-strip-types --test tests/assistant-help.test.mjs tests/report-guide.test.mjs",
     "test:security": "node --test tests/security.test.mjs tests/reliability-history.test.mjs",
     "test:structure": "node --test tests/module-structure.test.mjs",
@@ -15,6 +16,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.3",
     "next": "16.3.4",
     "react": "19.2.6",
     "react-dom": "19.2.6"
@@ -29,6 +31,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
+    "drizzle-kit": "^0.31.11",
     "eslint": "9.39.4",
     "eslint-config-next": "16.3.4",
     "react-server-dom-webpack": "19.2.6",

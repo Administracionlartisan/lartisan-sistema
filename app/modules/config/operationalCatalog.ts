@@ -54,7 +54,7 @@ export const GUIDE_UPDATES = [
     date: "29/09/2026",
     title: "Venta con lectora de códigos",
     detail:
-      "En Ventas, ubicá el cursor en Escanear código y leé el código de barras real de la etiqueta. Cada lectura LART-XXX agrega una unidad del producto correcto. El texto impreso ‘COD: 501’ por sí solo no se puede escanear: la etiqueta debe incluir un código de barras Code 128. Si el sistema indica que no hay stock, cargá o confirmá primero el stock real del local.",
+      "Con Ventas abierta, escaneá la etiqueta: no hace falta seleccionar un campo. Cada lectura LART-XXX agrega una unidad del producto correcto. En Pedido, la lectura valida mercadería recibida, no una venta. La etiqueta debe incluir un código de barras Code 128. Administración gestiona productos y códigos desde Catálogo y precios; los códigos anteriores también se aceptan. Si no hay stock, cargá o confirmá primero el stock real del local.",
   },
   {
     date: "28/09/2026",

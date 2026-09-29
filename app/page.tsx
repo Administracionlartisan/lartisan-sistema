@@ -15,6 +15,9 @@ import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import ComingSoonPanel, { type ComingSoonSection } from "./modules/administracion/ComingSoonPanel";
 import MrpPanel from "./modules/administracion/MrpPanel";
+import CatalogEditor from "./modules/administracion/CatalogEditor";
+import { useCatalog } from "./modules/config/useCatalog";
+import { findScannedProduct } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
@@ -29,7 +32,7 @@ import type {
 } from "./modules/shared/types";
 import {
   DRIVE_INTEGRATIONS, GUIDE_UPDATES, INITIAL_SCHEDULES,
-  METHODS, PRODUCTS, SHEET_CONFIG,
+  METHODS, SHEET_CONFIG,
 } from "./modules/config/operationalCatalog";
 
 const dateKey = (date: Date) => {
@@ -49,28 +52,11 @@ const safeStockQuantity = (value: unknown) => {
   const quantity = Number(value);
   return Number.isFinite(quantity) && quantity >= 0 ? quantity : 0;
 };
-const completeStockMap = (saved: Record<number, unknown> | undefined) =>
-  Object.fromEntries(
-    PRODUCTS.map((product) => [product.id, safeStockQuantity(saved?.[product.id])]),
-  ) as Record<number, number>;
-
-// Algunas etiquetas históricas ya impresas conservan su COD anterior. Se
-// aceptan como alias para no obligar a reetiquetar mercadería vigente.
-const LEGACY_SCAN_CODE_ALIASES: Record<string, string> = {
-  "401": "501",
-};
-const productFromScannedCode = (rawBarcode: string) => {
-  const scanned = rawBarcode.trim().toUpperCase();
-  // La lectora puede comenzar a escribir inmediatamente después de una tecla
-  // anterior. Tomamos el último LART-XXX de la secuencia, en lugar de exigir
-  // que sea el único texto recibido.
-  const embeddedBarcode = scanned.match(/LART[-'’_\s]*(\d+)$/);
-  const code = embeddedBarcode?.[1] ?? scanned.replace(/^LART[-'’_\s]*/, "");
-  const officialCode = LEGACY_SCAN_CODE_ALIASES[code] ?? code;
-  return PRODUCTS.find(
-    (item) => item.barcode.toUpperCase() === scanned || item.code === officialCode,
-  );
-};
+const completeStockMap = (saved: Record<number, unknown> | undefined, products: Product[]) =>
+  Object.fromEntries([
+    ...Object.entries(saved ?? {}).map(([id, value]) => [id, safeStockQuantity(value)]),
+    ...products.map((product) => [product.id, safeStockQuantity(saved?.[product.id])]),
+  ]) as Record<number, number>;
 export default function Home() {
   // En producción el portal se determina por el subdominio. El parámetro
   // ?portal=admin o ?portal=ventas permite revisar ambos accesos localmente.
@@ -177,13 +163,19 @@ export default function Home() {
     [priceIncrease, setPriceIncrease] = useState(0),
     [priceRounding, setPriceRounding] = useState(100),
     [priceCategory, setPriceCategory] = useState("Todos"),
-    [priceEffectiveDate, setPriceEffectiveDate] = useState("2026-08-27"),
-    [priceChanges, setPriceChanges] = useState<PriceChange[]>([]),
+    [priceEffectiveDate, setPriceEffectiveDate] = useState(() => dateKey(new Date())),
     [expandedPriceChange, setExpandedPriceChange] = useState<string | null>(
       null,
     ),
     [clock, setClock] = useState(""),
     [drive, setDrive] = useState("");
+  const catalog = useCatalog(user?.id);
+  const products = catalog.document.products;
+  const priceChanges = catalog.document.priceChanges;
+  const prices = useMemo(() => Object.fromEntries(products.map((p) => [p.id, p.price])), [products]);
+  const onlinePrices = useMemo(() => Object.fromEntries(products.map((p) => [p.id, p.onlinePrice ?? p.price])), [products]);
+  const priceCatalogVersion = "2026-09-29";
+  const productFromScannedCode = (value: string) => findScannedProduct(products, value);
   const [stockRequests, setStockRequests] = useState<StockRequest[]>([]);
   const [cashFieldsBySite, setCashFieldsBySite] = useState<
     Record<string, CashFields>
@@ -242,7 +234,7 @@ export default function Home() {
   const [envelopeRecords, setEnvelopeRecords] = useState<EnvelopeRecord[]>([]);
   const [oscarWithdrawal, setOscarWithdrawal] = useState(0);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
-  const [movementProductId, setMovementProductId] = useState(PRODUCTS[0].id);
+  const [movementProductId, setMovementProductId] = useState(products[0].id);
   const [movementKind, setMovementKind] =
     useState<StockMovement["kind"]>("Ingreso por remito");
   const [movementQuantity, setMovementQuantity] = useState(0);
@@ -259,7 +251,7 @@ export default function Home() {
   const [receivedScanCounts, setReceivedScanCounts] = useState<Record<number, number>>({});
   const [receivingScanNotice, setReceivingScanNotice] = useState("");
   const [receivingBarcodeInput, setReceivingBarcodeInput] = useState("");
-  const [centralExtraProductId, setCentralExtraProductId] = useState(PRODUCTS[0].id);
+  const [centralExtraProductId, setCentralExtraProductId] = useState(products[0].id);
   const [centralExtraQuantity, setCentralExtraQuantity] = useState(1);
   const [expensesLog, setExpensesLog] = useState<Expense[]>([]);
   const [returnsLog, setReturnsLog] = useState<ReturnTransaction[]>([]);
@@ -290,22 +282,13 @@ export default function Home() {
   const [monthlyTargetDrafts, setMonthlyTargetDrafts] = useState<Record<string, number>>(
     () => Object.fromEntries(SITES.map((local) => [local, 0])),
   );
-  const [adjustProductId, setAdjustProductId] = useState(PRODUCTS[0].id);
+  const [adjustProductId, setAdjustProductId] = useState(products[0].id);
   const [adjustReason, setAdjustReason] = useState("");
-  const [prices, setPrices] = useState<Record<number, number>>(
-    Object.fromEntries(PRODUCTS.map((product) => [product.id, product.price])),
-  );
-  const [priceCatalogVersion, setPriceCatalogVersion] = useState("2026-09-29");
-  const [onlinePrices, setOnlinePrices] = useState<Record<number, number>>(
-    Object.fromEntries(
-      PRODUCTS.map((product) => [product.id, Math.round(product.price * 1.25)]),
-    ),
-  );
   const [stock, setStock] = useState<Record<string, Record<number, number>>>(
     Object.fromEntries(
       SITES.map((s) => [
         s,
-        Object.fromEntries(PRODUCTS.map((p) => [p.id, 0])),
+        Object.fromEntries(products.map((p) => [p.id, 0])),
       ]),
     ),
   );
@@ -315,7 +298,7 @@ export default function Home() {
     Object.fromEntries(
       SITES.map((s) => [
         s,
-        Object.fromEntries(PRODUCTS.map((product) => [product.id, 0])),
+        Object.fromEntries(products.map((product) => [product.id, 0])),
       ]),
     ),
   );
@@ -325,7 +308,7 @@ export default function Home() {
     Object.fromEntries(
       SITES.map((s) => [
         s,
-        Object.fromEntries(PRODUCTS.map((p) => [p.id, ""])),
+        Object.fromEntries(products.map((p) => [p.id, ""])),
       ]),
     ),
   );
@@ -335,11 +318,31 @@ export default function Home() {
     Object.fromEntries(
       SITES.map((s) => [
         s,
-        Object.fromEntries(PRODUCTS.map((p) => [p.id, ""])),
+        Object.fromEntries(products.map((p) => [p.id, ""])),
       ]),
     ),
   );
   const [payments, setPayments] = useState<Payment[]>([]);
+  useEffect(() => {
+    if (!operationalReady) return;
+    // Ampliar los mapas sin tocar cantidades existentes ni identificadores históricos.
+    setStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
+    setMinimumStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
+    const blanks = Object.fromEntries(products.map((p) => [p.id, ""]));
+    setRealStock((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
+    setStockCountComments((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
+  }, [products, operationalReady]);
+  useEffect(() => {
+    // Primera migración: guarda la lista vigente completa, sin modificar stock.
+    if (user?.role === "administracion" && catalog.ready && catalog.document.revision === 0) {
+      void catalog.save(products).catch((error) => {
+        setMessage(error instanceof Error ? error.message : "No se pudo centralizar el catálogo.");
+        void catalog.reload();
+      });
+    }
+  // La revisión 0 solo existe antes del primer guardado central.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.role, catalog.ready, catalog.document.revision]);
   const cashFields = cashFieldsBySite[site] || EMPTY_CASH_FIELDS;
   const updateCashField = <K extends keyof CashFields>(
     field: K,
@@ -758,7 +761,7 @@ export default function Home() {
         ...Object.fromEntries(
           entries.map(([local, entry]) => [
             local,
-            completeStockMap(entry.state.stock as Record<number, unknown> | undefined),
+            completeStockMap(entry.state.stock as Record<number, unknown> | undefined, products),
           ]),
         ),
       }));
@@ -831,32 +834,11 @@ export default function Home() {
         entries.map(([local, entry]) => [local, entry.revision]),
       );
       const configuration = entries.find(([, entry]) => entry.state.prices || entry.state.limitsBySite || entry.state.schedules)?.[1].state;
-      const currentCatalogVersion = "2026-09-29";
-      const mustRefreshCatalog = Boolean(configuration) && configuration?.priceCatalogVersion !== currentCatalogVersion;
-      if (mustRefreshCatalog) {
-        // La lista pública fue confirmada por Administración. Esta migración se ejecuta una vez
-        // y no vuelve a pisar futuras modificaciones de precios hechas desde Administración.
-        setPrices(Object.fromEntries(PRODUCTS.map((product) => [product.id, product.price])));
-        setOnlinePrices(Object.fromEntries(PRODUCTS.map((product) => [product.id, Math.round(product.price * 1.25)])));
-        setPriceCatalogVersion(currentCatalogVersion);
-      } else {
-        if (configuration?.prices) setPrices(configuration.prices);
-        if (configuration?.onlinePrices) setOnlinePrices(configuration.onlinePrices);
-        if (configuration?.priceCatalogVersion) setPriceCatalogVersion(configuration.priceCatalogVersion);
-      }
       if (configuration?.limitsBySite) setLimitsBySite(configuration.limitsBySite);
       if (configuration?.schedules) setSchedules(configuration.schedules);
-      if (configuration?.priceChanges) setPriceChanges(configuration.priceChanges);
       if (configuration?.monthlyTargets) {
         setMonthlyTargets((targets) => ({ ...targets, ...configuration.monthlyTargets }));
         setMonthlyTargetDrafts((targets) => ({ ...targets, ...configuration.monthlyTargets }));
-      }
-      if (mustRefreshCatalog) {
-        operationalEventRef.current = {
-          action: "Catálogo público actualizado",
-          detail: "Se aplicó la lista pública vigente de 58 productos y sus códigos de lectura.",
-        };
-        setOperationalVersion((version) => version + 1);
       }
     }
     setOperationalReady(true);
@@ -1080,9 +1062,9 @@ export default function Home() {
     if (user) window.localStorage.setItem(`lartisan:last-site:${user.id}`, site);
   }, [site, user]);
   const methods = METHODS[site],
-    cats = ["Todos", ...Array.from(new Set(PRODUCTS.map((p) => p.category)))],
+    cats = ["Todos", ...Array.from(new Set(products.map((p) => p.category)))],
     [cat, setCat] = useState("Todos");
-  const visible = PRODUCTS.filter((product) =>
+  const visible = products.filter((product) =>
     (cat === "Todos" || product.category === cat) &&
     `${product.name} ${product.detail} ${product.category} ${product.code} ${product.barcode}`.toLowerCase().includes(productSearch.trim().toLowerCase()),
   );
@@ -1139,6 +1121,10 @@ export default function Home() {
   const requiresEnvelope = site !== "Novo Pacheco";
   const cashIsOpen = Boolean(cashOpenBySite[site]);
   const addProductToCart = (product: Product) => {
+    if (!catalog.ready) {
+      setMessage("Esperá a que cargue el catálogo central antes de agregar productos.");
+      return false;
+    }
     if (!cashIsOpen) {
       setMessage("Abrí la caja antes de agregar productos a la venta.");
       return false;
@@ -1147,7 +1133,8 @@ export default function Home() {
       setMessage(`${product.name} no tiene stock disponible en ${site}. Cargá o confirmá el stock antes de venderlo.`);
       return false;
     }
-    setCart((items) => [...items, { ...product, price: selectedPrice(product) }]);
+    // Mantener el precio ya acordado de una línea si Central actualiza la lista.
+    setCart((items) => [...items, items.find((item) => item.id === product.id) ?? { ...product, price: selectedPrice(product) }]);
     return true;
   };
   const addScannedProduct = (rawBarcode: string) => {
@@ -1233,7 +1220,7 @@ export default function Home() {
   const confirmScannedReception = (request: StockRequest) => {
     const missing = request.lines.find((line) => (receivedScanCounts[line.productId] || 0) !== (line.preparedQuantity ?? line.quantity));
     if (missing) {
-      const product = PRODUCTS.find((item) => item.id === missing.productId);
+      const product = products.find((item) => item.id === missing.productId);
       return setReceivingScanNotice(`Falta validar ${product?.name || "un producto"}. El stock no se modificó.`);
     }
     confirmRequestReception(request);
@@ -1293,7 +1280,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onScannerKey, true);
     return () => window.removeEventListener("keydown", onScannerKey, true);
-  }, [tab, site, cashIsOpen, stock, prices, onlinePrices, saleChannel, receivingRequestId, stockRequests, receivedScanCounts]);
+  }, [tab, site, cashIsOpen, stock, prices, onlinePrices, products, catalog.ready, saleChannel, receivingRequestId, stockRequests, receivedScanCounts]);
   const siteLimits = limitsBySite[site];
   const currentCashLedger = cashLedger.filter(
     (entry) => entry.site === site && entry.shiftId === activeShift?.id,
@@ -1357,13 +1344,13 @@ export default function Home() {
         request.status === "Pendiente" &&
         (request.userId === profile.id || request.username.toLowerCase() === profile.username.toLowerCase()),
     );
-  const currentRequestLines = PRODUCTS.filter(
+  const currentRequestLines = products.filter(
     (product) => (requestQuantities[product.id] || 0) > 0,
   ).map((product) => ({
     productId: product.id,
     quantity: requestQuantities[product.id],
   }));
-  const lowStockProducts = PRODUCTS.map((product) => ({
+  const lowStockProducts = products.map((product) => ({
     product,
     current: stock[site][product.id] || 0,
     minimum: minimumStock[site][product.id] || 0,
@@ -1387,7 +1374,7 @@ export default function Home() {
     0,
   );
   const lowStockAlerts = SITES.flatMap((local) =>
-    PRODUCTS.filter((product) => {
+    products.filter((product) => {
       const minimum = minimumStock[local][product.id] || 0;
       return minimum > 0 && (stock[local][product.id] || 0) <= minimum;
     }).map((product) => ({
@@ -1543,7 +1530,7 @@ export default function Home() {
         const current = summary.get(product.id) || {
           id: product.id,
           name: product.name,
-          category: PRODUCTS.find((catalogProduct) => catalogProduct.id === product.id)?.category || product.category,
+          category: products.find((catalogProduct) => catalogProduct.id === product.id)?.category || product.category,
           units: 0,
           gross: 0,
         };
@@ -1966,12 +1953,12 @@ export default function Home() {
       ? Math.round(increased)
       : Math.ceil(increased / priceRounding) * priceRounding;
   };
-  const applyPriceIncrease = () => {
+  const applyPriceIncrease = async () => {
     if (priceIncrease <= 0 || priceIncrease > 100)
       return setMessage(
         "Ingresá un porcentaje mayor a 0 y menor o igual a 100.",
       );
-    const affected = PRODUCTS.filter(
+    const affected = products.filter(
       (product) =>
         priceCategory === "Todos" || product.category === priceCategory,
     );
@@ -1989,7 +1976,6 @@ export default function Home() {
         affected.map((product) => [product.id, increasedPrice(product.id)]),
       ),
     };
-    setPrices(afterPrices);
     const change: PriceChange = {
       id: crypto.randomUUID(),
       at: new Date().toLocaleString("es-AR"),
@@ -1999,7 +1985,11 @@ export default function Home() {
       beforePrices,
       afterPrices,
     };
-    setPriceChanges((changes) => [change, ...changes]);
+    try {
+      await catalog.save(products.map((p) => ({ ...p, price: afterPrices[p.id] })), [change, ...priceChanges]);
+    } catch (error) {
+      return setMessage(error instanceof Error ? error.message : "No se pudo guardar el aumento.");
+    }
     recordAudit(
       "Aumento de precios",
       `${priceIncrease}% · ${priceCategory} · ${affected.length} productos · vigencia ${priceEffectiveDate}`,
@@ -2024,6 +2014,7 @@ export default function Home() {
   };
   const submitStockRequest = () => {
     if (!user) return;
+    if (!catalog.ready) return setMessage("Esperá a que cargue el catálogo central antes de enviar el pedido.");
     if (managesCentralOrders)
       return setMessage(
         "Central no realiza pedidos: revisá las solicitudes recibidas en Central de pedidos.",
@@ -2097,7 +2088,7 @@ export default function Home() {
   };
   const addCentralExtraItem = (request: StockRequest) => {
     if (!managesCentralOrders || request.status === "Entregado" || centralExtraQuantity <= 0) return;
-    const product = PRODUCTS.find((item) => item.id === centralExtraProductId);
+    const product = products.find((item) => item.id === centralExtraProductId);
     if (!product) return;
     setStockRequests((items) => items.map((item) => item.id !== request.id ? item : {
       ...item,
@@ -2256,7 +2247,7 @@ export default function Home() {
   const submitStockControl = () => {
     if (!user || !can("stock"))
       return setMessage("Tu usuario no tiene permiso para cerrar un control de stock.");
-    const lines = PRODUCTS.flatMap((product) => {
+    const lines = products.flatMap((product) => {
       const counted = realStock[site][product.id];
       if (counted === "") return [];
       const theoretical = stock[site][product.id] || 0;
@@ -2552,7 +2543,7 @@ export default function Home() {
   };
   const exportRequestCsv = (request: StockRequest) => {
     const rows = request.lines.map((line) => {
-      const product = PRODUCTS.find((item) => item.id === line.productId);
+      const product = products.find((item) => item.id === line.productId);
       return [
         product?.category || "",
         product?.name || "",
@@ -2610,7 +2601,7 @@ export default function Home() {
       ([productId, quantity]) => (stock[site]?.[Number(productId)] || 0) < quantity,
     );
     if (unavailable) {
-      const product = PRODUCTS.find((item) => item.id === Number(unavailable[0]));
+      const product = products.find((item) => item.id === Number(unavailable[0]));
       return setMessage(`No hay stock suficiente de ${product?.name || "ese producto"}. Actualizá la venta.`);
     }
     const sale: Sale = {
@@ -3136,7 +3127,7 @@ export default function Home() {
           "Administración",
           "Tareas",
           "Usuarios",
-          "Precios",
+          "Catálogo y precios",
           "Límites",
           "Recetas y costos",
           "Legajos",
@@ -3254,6 +3245,10 @@ export default function Home() {
           </nav>
         </aside>
         <section className="p-4 sm:p-5 md:p-8">
+          {(!catalog.ready || catalog.error) && <div role="status" className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
+            {catalog.error ? `Catálogo: ${catalog.error}` : "Cargando catálogo central…"}
+            {catalog.error && <button onClick={() => void catalog.reload()} className="ml-3 font-bold underline">Reintentar</button>}
+          </div>}
           {message && <div role="status" aria-live="polite" className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm font-semibold shadow-sm"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="shrink-0 underline">Cerrar</button></div>}
           {tab === "Reportes" && canViewSupervisorReports ? (
             <>
@@ -4147,7 +4142,7 @@ export default function Home() {
                     setStock((x) => ({
                       ...x,
                       [site]: Object.fromEntries(
-                        PRODUCTS.map((p) => [p.id, x[site][p.id] + 1]),
+                        products.map((p) => [p.id, x[site][p.id] + 1]),
                       ),
                     }))
                   }
@@ -4170,7 +4165,7 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody>
-                    {PRODUCTS.map((p) => {
+                    {products.map((p) => {
                       const countedStock = realStock[site]?.[p.id] ?? "";
                       const countedQuantity = Number(countedStock);
                       const hasValidCount = countedStock !== "" && Number.isFinite(countedQuantity);
@@ -4283,7 +4278,7 @@ export default function Home() {
                         }
                         className="mt-1 block w-full rounded border p-2 font-normal"
                       >
-                        {PRODUCTS.map((product) => (
+                        {products.map((product) => (
                           <option key={product.id} value={product.id}>
                             {product.name} · real{" "}
                             {realStock[site][product.id] || "sin cargar"}
@@ -4328,7 +4323,7 @@ export default function Home() {
                         }
                         className="mt-1 block w-full rounded border p-2 font-normal"
                       >
-                        {PRODUCTS.map((product) => (
+                        {products.map((product) => (
                           <option key={product.id} value={product.id}>
                             {product.name}
                           </option>
@@ -4534,7 +4529,7 @@ export default function Home() {
                     </div>
                   )}
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    {PRODUCTS.map((product) => {
+                    {products.map((product) => {
                       const quantity = requestQuantities[product.id] || 0;
                       return (
                         <div key={product.id} className="rounded-xl border p-3">
@@ -4663,7 +4658,7 @@ export default function Home() {
                                     <p className="mt-1 text-xs text-slate-600">Escaneá cada unidad entregada. El stock se actualiza sólo cuando la lista coincide con el despacho.</p>
                                     <div className="mt-2 space-y-1 text-xs">
                                       {request.lines.map((line) => {
-                                        const product = PRODUCTS.find((item) => item.id === line.productId);
+                                        const product = products.find((item) => item.id === line.productId);
                                         const expected = line.preparedQuantity ?? line.quantity;
                                         const received = receivedScanCounts[line.productId] || 0;
                                         return <p key={line.productId}><b>{product?.name || "Producto"}</b>: {received}/{expected} {received === expected ? "✓" : "pendiente"}</p>;
@@ -4772,7 +4767,7 @@ export default function Home() {
                       </p>
                       <div className="mt-4 overflow-auto border-y py-3">
                         {selectedRequest.lines.map((line) => {
-                          const product = PRODUCTS.find(
+                          const product = products.find(
                             (item) => item.id === line.productId,
                           );
                           return (
@@ -4827,7 +4822,7 @@ export default function Home() {
                           <b className="text-sm">Agregar artículo al despacho</b>
                           <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_92px_auto]">
                             <select value={centralExtraProductId} onChange={(event) => setCentralExtraProductId(Number(event.target.value))} className="rounded border p-2 text-sm">
-                              {PRODUCTS.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.detail}</option>)}
+                              {products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.detail}</option>)}
                             </select>
                             <input type="number" min="1" value={centralExtraQuantity} onChange={(event) => setCentralExtraQuantity(Math.max(1, Number(event.target.value) || 1))} className="rounded border p-2 text-center text-sm" />
                             <button onClick={() => addCentralExtraItem(selectedRequest)} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white">Agregar</button>
@@ -4905,7 +4900,7 @@ export default function Home() {
                             <td className="p-3 font-bold">{adjustment.site}</td>
                             <td className="p-3">
                               {
-                                PRODUCTS.find(
+                                products.find(
                                   (product) =>
                                     product.id === adjustment.productId,
                                 )?.name
@@ -5006,7 +5001,7 @@ export default function Home() {
                       <p className="mt-1 text-xs text-slate-600">Elegí cantidades. Se admite una devolución parcial y se calcula el importe proporcional.</p>
                       <div className="mt-2 space-y-2">
                         {Object.entries(sold).map(([productId, soldQuantity]) => {
-                          const product = PRODUCTS.find((item) => item.id === Number(productId));
+                          const product = products.find((item) => item.id === Number(productId));
                           const available = soldQuantity - (returned[Number(productId)] || 0);
                           return <label key={productId} className="flex items-center justify-between gap-3 rounded bg-white p-2">
                             <span><b>{product?.name || "Producto"}</b><span className="block text-xs text-slate-500">Disponible: {available}</span></span>
@@ -5076,7 +5071,7 @@ export default function Home() {
                           </div>
                           <p className="mt-1">{transaction.reason}</p>
                           <p className="mt-1 text-xs text-slate-500">
-                            {transaction.createdAt} · {transaction.createdBy} · {transaction.refundMethod} · {transaction.restock ? "Stock repuesto" : "Sin reingreso a stock"} · {transaction.lines.map((line) => `${PRODUCTS.find((item) => item.id === line.productId)?.name || "Producto"} × ${line.quantity}`).join(", ")}
+                            {transaction.createdAt} · {transaction.createdBy} · {transaction.refundMethod} · {transaction.restock ? "Stock repuesto" : "Sin reingreso a stock"} · {transaction.lines.map((line) => `${products.find((item) => item.id === line.productId)?.name || "Producto"} × ${line.quantity}`).join(", ")}
                           </p>
                         </div>
                       ))
@@ -5663,13 +5658,19 @@ export default function Home() {
                 Estos controles son exclusivos de Administración. Cada cambio deberá conservarse en la auditoría al conectar la base de datos.
               </p>
             </>
-          ) : tab === "Precios" && user.role === "administracion" ? (
+          ) : tab === "Catálogo y precios" && user.role === "administracion" ? (
             <>
               <Heading
                 k="ADMINISTRACIÓN · CATÁLOGO CENTRAL"
-                h="Aumentos de precios"
-                p="Actualizá el catálogo compartido: el nuevo precio se aplica a los cinco locales."
+                h="Catálogo y precios"
+                p="Administrá productos, códigos de barras y precios para todos los locales."
               />
+              <CatalogEditor catalog={catalog.document} ready={catalog.ready} busy={catalog.busy} onSave={async (next, revision) => {
+                await catalog.save(next, priceChanges, revision);
+                recordAudit("Catálogo actualizado", "Alta o edición de producto, presentación, categoría, precios y código de barras.");
+              }} />
+              <details className="rounded-2xl border bg-white p-4">
+                <summary className="cursor-pointer text-lg font-bold">Aumentos masivos y versiones de precios</summary>
               <div className="rounded-2xl border bg-white p-5">
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1.2fr_1.2fr_1.2fr_auto] xl:items-end">
                   <label className="text-sm font-bold">
@@ -5719,7 +5720,7 @@ export default function Home() {
                     />
                   </label>
                   <button
-                    disabled={priceIncrease <= 0}
+                    disabled={priceIncrease <= 0 || !catalog.ready || catalog.busy}
                     onClick={applyPriceIncrease}
                     className="rounded bg-[#183a67] px-5 py-2.5 font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
@@ -5727,8 +5728,7 @@ export default function Home() {
                   </button>
                 </div>
                 <p className="mt-3 text-xs text-slate-500">
-                  La vigencia y el porcentaje quedan en auditoría. El botón
-                  solicita confirmación antes de modificar el catálogo.
+                  El aumento se aplica al precio de mostrador al confirmar. La fecha queda como referencia en el historial; no programa un cambio futuro.
                 </p>
                 {message && (
                   <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
@@ -5755,7 +5755,7 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody>
-                    {PRODUCTS.filter(
+                    {products.filter(
                       (product) =>
                         priceCategory === "Todos" ||
                         product.category === priceCategory,
@@ -5778,19 +5778,7 @@ export default function Home() {
                             {money.format(prices[product.id])}
                           </td>
                           <td className="p-3 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              value={onlinePrices[product.id]}
-                              onChange={(event) =>
-                                setOnlinePrices((items) => ({
-                                  ...items,
-                                  [product.id]: Number(event.target.value),
-                                }))
-                              }
-                              className="w-28 rounded border p-1 text-right"
-                              aria-label={`Precio online de ${product.name}`}
-                            />
+                            {money.format(onlinePrices[product.id])}
                           </td>
                           <td className="p-3 text-right font-bold text-green-700">
                             {money.format(next)}
@@ -5838,14 +5826,15 @@ export default function Home() {
                                 : "Ver listas"}
                             </button>
                             <button
-                              onClick={() => {
-                                if (
-                                  !window.confirm(
-                                    `¿Restaurar la lista anterior al aumento del ${change.percentage}%?`,
-                                  )
-                                )
+                              disabled={!catalog.ready || catalog.busy}
+                              onClick={async () => {
+                                if (!window.confirm(`¿Restaurar la lista anterior al aumento del ${change.percentage}%?`)) return;
+                                try {
+                                  await catalog.save(products.map((p) => ({ ...p, price: change.beforePrices[p.id] ?? p.price })));
+                                } catch (error) {
+                                  setMessage(error instanceof Error ? error.message : "No se pudo restaurar la lista.");
                                   return;
-                                setPrices({ ...change.beforePrices });
+                                }
                                 recordAudit(
                                   "Lista de precios restaurada",
                                   `Versión anterior al ${change.percentage}% · ${change.category}`,
@@ -5876,7 +5865,7 @@ export default function Home() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {PRODUCTS.map((product) => (
+                                {products.filter((product) => product.id in change.beforePrices).map((product) => (
                                   <tr key={product.id} className="border-t">
                                     <td className="p-3 font-bold">
                                       {product.name}
@@ -5913,10 +5902,10 @@ export default function Home() {
                 </div>
               </div>
               <p className="mt-4 rounded border border-[#e7c26a] bg-[#fff5d8] p-4 text-sm">
-                Prototipo local: el catálogo actualizado funciona durante esta
-                sesión. La base de datos conservará versiones, vigencias y
-                precios anteriores en producción.
+                Los cambios se guardan en el catálogo central. Cada versión conserva la lista anterior.
+                Las ventas ya registradas y las cantidades de stock no se modifican.
               </p>
+              </details>
             </>
           ) : tab === "Usuarios" && user.role === "administracion" ? (
             <>
@@ -7375,7 +7364,7 @@ export default function Home() {
                         </p>
                         <p className="mt-4 text-2xl font-bold">
                           {
-                            PRODUCTS.filter((product) =>
+                            products.filter((product) =>
                               SITES.some(
                                 (local) => stock[local][product.id] <= 8,
                               ),
@@ -7395,7 +7384,7 @@ export default function Home() {
                             </tr>
                           </thead>
                           <tbody>
-                            {PRODUCTS.filter((product) =>
+                            {products.filter((product) =>
                               SITES.some(
                                 (local) => stock[local][product.id] <= 8,
                               ),

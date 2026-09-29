@@ -1,0 +1,21 @@
+# Catálogo y precios
+
+- Fuente compartida: `GET /api/catalog`, persistida en D1, tabla `catalog_revisions`.
+- Identidad: cookie HTTP-only de DonWeb, validada en su `auth/me`. GET requiere sesión; PUT exige Administración y mismo origen. No hay contraseña ni bypass en el cliente.
+- La migración Drizzle solo crea una tabla nueva. No cambia tablas operativas, cantidades de stock ni IDs.
+- Antes de la primera escritura, recupera precios vigentes de las operaciones existentes. El primer acceso de Administración guarda esa lista como revisión 1.
+- Cada guardado agrega una revisión completa con responsable y fecha; la PK impide pisar una edición concurrente.
+- Las lecturas de locales se actualizan al volver a la ventana, recuperar conexión y cada 30 segundos mientras está visible.
+- Un alta recibe un ID nuevo consecutivo y stock 0. No se reutilizan IDs ni se borran productos con historial.
+- Cambiar un código conserva el anterior como alias. LART-401 sigue siendo alias de Raviolón de Berenjena (LART-501). Ningún alias puede pertenecer a otro producto.
+- El formato admitido es LART- más tres dígitos; el apóstrofe de las lectoras con otra distribución de teclado también se reconoce.
+- Cada producto conserva precio Mostrador y Online. Los aumentos y su restauración afectan Mostrador; no reescriben ventas anteriores.
+- El respaldo DonWeb/MySQL no incluye esta tabla D1. Las revisiones completas se conservan en D1; su recuperación administrativa debe usar esa base, no restaurar únicamente MySQL. La exportación CSV sirve para etiquetas, no sustituye una copia integral de D1.
+
+## Verificación
+
+`npm run test:catalog`: ejecuta validaciones y el endpoint real contra SQLite con identidad simulada: sesión, roles, CSRF, migración, conservación de precios, persistencia, alias y conflictos.
+
+`node tests/catalog-browser.mjs`: copia aislada solo en 127.0.0.1:8971. No usa operaciones reales. Permite probar alta/edición y ver el catálogo en Ventas, Pedido y Stock con `?role=vendedora`.
+
+Construcción y pruebas de catálogo, seguridad, estructura y ayuda verificadas. El chequeo global TypeScript mantiene errores previos en MRP y la lectura de diagnóstico de la página; no están introducidos por el catálogo.
