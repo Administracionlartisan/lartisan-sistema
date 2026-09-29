@@ -1121,8 +1121,8 @@ export default function Home() {
     setCart((items) => [...items, { ...product, price: selectedPrice(product) }]);
     return true;
   };
-  const addScannedProduct = () => {
-    const scanned = barcodeInput.trim().toUpperCase();
+  const addScannedProduct = (rawBarcode = barcodeInput) => {
+    const scanned = rawBarcode.trim().toUpperCase();
     if (!scanned) return;
     // Algunas lectoras configuradas con teclado US envían el guion como apóstrofe
     // en equipos con distribución española. Aceptamos ambas lecturas sin cambiar
@@ -1132,7 +1132,7 @@ export default function Home() {
       (item) => item.barcode.toUpperCase() === scanned || item.code === normalizedCode,
     );
     if (!product) {
-      const notice = `No reconocemos el código “${barcodeInput.trim()}”. Verificá la etiqueta.`;
+      const notice = `No reconocemos el código “${rawBarcode.trim()}”. Verificá la etiqueta.`;
       setScannerResult(notice);
       setMessage(notice);
       return;
@@ -3295,14 +3295,22 @@ export default function Home() {
                       <span className="font-bold text-[#183a67]">Escanear código</span>
                       <input
                         value={barcodeInput}
-                        onChange={(event) => { setBarcodeInput(event.target.value); setScannerResult(""); }}
+                        onChange={(event) => {
+                          const nextBarcode = event.target.value;
+                          setBarcodeInput(nextBarcode);
+                          setScannerResult("");
+                          const normalized = nextBarcode.trim().toUpperCase().replace(/^LART[-'’_\s]*/, "");
+                          if (PRODUCTS.some((product) => product.code === normalized)) {
+                            addScannedProduct(nextBarcode);
+                          }
+                        }}
                         placeholder="Leé la etiqueta (ej.: LART-501)"
                         className="min-w-0 flex-1 rounded-lg border bg-white px-3 py-2"
                         autoComplete="off"
                       />
                       <button type="submit" className="rounded-lg bg-[#183a67] px-4 py-2 font-bold text-white">Agregar</button>
                     </label>
-                    <p className="mt-2 text-xs text-slate-600">La lectora USB escribe el código y Enter agrega una unidad. La etiqueta debe tener un código de barras Code 128, no solo el texto “COD”.</p>
+                    <p className="mt-2 text-xs text-slate-600">La lectora USB agrega una unidad al terminar de leer el código; no necesita Enter. La etiqueta debe tener un código de barras Code 128, no solo el texto “COD”.</p>
                     {scannerResult && <p className="mt-2 text-sm font-semibold text-[#183a67]" role="status">{scannerResult}</p>}
                   </form>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
