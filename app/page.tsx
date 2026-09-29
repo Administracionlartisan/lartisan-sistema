@@ -1218,7 +1218,10 @@ export default function Home() {
       // procesa la lectura para que no se contabilice dos veces.
       if (activeInput === receptionScannerRef.current) return;
       const buffer = scannerBufferRef.current;
-      if (now - buffer.lastKeyAt > 120) {
+      // Algunas lectoras USB envían los caracteres más despacio que otras.
+      // Conservamos la lectura como una misma secuencia durante 800 ms para
+      // que no se descarte un Code 128 físico aunque no tenga foco un campo.
+      if (now - buffer.lastKeyAt > 800) {
         buffer.value = "";
         buffer.input = activeInput;
         buffer.originalValue = activeInput?.value ?? "";
