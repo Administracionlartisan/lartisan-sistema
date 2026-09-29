@@ -3997,7 +3997,11 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody>
-                    {PRODUCTS.map((p) => (
+                    {PRODUCTS.map((p) => {
+                      const countedStock = realStock[site]?.[p.id] ?? "";
+                      const countedQuantity = Number(countedStock);
+                      const hasValidCount = countedStock !== "" && Number.isFinite(countedQuantity);
+                      return (
                       <tr key={p.id} className="border-t">
                         <td className="p-3">
                           <b>{p.name}</b>
@@ -4032,7 +4036,7 @@ export default function Home() {
                             <input
                               type="number"
                               min="0"
-                              value={realStock[site][p.id]}
+                              value={countedStock}
                               onChange={(e) =>
                                 setRealStock((current) => ({
                                   ...current,
@@ -4046,13 +4050,13 @@ export default function Home() {
                               className="w-20 rounded border p-1 text-center"
                             />
                           ) : (
-                            <span>{realStock[site][p.id] || "—"}</span>
+                            <span>{countedStock || "—"}</span>
                           )}
                         </td>
                         <td className="p-3 text-center font-bold">
-                          {realStock[site][p.id] === ""
+                          {!hasValidCount
                             ? "—"
-                            : Number(realStock[site][p.id]) - safeStockQuantity(stock[site]?.[p.id])}
+                            : countedQuantity - safeStockQuantity(stock[site]?.[p.id])}
                         </td>
                         <td className="p-3">
                           {canCountRealStock ? (
@@ -4076,7 +4080,8 @@ export default function Home() {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
