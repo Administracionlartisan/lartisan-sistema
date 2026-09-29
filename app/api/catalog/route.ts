@@ -9,11 +9,20 @@ export const dynamic = "force-dynamic";
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "private, no-store" } });
 const database = () => (env as unknown as { DB: D1Database }).DB;
 
+async function upstream(path: "auth/me" | "operations/states", cookie: string) {
+  const options: RequestInit = { headers: { Cookie: cookie }, redirect: "manual", signal: AbortSignal.timeout(15000) };
+  const response = await fetch(`${API_BASE}/${path}`, options);
+  // El dominio raíz es el mismo backend de DonWeb. Mantener HTTPS verificado;
+  // nunca degradar a HTTP ni reenviar la sesión a destinos de una redirección.
+  if (response.status === 526) return fetch(`https://lartisantaller.com/sistema-api/${path}`, options);
+  return response;
+}
+
 async function identity(request: Request): Promise<{ user: ApiUser; cookie: string } | Response> {
   const cookie = request.headers.get("cookie")?.split(";").map((v) => v.trim()).find((v) => /^lartisan_session=[a-f0-9]+$/i.test(v));
   if (!cookie) return json({ error: "Sesión requerida." }, 401);
   // workerd admite "manual", no "error". Nunca seguir redirecciones con la cookie.
-  const response = await fetch(`${API_BASE}/auth/me`, { headers: { Cookie: cookie }, redirect: "manual", signal: AbortSignal.timeout(10000) });
+  const response = await upstream("auth/me", cookie);
   if (!response.ok) {
     if (response.status !== 401) console.error("catalog_identity_rejected", JSON.stringify({ status: response.status, contentType: response.headers.get("content-type"), location: response.headers.get("location"), server: response.headers.get("server") }));
     return json({ error: "No se pudo validar la sesión." }, response.status === 401 ? 401 : 503);
@@ -25,7 +34,7 @@ async function identity(request: Request): Promise<{ user: ApiUser; cookie: stri
 
 async function initialCatalog(cookie: string): Promise<CatalogDocument> {
   // Solo se usa antes del primer guardado central. Recupera los precios vigentes.
-  const response = await fetch(`${API_BASE}/operations/states`, { headers: { Cookie: cookie }, redirect: "manual", signal: AbortSignal.timeout(15000) });
+  const response = await upstream("operations/states", cookie);
   if (!response.ok) throw new Error("No se recuperaron los precios actuales.");
   const data = await response.json() as { states?: Record<string, { state: OperationalSnapshot }> };
   const configuration = Object.values(data.states ?? {}).find((v) => v.state.prices)?.state;
