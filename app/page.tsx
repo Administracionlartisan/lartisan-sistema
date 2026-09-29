@@ -106,6 +106,9 @@ export default function Home() {
     [cashOpenBySite, setCashOpenBySite] = useState<Record<string, boolean>>({}),
     [sales, setSales] = useState<Sale[]>([]),
     [receiptSale, setReceiptSale] = useState<Sale | null>(null),
+    [saleSearch, setSaleSearch] = useState(""),
+    [paymentCorrectionSaleId, setPaymentCorrectionSaleId] = useState<string | null>(null),
+    [paymentCorrectionMethod, setPaymentCorrectionMethod] = useState("Efectivo"),
     [audit, setAudit] = useState<AuditEvent[]>([]),
     [syncStatus, setSyncStatus] = useState("Sin cierre enviado"),
     [schedules, setSchedules] = useState<EmployeeSchedule[]>(INITIAL_SCHEDULES),
@@ -2627,7 +2630,19 @@ export default function Home() {
     );
   };
   const changeSalePayment = (sale: Sale, method: string) => {
+    if (!can("cobrar"))
+      return setMessage("Tu usuario no tiene permiso para corregir medios de pago.");
+    if (!cashIsOpen)
+      return setMessage("La corrección debe hacerse con la caja del local abierta, antes del cierre.");
+    if (sale.site !== site || sale.status !== "activa")
+      return setMessage("Solo podés corregir ventas activas del local seleccionado.");
     const originalPayments = payments.filter((item) => item.saleId === sale.id);
+    if (!originalPayments.length)
+      return setMessage("No se encontraron cobros asociados a esta venta. Pedí revisión a Administración.");
+    if (originalPayments.every((item) => item.method === method)) {
+      setPaymentCorrectionSaleId(null);
+      return setMessage("La venta ya tiene ese medio de pago.");
+    }
     const previousCash = originalPayments
       .filter((item) => item.method === "Efectivo")
       .reduce((sum, item) => sum + item.amount, 0);
@@ -2641,8 +2656,8 @@ export default function Home() {
         amount: originalPayments.reduce((sum, item) => sum + item.amount, 0),
         saleId: sale.id,
         site: sale.site,
-        shiftId: activeShift?.id,
-        createdAtISO: new Date().toISOString(),
+        shiftId: originalPayments[0].shiftId,
+        createdAtISO: originalPayments[0].createdAtISO,
       },
     ]);
     const nextCash = method === "Efectivo" ? sale.net : 0;
@@ -2660,6 +2675,9 @@ export default function Home() {
       "Forma de cobro modificada",
       `${sale.id.slice(0, 8)} · ${sale.method} a ${method}`,
     );
+    setPaymentCorrectionSaleId(null);
+    setPendingSync((value) => value + 1);
+    setMessage(`Medio de pago corregido: ${sale.method} a ${method}. El total, los productos y el stock no cambiaron.`);
   };
   const changeSaleInvoice = (
     sale: Sale,
@@ -3470,33 +3488,45 @@ export default function Home() {
                           <span>{order.items.length} productos · Abrir</span>
                         </button>
                       ))}
-                    <p className="text-sm font-bold">Ventas de esta sesión</p>
-                    {sales.filter((sale) => sale.site === site).length ? (
+                    <div className="mt-4 border-t pt-4">
+                      <p className="text-sm font-bold">Buscar venta y corregir medio de pago</p>
+                      <p className="mt-1 text-xs text-slate-500">La corrección conserva productos, total, stock y la venta original. Si interviene efectivo, ajusta la caja y deja auditoría.</p>
+                      <input
+                        value={saleSearch}
+                        onChange={(event) => setSaleSearch(event.target.value)}
+                        placeholder="Buscar por cliente, importe o referencia"
+                        className="mt-2 w-full rounded border p-2 text-xs"
+                      />
+                    </div>
+                    {sales.filter((sale) => sale.site === site && `${sale.customer} ${sale.net} ${sale.id} ${sale.method}`.toLowerCase().includes(saleSearch.trim().toLowerCase())).length ? (
                       sales
-                        .filter((sale) => sale.site === site)
-                        .slice(0, 4)
+                        .filter((sale) => sale.site === site && `${sale.customer} ${sale.net} ${sale.id} ${sale.method}`.toLowerCase().includes(saleSearch.trim().toLowerCase()))
+                        .slice(0, 8)
                         .map((sale) => (
                           <div
                             key={sale.id}
-                            className="mt-2 flex items-center justify-between gap-2 text-xs"
+                            className="mt-2 rounded border p-2 text-xs"
                           >
-                            <span>
+                            <div>
                               {money.format(sale.net)} · {sale.customer} ·{" "}
                               {sale.method}
                               {sale.status === "anulada" && " · ANULADA"}
-                            </span>
-                            <span className="flex gap-2">
-                              <select
-                                value={sale.method}
-                                onChange={(event) =>
-                                  changeSalePayment(sale, event.target.value)
-                                }
-                                className="rounded border p-1"
-                              >
-                                {methods.map((method) => (
-                                  <option key={method}>{method}</option>
-                                ))}
-                              </select>
+                              <span className="ml-1 text-slate-400">#{sale.id.slice(0, 8)}</span>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {sale.status === "activa" && (
+                                <button
+                                  onClick={() => {
+                                    if (!can("cobrar")) return setMessage("Tu usuario no tiene permiso para corregir medios de pago.");
+                                    if (!cashIsOpen) return setMessage("Abrí la caja antes de corregir un medio de pago.");
+                                    setPaymentCorrectionMethod(payments.find((item) => item.saleId === sale.id)?.method || sale.method);
+                                    setPaymentCorrectionSaleId(sale.id);
+                                  }}
+                                  className="rounded border px-2 py-1 font-bold text-[#183a67]"
+                                >
+                                  Corregir medio
+                                </button>
+                              )}
                               <select
                                 value={sale.invoiceType}
                                 onChange={(event) =>
@@ -3512,8 +3542,7 @@ export default function Home() {
                                 <option>Factura A</option>
                                 <option>Remito interno</option>
                               </select>
-                            </span>
-                            {sale.status === "activa" && (
+                              {sale.status === "activa" && (
                               <button
                                 onClick={() => cancelSale(sale)}
                                 className="underline"
@@ -3527,13 +3556,38 @@ export default function Home() {
                             >
                               Ticket
                             </button>
+                            </div>
                           </div>
                         ))
                     ) : (
                       <p className="mt-2 text-xs text-slate-500">
-                        Las ventas nuevas aparecerán aquí y quedarán auditadas.
+                        No hay ventas de este local que coincidan con la búsqueda.
                       </p>
                     )}
+                    {paymentCorrectionSaleId && (() => {
+                      const sale = sales.find((item) => item.id === paymentCorrectionSaleId);
+                      if (!sale) return null;
+                      const salePayments = payments.filter((item) => item.saleId === sale.id);
+                      const currentDescription = salePayments.map((item) => `${item.method} ${money.format(item.amount)}`).join(" + ") || sale.method;
+                      const isSplit = salePayments.length > 1;
+                      return (
+                        <div className="mt-3 rounded border-2 border-[#183a67] bg-[#f7fafc] p-3 text-xs">
+                          <p className="font-bold">Corregir medio de pago · #{sale.id.slice(0, 8)}</p>
+                          <p className="mt-1">Total {money.format(sale.net)} · registrado: {currentDescription}</p>
+                          {isSplit && <p className="mt-1 rounded bg-amber-50 p-2 text-amber-900">Esta venta tuvo pago dividido. Esta corrección reunirá el total en un solo medio; verificá el comprobante antes de confirmar.</p>}
+                          <label className="mt-2 block font-bold">Medio realmente cobrado
+                            <select value={paymentCorrectionMethod} onChange={(event) => setPaymentCorrectionMethod(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal">
+                              {methods.map((method) => <option key={method}>{method}</option>)}
+                            </select>
+                          </label>
+                          <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, se registra el ajuste correspondiente en caja y la auditoría.</p>
+                          <div className="mt-3 flex gap-2">
+                            <button onClick={() => changeSalePayment(sale, paymentCorrectionMethod)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
+                            <button onClick={() => setPaymentCorrectionSaleId(null)} className="rounded border px-3 py-2 font-bold">Cancelar</button>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </aside>
               </div>

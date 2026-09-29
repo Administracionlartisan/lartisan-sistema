@@ -50,7 +50,7 @@ const examples = {
   'saved-order': ['guardar comanda', 'guardar pedido sin cobrar', 'cobrar despues'],
   'cancel-sale': ['anular venta', 'venta duplicada'],
   'returns': ['devolucion parcial', 'devolver un producto'],
-  'payment-correction': ['cobre efectivo era tarjeta', 'me equivoque medio de pago'],
+  'payment-correction': ['cobre efectivo era tarjeta', 'me equivoque medio de pago', 'buscar venta para corregir el medio de pago'],
   'print-ticket': ['como imprimo el ticket', 'reimprimir tiket', 'usar impresora termica 3nstar'],
   'forgot-password': ['me olvide la contraseña', 'me olvide la contrasenia', 'olvide mi clave', 'perdi la clave'],
   'username': ['nombre apellido punto', 'usuario mayuscula minuscula'],
