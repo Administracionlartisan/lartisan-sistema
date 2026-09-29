@@ -14,7 +14,10 @@ async function identity(request: Request): Promise<{ user: ApiUser; cookie: stri
   if (!cookie) return json({ error: "Sesión requerida." }, 401);
   // workerd admite "manual", no "error". Nunca seguir redirecciones con la cookie.
   const response = await fetch(`${API_BASE}/auth/me`, { headers: { Cookie: cookie }, redirect: "manual", signal: AbortSignal.timeout(10000) });
-  if (!response.ok) return json({ error: "No se pudo validar la sesión." }, response.status === 401 ? 401 : 503);
+  if (!response.ok) {
+    if (response.status !== 401) console.error("catalog_identity_rejected", JSON.stringify({ status: response.status, contentType: response.headers.get("content-type"), location: response.headers.get("location"), server: response.headers.get("server") }));
+    return json({ error: "No se pudo validar la sesión." }, response.status === 401 ? 401 : 503);
+  }
   const data = await response.json() as { user?: ApiUser };
   if (!data.user || data.user.mustChangePassword || data.user.must_change_password) return json({ error: "Primero completá el cambio de contraseña." }, 403);
   return { user: data.user, cookie };
