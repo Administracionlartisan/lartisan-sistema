@@ -107,6 +107,7 @@ export default function Home() {
     [productSearch, setProductSearch] = useState(""),
     [scannerResult, setScannerResult] = useState(""),
     [salesScannerValue, setSalesScannerValue] = useState(""),
+    [pedidoScannerValue, setPedidoScannerValue] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
     [payment, setPayment] = useState("Efectivo"),
@@ -196,6 +197,7 @@ export default function Home() {
   const persistQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingReceiptRef = useRef<Sale | null>(null);
   const salesScannerRef = useRef<HTMLInputElement | null>(null);
+  const pedidoScannerRef = useRef<HTMLInputElement | null>(null);
   const receptionScannerRef = useRef<HTMLInputElement | null>(null);
   const scannerBufferRef = useRef<{ value: string; lastKeyAt: number; input: HTMLInputElement | HTMLTextAreaElement | null; originalValue: string }>({ value: "", lastKeyAt: 0, input: null, originalValue: "" });
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
@@ -1184,10 +1186,10 @@ export default function Home() {
     setReceivingBarcodeInput("");
     requestAnimationFrame(() => receptionScannerRef.current?.focus());
   };
-  const scanReceivedProduct = (rawBarcode: string) => {
+  const scanReceivedProduct = (rawBarcode: string, requestOverride?: StockRequest, receivedOverride?: Record<number, number>) => {
     const scanned = rawBarcode.trim().toUpperCase();
     const product = productFromScannedCode(scanned);
-    const request = stockRequests.find((item) => item.id === receivingRequestId);
+    const request = requestOverride ?? stockRequests.find((item) => item.id === receivingRequestId);
     if (!request || !product) {
       setReceivingScanNotice(`Código no reconocido: ${rawBarcode}.`);
       return;
@@ -1198,7 +1200,7 @@ export default function Home() {
       return;
     }
     const expected = line.preparedQuantity ?? line.quantity;
-    const received = receivedScanCounts[product.id] || 0;
+    const received = (receivedOverride ?? receivedScanCounts)[product.id] || 0;
     if (received >= expected) {
       setReceivingScanNotice(`${product.name}: ya se escanearon las ${expected} unidades esperadas.`);
       return;
@@ -1207,6 +1209,26 @@ export default function Home() {
     setReceivedScanCounts((items) => ({ ...items, [product.id]: next }));
     setReceivingBarcodeInput("");
     setReceivingScanNotice(`Validado: ${product.name} · ${next} de ${expected} unidad${expected === 1 ? "" : "es"}.`);
+  };
+  const capturePedidoScan = (rawBarcode: string) => {
+    const product = productFromScannedCode(rawBarcode);
+    if (!product) return;
+    const request = stockRequests.find(
+      (item) => item.site === site && ["Despachado", "Despachado parcial"].includes(item.status),
+    );
+    if (!request) {
+      setReceivingScanNotice("No hay un pedido despachado pendiente de recibir para este local.");
+      return;
+    }
+    const startingRequest = receivingRequestId !== request.id;
+    if (startingRequest) {
+      setReceivingRequestId(request.id);
+      setReceivedScanCounts({});
+      setReceivingScanNotice(`Pedido ${request.id.slice(0, 8)} iniciado. Validando mercadería recibida.`);
+    }
+    setPedidoScannerValue("");
+    scanReceivedProduct(rawBarcode, request, startingRequest ? {} : undefined);
+    requestAnimationFrame(() => pedidoScannerRef.current?.focus());
   };
   const confirmScannedReception = (request: StockRequest) => {
     const missing = request.lines.find((line) => (receivedScanCounts[line.productId] || 0) !== (line.preparedQuantity ?? line.quantity));
@@ -1224,6 +1246,10 @@ export default function Home() {
     requestAnimationFrame(() => salesScannerRef.current?.focus());
   }, [tab]);
   useEffect(() => {
+    if (tab !== "Pedido") return;
+    requestAnimationFrame(() => pedidoScannerRef.current?.focus());
+  }, [tab]);
+  useEffect(() => {
     if (tab !== "Ventas" && tab !== "Pedido") return;
     const onScannerKey = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.altKey || event.metaKey || event.key.length !== 1) return;
@@ -1232,7 +1258,7 @@ export default function Home() {
       const activeInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active : null;
       // Durante la recepción, el foco lo toma el capturador invisible. Su onChange
       // procesa la lectura para que no se contabilice dos veces.
-      if (activeInput === receptionScannerRef.current || activeInput === salesScannerRef.current) return;
+      if (activeInput === receptionScannerRef.current || activeInput === salesScannerRef.current || activeInput === pedidoScannerRef.current) return;
       const buffer = scannerBufferRef.current;
       // Algunas lectoras USB envían los caracteres más despacio que otras.
       // Conservamos la lectura como una misma secuencia durante 800 ms para
@@ -1262,7 +1288,7 @@ export default function Home() {
           sourceInput.dispatchEvent(new Event("input", { bubbles: true }));
         });
       }
-      if (tab === "Pedido") scanReceivedProduct(scanned);
+      if (tab === "Pedido") capturePedidoScan(scanned);
       else captureSalesScan(scanned);
     };
     window.addEventListener("keydown", onScannerKey, true);
@@ -4436,6 +4462,19 @@ export default function Home() {
                 h="Solicitud de mercadería"
                 p="Armá el pedido del local y envialo a Central para preparación y despacho."
               />
+              <input
+                ref={pedidoScannerRef}
+                value={pedidoScannerValue}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setPedidoScannerValue(value);
+                  capturePedidoScan(value);
+                }}
+                aria-label="Captura automática de lectora para recepción"
+                autoComplete="off"
+                tabIndex={-1}
+                className="fixed left-[-10000px] top-0 h-px w-px opacity-0"
+              />
               <div className="grid gap-6 xl:grid-cols-[1fr_350px]">
                 <div className="rounded-2xl border bg-white p-4 sm:p-5">
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -4613,8 +4652,7 @@ export default function Home() {
                                       onChange={(event) => {
                                         const value = event.target.value;
                                         setReceivingBarcodeInput(value);
-                                        const code = value.trim().toUpperCase().replace(/^LART[-'’_\s]*/, "");
-                                        if (PRODUCTS.some((product) => product.code === code)) {
+                                        if (productFromScannedCode(value)) {
                                           scanReceivedProduct(value);
                                         }
                                       }}
