@@ -3548,6 +3548,14 @@ export default function Home() {
                                   [p.id]: Math.min(invitedUnits, remainingUnits),
                                 };
                               });
+                              // "Quitar" conserva el foco del botón. Una lectora USB
+                              // escribe como teclado y suele terminar con Enter, por lo
+                              // que el siguiente escaneo podía volver a accionar ese
+                              // botón. Volvemos el foco al capturador de inmediato y
+                              // descartamos una lectura parcial anterior.
+                              scannerBufferRef.current = { value: "", lastKeyAt: 0, input: null, originalValue: "" };
+                              setSalesScannerValue("");
+                              salesScannerRef.current?.focus();
                             }}
                             className="text-sm underline"
                           >
