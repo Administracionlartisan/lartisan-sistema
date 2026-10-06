@@ -1,16 +1,11 @@
 Options -Indexes
 RewriteEngine On
 
-# Por defecto nada de esta carpeta se sirve por web: configuración, módulos
-# internos, documentación, paquetes, volcados ni certificados.
-<FilesMatch ".*">
+# No exponer configuración ni módulos internos.  No se usa un bloqueo global
+# con excepciones porque algunos Apache del hosting combinan ambos bloques y
+# terminan denegando también index.php, que es la API pública.
+<FilesMatch "^(config\.local\.php|config\.example\.php|bootstrap\.php|assistant\.php|arca_wsfe\.php|arca_fiscal_queue\.php|monitor\.php|mrp_sync\.php|pnl_sync\.php|README\.md|.*\.(?:zip|tar|tar\.gz|tgz|bak|sql))$">
   Require all denied
-</FilesMatch>
-
-# Excepciones explícitas: la API y el disparador de respaldo (que además exige
-# la clave X-Backup-Key y responde 404 sin ella).
-<FilesMatch "^(index|backup)\.php$">
-  Require all granted
 </FilesMatch>
 
 RewriteCond %{REQUEST_FILENAME} !-f
