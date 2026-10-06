@@ -13,6 +13,15 @@ return [
     ],
     'cookie_domain' => '.lartisantaller.com',
     'session_hours' => 12,
+    // Zona horaria de PHP y de la conexión MySQL (fechas de ventas, cajas,
+    // vencimiento de sesiones y de códigos de recuperación).
+    'timezone' => 'America/Argentina/Buenos_Aires',
+    'operations' => [
+        // Días de operaciones cerradas que conserva el estado de cada local
+        // (mínimo 7). Si el estado supera 2 MB se acorta automáticamente.
+        // Lo recortado sigue en lartisan_sales y operation_archive.
+        'retention_days' => 60,
+    ],
     'primary_admin_username' => 'CONFIGURAR_EN_EL_SERVIDOR',
     'admin_recovery_email' => 'CONFIGURAR_EN_EL_SERVIDOR',
     'recovery_from_email' => 'CONFIGURAR_EN_EL_SERVIDOR',

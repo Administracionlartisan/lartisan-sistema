@@ -10,10 +10,13 @@ const outbox = read("app/modules/shared/operationalOutbox.ts");
 const monitor = read("donweb-api/monitor.php");
 
 test("operational writes are queued locally and idempotent on the server", () => {
-  assert.match(page, /savePendingWrite/);
+  assert.match(page, /outbox\.enqueue/);
   assert.match(page, /flushPendingWrites/);
-  assert.match(outbox, /localStorage/);
+  assert.match(page, /drainSite/);
+  // IndexedDB: localStorage (~5 MB) no alcanzaba para una sola operación de un local.
+  assert.match(outbox, /indexedDB\.open/);
   assert.match(outbox, /requestId/);
+  // Migra en orden lo que dejó la versión anterior en localStorage.
   assert.match(outbox, /sort\(\(left, right\) => left\.queuedAt/);
   assert.match(api, /operation_requests/);
   assert.match(api, /requestId/);

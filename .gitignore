@@ -43,4 +43,15 @@ next-env.d.ts
 /donweb-api/*.local.php
 /*.zip
 /*.tar.gz
+/*.tgz
+/.sites-runtime/
+/site-package-*/
 /tsconfig.tsbuildinfo
+
+# private keys and certificates (ARCA)
+*.key
+*.crt
+*.p12
+
+# documentos para entregar al cliente (no forman parte del código)
+/entregables/

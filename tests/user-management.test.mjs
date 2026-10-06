@@ -24,3 +24,9 @@ test("password recovery is integrated into registered users", () => {
 test("the separate long recovery panel was removed", () => {
   assert.doesNotMatch(source, />Recuperación de contraseñas</);
 });
+
+test("editing a user without permissions keeps the stored ones (NULL = role defaults)", () => {
+  const api = readFileSync(new URL("../donweb-api/index.php", import.meta.url), "utf8");
+  assert.match(api, /\$actionPermissionsValue = array_key_exists\('actionPermissions', \$body\) \? json_encode\(\$actionPermissions, JSON_UNESCAPED_UNICODE\) : \$existing\['action_permissions'\];/);
+  assert.match(api, /\$reportPermissionsValue = array_key_exists\('reportPermissions', \$body\)/);
+});

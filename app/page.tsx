@@ -10,7 +10,7 @@ import {
   INITIAL_MANAGED_USERS, money, SITES,
 } from "./modules/shared/constants";
 import { downloadCsv } from "./modules/shared/downloadCsv";
-import { readPendingWrites, removePendingWrite, savePendingWrite, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
+import { OperationalOutbox, latestQueuedState, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
 import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import ComingSoonPanel, { type ComingSoonSection } from "./modules/administracion/ComingSoonPanel";
@@ -186,7 +186,13 @@ export default function Home() {
   const lastPersistedSnapshot = useRef<Record<string, string>>({});
   const queuedBaseSnapshot = useRef<Record<string, string>>({});
   const serverRevision = useRef<Record<string, number>>({});
-  const persistQueue = useRef<Promise<void>>(Promise.resolve());
+  const outboxRef = useRef<{ userId: string; ready: Promise<OperationalOutbox> } | null>(null);
+  const drainingSites = useRef(new Set<string>());
+  // Último estado confirmado por local en esta sesión y si el servidor tuvo que combinarlo.
+  const lastAcknowledged = useRef<Record<string, { stateJson: string; merged: boolean }>>({});
+  // Locales que Central ve solo para gestionar pedidos y ajustes (no los opera).
+  const centralOnlySites = useRef(new Set<string>());
+  const reloadAfterDrain = useRef(false);
   const pendingReceiptRef = useRef<Sale | null>(null);
   const salesScannerRef = useRef<HTMLInputElement | null>(null);
   const pedidoScannerRef = useRef<HTMLInputElement | null>(null);
@@ -270,6 +276,8 @@ export default function Home() {
   const [expenseAmount, setExpenseAmount] = useState(0);
   const [expenseDetail, setExpenseDetail] = useState("");
   const [expenseReceipt, setExpenseReceipt] = useState("");
+  const [expensePaidWithCash, setExpensePaidWithCash] = useState(true);
+  const [cashDifferenceReason, setCashDifferenceReason] = useState("");
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [incidentType, setIncidentType] = useState("Faltante de mercadería");
   const [incidentDetail, setIncidentDetail] = useState("");
@@ -326,11 +334,14 @@ export default function Home() {
   useEffect(() => {
     if (!operationalReady) return;
     // Ampliar los mapas sin tocar cantidades existentes ni identificadores históricos.
-    setStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
-    setMinimumStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
-    const blanks = Object.fromEntries(products.map((p) => [p.id, ""]));
-    setRealStock((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
-    setStockCountComments((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
+    const timer = window.setTimeout(() => {
+      setStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
+      setMinimumStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
+      const blanks = Object.fromEntries(products.map((p) => [p.id, ""]));
+      setRealStock((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
+      setStockCountComments((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [products, operationalReady]);
   useEffect(() => {
     // Primera migración: guarda la lista vigente completa, sin modificar stock.
@@ -741,16 +752,41 @@ export default function Home() {
     } catch (error) { setFiscalMessage(error instanceof Error ? error.message : "No se pudo emitir la nota de crédito."); }
     finally { setFiscalBusy(null); }
   };
-  useEffect(() => { void loadFiscalSales(); }, [user?.id, user?.role]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadFiscalSales(), 0);
+    return () => window.clearTimeout(timer);
+  // Recarga solo al cambiar la identidad; la función usa el estado del montaje actual.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.role]);
+  const getOutbox = () => {
+    if (!user) return null;
+    const userId = String(user.id);
+    if (outboxRef.current?.userId !== userId) outboxRef.current = { userId, ready: OperationalOutbox.open(userId) };
+    return outboxRef.current.ready;
+  };
   const loadOperationalData = async () => {
     const response = await fetch(`${API_BASE}/operations/states`, {
       credentials: "include",
     });
     if (!response.ok) throw new Error("No se pudieron cargar las operaciones.");
     const data = (await response.json()) as {
-      states: Record<string, { state: OperationalSnapshot; revision: number }>;
+      states: Record<string, { state: OperationalSnapshot; revision: number; centralOnly?: boolean }>;
     };
-    const entries = Object.entries(data.states || {});
+    centralOnlySites.current = new Set(
+      Object.entries(data.states || {}).filter(([, entry]) => entry.centralOnly).map(([local]) => local),
+    );
+    // Un local con operaciones sin confirmar se muestra desde su último estado
+    // encolado: el servidor todavía no las tiene y la próxima operación debe
+    // continuar desde ellas, no desde una versión que las omite.
+    const outbox = await getOutbox();
+    const pendingSites = outbox?.sites() ?? [];
+    const entries = [
+      ...Object.entries(data.states || {}).filter(([local]) => !pendingSites.includes(local)),
+      ...pendingSites.flatMap((local) => {
+        const state = latestQueuedState(outbox?.get(local));
+        return state ? [[local, { state, revision: data.states?.[local]?.revision ?? 0 }] as [string, { state: OperationalSnapshot; revision: number }]] : [];
+      }),
+    ];
     if (entries.length) {
       const all = <K extends keyof OperationalSnapshot>(key: K) =>
         entries.flatMap(([, entry]) =>
@@ -823,7 +859,12 @@ export default function Home() {
       );
       setActiveShiftBySite(
         Object.fromEntries(
-          entries.map(([local, entry]) => [local, entry.state.activeShift]),
+          entries.map(([local, entry]) => {
+            const active = entry.state.activeShift ?? undefined;
+            // Un turno que ya figura cerrado en el historial no puede seguir activo.
+            const closed = active && entry.state.shiftLog?.some((shift) => shift.id === active.id && (shift.closedAtISO || shift.closedAt));
+            return [local, closed ? undefined : active];
+          }),
         ),
       );
       lastPersistedSnapshot.current = Object.fromEntries(
@@ -834,7 +875,10 @@ export default function Home() {
         entries.map(([local, entry]) => [local, entry.revision]),
       );
       const configuration = entries.find(([, entry]) => entry.state.prices || entry.state.limitsBySite || entry.state.schedules)?.[1].state;
-      if (configuration?.limitsBySite) setLimitsBySite(configuration.limitsBySite);
+      // Administración recibe todos los límites; cada local solo los propios.
+      // Se combinan sobre los valores por defecto para no dejar un local sin límites.
+      const receivedLimits = Object.assign({}, ...entries.map(([, entry]) => entry.state.limitsBySite ?? {})) as Record<string, OperationalLimits>;
+      if (Object.keys(receivedLimits).length) setLimitsBySite((current) => ({ ...current, ...receivedLimits }));
       if (configuration?.schedules) setSchedules(configuration.schedules);
       if (configuration?.monthlyTargets) {
         setMonthlyTargets((targets) => ({ ...targets, ...configuration.monthlyTargets }));
@@ -898,6 +942,10 @@ export default function Home() {
     const saleIds = new Set(localSales.map((item) => item.id));
     const filterBySite = <T extends { site: string }>(items: T[]) =>
       items.filter((item) => item.site === local);
+    // De un local que Central no opera solo se envía lo que puede gestionar;
+    // el servidor ignora cualquier otro dato.
+    if (centralOnlySites.current.has(local))
+      return { stockRequests: filterBySite(stockRequests), stockAdjustments: filterBySite(stockAdjustments) };
     return {
       stock: stock[local] || {},
       minimumStock: minimumStock[local] || {},
@@ -909,7 +957,9 @@ export default function Home() {
       savedOrders: filterBySite(savedOrders),
       cashAdjustments: filterBySite(cashAdjustments),
       cashLedger: filterBySite(cashLedger),
-      activeShift: activeShiftBySite[local],
+      // null y no undefined: JSON omite undefined y el servidor conservaría el
+      // turno anterior como abierto después de cerrar la caja.
+      activeShift: activeShiftBySite[local] ?? null,
       shiftLog: filterBySite(shiftLog),
       envelopeRecords: filterBySite(envelopeRecords),
       stockMovements: filterBySite(stockMovements),
@@ -934,35 +984,113 @@ export default function Home() {
     };
   };
   const refreshPendingCount = () => {
-    if (!user) return setPendingSync(0);
-    setPendingSync(readPendingWrites(String(user.id)).length);
+    const ready = getOutbox();
+    if (!ready) return setPendingSync(0);
+    void ready.then((outbox) => setPendingSync(outbox.count()));
   };
-  const sendPendingWrite = async (write: PendingOperationalWrite) => {
-    if (!user) throw new Error("Sesión requerida");
-    const response = await fetch(`${API_BASE}/operations/states/${encodeURIComponent(write.site)}`, {
-      method: "PUT",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      keepalive: true,
-      body: JSON.stringify(write),
-    });
-    if (!response.ok) throw new Error(response.status === 409 ? "El servidor requiere recargar el estado antes de combinarlo." : "No se pudo guardar");
-    const data = (await response.json()) as { revision?: number; merged?: boolean };
-    if (typeof data.revision === "number") serverRevision.current[write.site] = data.revision;
-    lastPersistedSnapshot.current[write.site] = JSON.stringify(write.state);
-    removePendingWrite(String(user.id), write.site, write.requestId);
-    refreshPendingCount();
-    if (data.merged) {
-      await loadOperationalData();
-      setMessage(`Los cambios simultáneos de ${write.site} se combinaron sin perder operaciones.`);
+  type SendResult =
+    | { kind: "saved"; revision?: number; merged?: boolean }
+    | { kind: "retry" }
+    | { kind: "session" }
+    | { kind: "rejected"; message: string };
+  const sendPendingWrite = async (write: PendingOperationalWrite): Promise<SendResult> => {
+    const body = JSON.stringify(write);
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/operations/states/${encodeURIComponent(write.site)}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        // Chrome, Edge y otros navegadores rechazan sin enviarlo un keepalive de
+        // más de 64 KB ("Failed to fetch"); solo los envíos chicos lo usan.
+        keepalive: body.length < 60_000,
+        body,
+      });
+    } catch {
+      return { kind: "retry" };
+    }
+    if (response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { revision?: number; merged?: boolean };
+      return { kind: "saved", revision: data.revision, merged: data.merged };
+    }
+    if (response.status === 401) return { kind: "session" };
+    // Sin respuesta útil, sobrecarga o conflicto transitorio: se reintenta igual.
+    if (response.status >= 500 || [408, 409, 425, 429].includes(response.status)) return { kind: "retry" };
+    const data = (await response.json().catch(() => ({}))) as { error?: string };
+    return { kind: "rejected", message: data.error || `El servidor rechazó la operación (HTTP ${response.status}).` };
+  };
+  /**
+   * Envía la cola de un local en orden estricto: el siguiente envío sale recién
+   * cuando el anterior quedó confirmado. Un corte se reintenta con el mismo
+   * requestId (el servidor no lo aplica dos veces); un rechazo definitivo deja
+   * el local en espera con aviso, sin perder lo guardado ni frenar otros locales.
+   */
+  const drainSite = async (local: string) => {
+    const outbox = await getOutbox();
+    if (!outbox || drainingSites.current.has(local)) return;
+    drainingSites.current.add(local);
+    let lastResult: SendResult["kind"] | null = null;
+    try {
+      while (navigator.onLine) {
+        const queue = outbox.get(local);
+        const write = queue.writes[0];
+        if (!write || queue.blocked) break;
+        await outbox.markSent(local, write.requestId);
+        // Si parte exactamente de lo que el servidor acaba de confirmar sin
+        // combinar, la revisión vigente es la de esa confirmación y se aplica
+        // directo; si no, conserva una revisión anterior y el servidor combina.
+        const acknowledged = lastAcknowledged.current[local];
+        const exactBase = acknowledged && !acknowledged.merged && acknowledged.stateJson === JSON.stringify(write.baseState);
+        const result = await sendPendingWrite(exactBase ? { ...write, baseRevision: serverRevision.current[local] ?? write.baseRevision } : write);
+        lastResult = result.kind;
+        if (result.kind === "retry") {
+          setMessage("La operación quedó pendiente en este equipo. Se reintentará sola; no repitas el cobro.");
+          break;
+        }
+        if (result.kind === "session") {
+          setMessage("Tu sesión venció. Volvé a ingresar: las operaciones pendientes siguen guardadas en este equipo y se enviarán.");
+          break;
+        }
+        if (result.kind === "rejected") {
+          await outbox.block(local, result.message);
+          setMessage(`No se pudo guardar en ${local}: ${result.message} Las operaciones siguen guardadas en este equipo; avisá a Administración antes de cerrar la sesión.`);
+          break;
+        }
+        await outbox.acknowledge(local, write.requestId);
+        if (typeof result.revision === "number") serverRevision.current[local] = result.revision;
+        lastPersistedSnapshot.current[local] = JSON.stringify(write.state);
+        lastAcknowledged.current[local] = { stateJson: lastPersistedSnapshot.current[local], merged: Boolean(result.merged) };
+        if (result.merged) reloadAfterDrain.current = true;
+        const pendingReceipt = pendingReceiptRef.current;
+        if (pendingReceipt && pendingReceipt.site === local && write.state.sales?.some((sale) => sale.id === pendingReceipt.id)) {
+          pendingReceiptRef.current = null;
+          setReceiptSale(pendingReceipt);
+          setMessage(`Venta confirmada y guardada: ${money.format(pendingReceipt.net)}. Ya podés imprimir el ticket.`);
+        }
+        setSyncStatus("Operación guardada en la base de datos.");
+      }
+    } finally {
+      drainingSites.current.delete(local);
+      setPendingSync(outbox.count());
+      // Una operación encolada mientras terminaba este envío no debe esperar al
+      // próximo reintento automático.
+      const remaining = outbox.get(local);
+      if (lastResult === "saved" && remaining.writes.length && !remaining.blocked) void drainSite(local);
+      // Recargar reemplaza el estado de todos los locales: solo se hace cuando
+      // no queda nada sin confirmar que pudiera pisarse.
+      if (reloadAfterDrain.current && outbox.count() === 0 && drainingSites.current.size === 0) {
+        reloadAfterDrain.current = false;
+        await loadOperationalData();
+        setMessage("Se combinaron cambios hechos en otro equipo sin perder operaciones.");
+      }
     }
   };
   const flushPendingWrites = async () => {
-    if (!user || !navigator.onLine) return;
-    const writes = readPendingWrites(String(user.id));
-    for (const write of writes) await sendPendingWrite(write);
-    refreshPendingCount();
-    if (writes.length) setSyncStatus(`${writes.length} operación(es) pendientes confirmadas por el servidor.`);
+    const outbox = await getOutbox();
+    if (!outbox || !navigator.onLine) return;
+    await Promise.all(outbox.sites().map((local) => drainSite(local)));
+    setPendingSync(outbox.count());
+    if (outbox.count() > 0) throw new Error("Quedan operaciones pendientes.");
   };
   useEffect(() => {
     if (!user || !operationalReady || operationalVersion === 0) return;
@@ -970,36 +1098,33 @@ export default function Home() {
       action: "Actualización operativa",
       detail: "Cambios registrados en el sistema.",
     };
-    const persistenceSites = user.accessAllLocations ? SITES : user.locations || [site];
+    const persistenceSites = user.accessAllLocations
+      ? SITES
+      : [...new Set([...(user.locations || [site]), ...centralOnlySites.current])];
     persistenceSites.forEach((local) => {
       const snapshot = operationalSnapshot(local);
       const serialized = JSON.stringify(snapshot);
-      if (lastPersistedSnapshot.current[local] === serialized) return;
-      const baseState = JSON.parse(queuedBaseSnapshot.current[local] || lastPersistedSnapshot.current[local] || "{}") as OperationalSnapshot;
+      const baseJson = queuedBaseSnapshot.current[local] || lastPersistedSnapshot.current[local] || "{}";
+      if (baseJson === serialized) return;
       const write: PendingOperationalWrite = {
         requestId: crypto.randomUUID(),
         site: local,
         state: snapshot,
-        baseState,
+        baseState: JSON.parse(baseJson) as OperationalSnapshot,
         baseRevision: serverRevision.current[local] || 0,
         event: { ...event, recordedAt: new Date().toISOString() },
         queuedAt: new Date().toISOString(),
       };
       queuedBaseSnapshot.current[local] = serialized;
-      savePendingWrite(String(user.id), write);
-      refreshPendingCount();
-      persistQueue.current = persistQueue.current.then(async () => {
-        await sendPendingWrite(write);
-        const pendingReceipt = pendingReceiptRef.current;
-        if (pendingReceipt && pendingReceipt.site === local && snapshot.sales?.some((sale) => sale.id === pendingReceipt.id)) {
-          pendingReceiptRef.current = null;
-          setReceiptSale(pendingReceipt);
-          setMessage(`Venta confirmada y guardada: ${money.format(pendingReceipt.net)}. Ya podés imprimir el ticket.`);
-        }
-        setSyncStatus("Operación guardada en la base de datos.");
+      void getOutbox()?.then(async (outbox) => {
+        // Se acumula con el envío pendiente solo si esta operación parte
+        // exactamente de su estado.
+        const latest = latestQueuedState(outbox.get(local));
+        await outbox.enqueue(write, Boolean(latest) && JSON.stringify(latest) === baseJson);
+        setPendingSync(outbox.count());
+        await drainSite(local);
       }).catch(() => {
-        refreshPendingCount();
-        setMessage("La operación quedó pendiente. No recargues ni repitas el cobro; verificá la conexión.");
+        setMessage("No se pudo guardar la operación en este equipo. No cierres la pestaña y avisá a Administración.");
       });
     });
   // La lista explícita evita guardar por cambios visuales ajenos a la operación.
@@ -1054,7 +1179,11 @@ export default function Home() {
       if (!navigator.onLine) handleOffline();
       else flushPendingWrites().catch(() => undefined);
     }, 0);
-    return () => { window.clearTimeout(initialTimer); window.removeEventListener("offline", handleOffline); window.removeEventListener("online", handleOnline); };
+    // Un corte breve no siempre dispara el evento "online": se reintenta solo.
+    const retryTimer = window.setInterval(() => {
+      if (navigator.onLine) flushPendingWrites().catch(() => undefined);
+    }, 20000);
+    return () => { window.clearTimeout(initialTimer); window.clearInterval(retryTimer); window.removeEventListener("offline", handleOffline); window.removeEventListener("online", handleOnline); };
   // La cola se reanuda al autenticar o cuando vuelve Internet.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
@@ -2184,6 +2313,8 @@ export default function Home() {
       return setMessage(
         `El egreso supera el límite de ${money.format(siteLimits.maxExpense)} configurado por Administración para ${site}.`,
       );
+    if (expensePaidWithCash && !cashIsOpen)
+      return setMessage("Abrí la caja para registrar un egreso pagado con su efectivo, o desmarcá «Pagado con efectivo de la caja».");
     const expense: Expense = {
       id: crypto.randomUUID(),
       site,
@@ -2193,8 +2324,21 @@ export default function Home() {
       receiptName: expenseReceipt,
       createdAt: new Date().toLocaleString("es-AR"),
       createdBy: user.name,
+      paidWithCash: expensePaidWithCash,
     };
     setExpensesLog((items) => [expense, ...items]);
+    // Un egreso pagado con la caja sale del efectivo esperado del turno (antes
+    // había que repetirlo a mano en «Gastos» al cerrar).
+    if (expensePaidWithCash)
+      appendCashLedgerEntry({
+        kind: "Egreso",
+        direction: "Egreso",
+        amount: expense.amount,
+        cashImpact: -expense.amount,
+        paymentMethod: "Efectivo",
+        reference: expense.id,
+        detail: `${expense.category} · ${expense.detail}`,
+      });
     recordAudit(
       "Egreso registrado",
       `${site} · ${money.format(expense.amount)} · ${expense.category}`,
@@ -2290,12 +2434,18 @@ export default function Home() {
           : item,
       ),
     );
+    // Se aplica la diferencia del conteo, no el número contado: las ventas y
+    // movimientos ocurridos entre el conteo y la aprobación no deben revertirse.
     if (approve)
       setStock((items) => ({
         ...items,
         [adjustment.site]: {
           ...items[adjustment.site],
-          [adjustment.productId]: adjustment.counted,
+          [adjustment.productId]: Math.max(
+            0,
+            safeStockQuantity(items[adjustment.site]?.[adjustment.productId]) +
+              (adjustment.counted - adjustment.theoretical),
+          ),
         },
       }));
     if (approve)
@@ -2913,6 +3063,10 @@ export default function Home() {
     sale: Sale,
     nextInvoiceType: Sale["invoiceType"],
   ) => {
+    // Cambiar el comprobante de una venta registrada es una corrección fiscal:
+    // mismo nivel que anular. El servidor además lo rechaza si ya hay factura ARCA.
+    if (!can("anular"))
+      return setMessage("Tu usuario no tiene permiso para cambiar el comprobante de una venta registrada.");
     setSales((items) =>
       items.map((item) =>
         item.id === sale.id ? { ...item, invoiceType: nextInvoiceType } : item,
@@ -2933,12 +3087,32 @@ export default function Home() {
       );
     if (requiresEnvelope && envelope > counted)
       return setMessage("El monto del sobre no puede ser mayor al efectivo físico contado.");
-    if (Math.abs(cashVariance) > siteLimits.maxCashDifference)
+    // Una diferencia mayor al límite ya no impide cerrar: exige un motivo y
+    // queda como incidencia abierta para Administración.
+    const differenceExceeded = Math.abs(cashVariance) > siteLimits.maxCashDifference;
+    const differenceReason = cashDifferenceReason.trim();
+    if (differenceExceeded && !differenceReason)
       return setMessage(
-        `No se puede cerrar: la diferencia supera el máximo autorizado de ${money.format(siteLimits.maxCashDifference)}.`,
+        `La diferencia de ${money.format(cashVariance)} supera el máximo autorizado de ${money.format(siteLimits.maxCashDifference)}. Indicá el motivo para cerrar; quedará como alerta para Administración.`,
       );
     setClosed(true);
     setCashOpenBySite((items) => ({ ...items, [site]: false }));
+    if (differenceExceeded) {
+      setIncidents((items) => [
+        {
+          id: crypto.randomUUID(),
+          site,
+          type: "Diferencia de caja",
+          detail: `${money.format(cashVariance)} (esperado ${money.format(expected)}, contado ${money.format(counted)}) · ${differenceReason}`,
+          createdAt: new Date().toLocaleString("es-AR"),
+          createdBy: user.name,
+          status: "Abierta",
+        },
+        ...items,
+      ]);
+      recordAudit("Cierre con diferencia de caja", `${site} · ${money.format(cashVariance)} · ${differenceReason}`);
+    }
+    setCashDifferenceReason("");
     if (activeShift) {
       const closedNow = new Date();
       const finalShift = {
@@ -2950,6 +3124,7 @@ export default function Home() {
         countedCash: counted,
         differenceAmount: cashVariance,
         envelopeAmount: envelope,
+        ...(differenceExceeded ? { differenceReason } : {}),
       };
       setShiftLog((items) =>
         items.map((shift) => (shift.id === finalShift.id ? finalShift : shift)),
@@ -3111,6 +3286,8 @@ export default function Home() {
     recordAudit("Sincronización solicitada", `${pendingSync} operación(es) pendientes.`);
     setMessage("Sincronizando operaciones pendientes. Esperá la confirmación antes de recargar.");
     try {
+      // Pedir sincronizar reintenta también un local que el servidor había rechazado.
+      await (await getOutbox())?.unblockAll();
       await flushPendingWrites();
       setMessage("Todas las operaciones pendientes fueron confirmadas por el servidor.");
     } catch {
@@ -3138,7 +3315,7 @@ export default function Home() {
           "Integraciones",
         ]
       : user.role === "compras"
-        ? ["MRP"]
+        ? ["MRP", ...(can("comprasProduccion") ? ["Compras de producción"] : [])]
         : [
           "Ventas",
           "Tareas",
@@ -3548,11 +3725,9 @@ export default function Home() {
                                   [p.id]: Math.min(invitedUnits, remainingUnits),
                                 };
                               });
-                              // "Quitar" conserva el foco del botón. Una lectora USB
-                              // escribe como teclado y suele terminar con Enter, por lo
-                              // que el siguiente escaneo podía volver a accionar ese
-                              // botón. Volvemos el foco al capturador de inmediato y
-                              // descartamos una lectura parcial anterior.
+                              // El botón toma el foco. Restituimos el capturador
+                              // invisible para que la próxima lectura USB se
+                              // procese como venta sin cerrar y reabrir caja.
                               scannerBufferRef.current = { value: "", lastKeyAt: 0, input: null, originalValue: "" };
                               setSalesScannerValue("");
                               salesScannerRef.current?.focus();
@@ -3780,13 +3955,15 @@ export default function Home() {
                               )}
                               <select
                                 value={sale.invoiceType}
+                                disabled={!can("anular")}
+                                title={can("anular") ? undefined : "Requiere permiso para anular ventas"}
                                 onChange={(event) =>
                                   changeSaleInvoice(
                                     sale,
                                     event.target.value as Sale["invoiceType"],
                                   )
                                 }
-                                className="rounded border p-1"
+                                className="rounded border p-1 disabled:opacity-60"
                               >
                                 <option>Factura B</option>
                                 <option>Factura B electrónica</option>
@@ -3975,7 +4152,7 @@ export default function Home() {
                       </button>
                     </div>
                   )}
-                  <label className="mt-3 block text-sm font-bold">Gastos</label>
+                  <label className="mt-3 block text-sm font-bold">Otros gastos en efectivo (no cargados en Egresos)</label>
                   <input
                     type="number"
                     value={expenses}
@@ -4030,6 +4207,20 @@ export default function Home() {
                   >
                     Diferencia contra efectivo esperado: {money.format(cashVariance)}
                   </p>
+                  {Math.abs(cashVariance) > siteLimits.maxCashDifference && (
+                    <label className="mt-3 block text-sm font-bold">
+                      Motivo de la diferencia (obligatorio para cerrar)
+                      <input
+                        value={cashDifferenceReason}
+                        onChange={(event) => setCashDifferenceReason(event.target.value)}
+                        placeholder="Ej.: vuelto mal entregado, billete faltante"
+                        className="mt-1 w-full rounded border p-2 font-normal"
+                      />
+                      <span className="mt-1 block text-xs font-normal text-slate-500">
+                        Supera el máximo de {money.format(siteLimits.maxCashDifference)}: quedará como incidencia para Administración.
+                      </span>
+                    </label>
+                  )}
                   {savedOrders.filter((order) => order.site === site).length >
                     0 && (
                     <p className="mt-3 rounded bg-[#fff1ec] p-3 text-sm font-bold text-[#9c302a]">
@@ -4144,21 +4335,6 @@ export default function Home() {
                   </p>
                 </div>
               )}
-              {canAdjustStock && (
-                <button
-                  onClick={() =>
-                    setStock((x) => ({
-                      ...x,
-                      [site]: Object.fromEntries(
-                        products.map((p) => [p.id, x[site][p.id] + 1]),
-                      ),
-                    }))
-                  }
-                  className="mb-4 rounded bg-[#183a67] px-4 py-3 font-bold text-white"
-                >
-                  Simular ingreso desde Central
-                </button>
-              )}
               <div className="overflow-auto rounded-xl border bg-white">
                 <table className="w-full min-w-[620px] text-sm">
                   <thead className="bg-[#eef2f6]">
@@ -4268,7 +4444,7 @@ export default function Home() {
                 <div className="mt-5 rounded-2xl border bg-white p-5">
                   <b>Cerrar control de stock del local</b>
                   <p className="mt-1 text-sm text-slate-500">
-                    Andrea puede cargar el conteo de cada local. Al cerrar, cada diferencia con su observación queda en historial y aparece como tarea para Administración y los perfiles autorizados de stock; el stock teórico no cambia automáticamente.
+                    Los perfiles con permiso de stock cargan el conteo de cada local. Al cerrar, cada diferencia con su observación queda en historial y aparece como tarea para Administración y los perfiles autorizados de stock; el stock teórico no cambia automáticamente.
                   </p>
                   <button
                     onClick={submitStockControl}
@@ -5141,6 +5317,9 @@ export default function Home() {
                   </label>
                   <label className="mt-3 block text-sm font-bold">
                     Comprobante opcional
+                    <span className="block text-xs font-normal text-slate-500">
+                      Se registra el nombre del archivo; el archivo no se guarda en el sistema.
+                    </span>
                     <input
                       type="file"
                       onChange={(event) =>
@@ -5149,6 +5328,17 @@ export default function Home() {
                       className="mt-1 block w-full text-sm font-normal"
                     />
                   </label>
+                  <label className="mt-3 flex items-center gap-2 text-sm font-bold">
+                    <input
+                      type="checkbox"
+                      checked={expensePaidWithCash}
+                      onChange={(event) => setExpensePaidWithCash(event.target.checked)}
+                    />
+                    Pagado con efectivo de la caja
+                  </label>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Si está marcado, el importe se descuenta del efectivo esperado del turno y no hay que repetirlo al cierre.
+                  </p>
                   <button
                     onClick={submitExpense}
                     disabled={!can("egresos")}
@@ -5317,8 +5507,9 @@ export default function Home() {
                 h="Base de clientes"
                 p="Opcional en cada venta; se pedirá consentimiento antes de promociones."
               />
-              <button className="rounded bg-[#183a67] px-4 py-3 font-bold text-white">
-                Registrar cliente
+              {/* El alta de clientes todavía no está implementada: el botón no tenía acción. */}
+              <button disabled className="rounded bg-[#183a67] px-4 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                Registrar cliente (próximamente)
               </button>
             </>
           ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
@@ -5387,7 +5578,7 @@ export default function Home() {
                       setBackupStatus("Generando una copia nueva y verificando su integridad…");
                       try {
                         const response = await fetch(`${API_BASE}/admin/backups/run`, { method: "POST", credentials: "include" });
-                        const data = await response.json().catch(() => ({}));
+                        const data = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
                         if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo completar el respaldo.");
                         setBackupStatus("Copia nueva verificada y enviada al resguardo externo.");
                         recordAudit("Respaldo verificado manualmente", "Copia nueva generada antes de la puesta operativa.");

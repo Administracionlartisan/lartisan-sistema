@@ -18,7 +18,10 @@ export default function PurchaseCostsPanel() {
   const [lines, setLines] = useState<Line[]>([{ inputKey: "", quantity: "", unitCost: "", expectedQuantity: "", expectedUnitCost: "", sourceOrderReference: "", observations: "" }]);
   const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState("");
   const load = useCallback(async () => { setLoading(true); setError(""); try { const response = await fetch(`${API_BASE}/purchase-costs/catalog`, { credentials: "include", cache: "no-store" }); const body = await response.json() as { error?: string; inputs?: Input[]; history?: History[] }; if (!response.ok) throw new Error(body.error || "No se pudo consultar el catálogo de compras."); setInputs(body.inputs ?? []); setHistory(body.history ?? []); } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo cargar compras."); } finally { setLoading(false); } }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
   useEffect(() => {
     void fetch(`${API_BASE}/activity/module-opened`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: "Compras de producción" }) });
   }, []);
@@ -28,7 +31,7 @@ export default function PurchaseCostsPanel() {
   const submit = async (event: FormEvent) => { event.preventDefault(); setMessage(""); setError(""); setSaving(true); try { const response = await fetch(`${API_BASE}/purchase-costs`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, invoice, paymentMethod, purchaseDate, lines: lines.map((line) => ({ ...line, quantity: Number(line.quantity), unitCost: Number(line.unitCost) })) }) }); const body = await response.json() as { error?: string; warnings?: string[] }; if (!response.ok) throw new Error(body.error || "No se pudo guardar la compra."); setMessage(body.warnings?.length ? `Compra registrada. Revisá estas variaciones inusuales: ${body.warnings.join(", ")}. El historial anterior fue conservado.` : "Compra registrada. Los costos y recetas afectadas fueron recalculados."); setProvider(""); setInvoice(""); setPaymentMethod("Transferencia"); setPurchaseDate(today()); setLines([{ inputKey: "", quantity: "", unitCost: "", expectedQuantity: "", expectedUnitCost: "", sourceOrderReference: "", observations: "" }]); await load(); } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo registrar la compra."); } finally { setSaving(false); } };
   return <div className={styles.panel}>
     <Heading k="VILLA MITRE · PRODUCCIÓN" h="Compras de producción" p="Carga de insumos, actualización de costos y trazabilidad por factura." />
-    <div className={styles.notice}><div><strong>Control de costos activo</strong><p>Solo Yamila y Valentina de Villa Mitre pueden registrar compras. Cada precio conserva el valor anterior, quién lo cargó y la factura.</p></div><span className={styles.status}>{loading ? "Consultando…" : `${inputs.length} insumos disponibles`}</span></div>
+    <div className={styles.notice}><div><strong>Control de costos activo</strong><p>Registran compras los usuarios con el permiso «Cargar compras de producción» y acceso a Villa Mitre. Cada precio conserva el valor anterior, quién lo cargó y la factura.</p></div><span className={styles.status}>{loading ? "Consultando…" : `${inputs.length} insumos disponibles`}</span></div>
     {error && <div className={styles.error}>{error}</div>}{message && <div className={styles.warning}>{message}</div>}
     <form className={styles.card} onSubmit={submit}>
       <div className={styles.cardHeader}><div><b>Registrar compra</b><p>Indicá la cantidad y el costo en la misma unidad del insumo: kg, g, litro, unidad, etc. Una variación de 50% o más queda señalada para revisión.</p></div></div>

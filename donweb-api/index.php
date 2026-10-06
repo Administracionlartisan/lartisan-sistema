@@ -16,11 +16,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $route = trim((string) ($_GET['route'] ?? ''), '/');
+// La cookie de sesión no protege contra CSRF por sí sola: toda escritura debe
+// venir de los orígenes web habilitados. Las lecturas GET no se ven afectadas.
+if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
+    && !in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) {
+    json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+}
 try {
     $pdo = db($config);
 } catch (Throwable $error) {
     error_log('LARTISAN API database initialization failed: ' . $error->getMessage());
-    json_response(['ok' => false, 'error' => 'database_initialization_failed', 'type' => get_class($error)], 503);
+    // El detalle queda en el log; la respuesta pública no revela la tecnología usada.
+    json_response(['ok' => false, 'error' => 'database_initialization_failed'], 503);
 }
 if ($method === 'GET' && ($route === '' || $route === 'health')) {
     $pdo->query('SELECT 1');
@@ -39,6 +46,16 @@ foreach ([
         $ensure();
     } catch (Throwable $error) {
         error_log('LARTISAN deferred ' . $schema . ' schema update: ' . $error->getMessage());
+    }
+}
+
+// Con una contraseña temporal solo se puede cambiarla (o salir). Antes esto se
+// controlaba únicamente en dos rutas y el resto de las escrituras lo permitía.
+if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
+    && !in_array($route, ['auth/login', 'auth/logout', 'auth/change-password', 'auth/request-reset', 'auth/confirm-reset-code'], true)) {
+    $sessionUser = current_user($pdo);
+    if ($sessionUser && !empty($sessionUser['must_change_password'])) {
+        json_response(['ok' => false, 'error' => 'Primero debés cambiar la contraseña temporal.'], 403);
     }
 }
 
@@ -179,6 +196,11 @@ if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/prepare') {
         json_response(['ok' => true, 'document' => $document, 'message' => 'Comprobante preparado internamente. No se emitió CAE ni se informó a ARCA.']);
     } catch (InvalidArgumentException $error) {
         json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    } catch (PDOException $error) {
+        throw $error;
+    } catch (RuntimeException $error) {
+        // Configuración fiscal faltante: Administración necesita el motivo exacto.
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     }
 }
 
@@ -191,6 +213,10 @@ if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/issue') {
         audit($pdo, (int) $user['id'], 'arca_fiscal_document_authorized', (string) ($document['id'] ?? ''));
         json_response(['ok' => true, 'document' => $document, 'message' => 'Comprobante autorizado por ARCA con CAE.']);
     } catch (InvalidArgumentException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
+    catch (PDOException $error) { throw $error; }
+    // Incluye "ARCA no confirmó la emisión… pendiente de conciliación": Administración
+    // debe verlo para no reintentar un comprobante que ARCA pudo haber autorizado.
+    catch (RuntimeException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
 }
 
 if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/credit-note/prepare') {
@@ -202,6 +228,8 @@ if ($method === 'POST' && $route === 'admin/arca/fiscal-documents/credit-note/pr
         audit($pdo, (int) $user['id'], 'arca_credit_note_prepared', (string) ($document['id'] ?? ''));
         json_response(['ok' => true, 'document' => $document, 'message' => 'Nota de crédito preparada. Requiere confirmación explícita antes de solicitar CAE.']);
     } catch (InvalidArgumentException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
+    catch (PDOException $error) { throw $error; }
+    catch (RuntimeException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
 }
 $pdo->exec(
     "CREATE TABLE IF NOT EXISTS password_recovery_codes (
@@ -246,7 +274,14 @@ if ($method === 'GET' && $route === 'admin/pnl/google-callback') {
 
 if ($method === 'GET' && $route === 'admin/pnl/authorization-url') {
     $admin = require_user($pdo, ['administracion']);
-    json_response(['ok' => true, 'authorizationUrl' => pnl_authorization_url($pdo, $config, (int) $admin['id'])]);
+    try {
+        json_response(['ok' => true, 'authorizationUrl' => pnl_authorization_url($pdo, $config, (int) $admin['id'])]);
+    } catch (PDOException $error) {
+        throw $error;
+    } catch (RuntimeException $error) {
+        // Ej.: "La conexión de Google no está configurada todavía."
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    }
 }
 
 if ($method === 'GET' && $route === 'admin/pnl/latest') {
@@ -366,7 +401,7 @@ if ($method === 'GET' && $route === 'mrp/recipes/history') {
 
 if ($method === 'GET' && $route === 'purchase-costs/catalog') {
     $user = require_user($pdo, ['administracion', 'vendedora', 'supervisora', 'compras']); ensure_mrp_schema($pdo);
-    if (!mrp_can_register_production_purchase($user)) json_response(['ok' => false, 'error' => 'Solo Yamila y Valentina de Villa Mitre pueden cargar compras de producción.'], 403);
+    if (!mrp_can_register_production_purchase($user)) json_response(['ok' => false, 'error' => 'Tu usuario no tiene el permiso «Cargar compras de producción» con acceso a Villa Mitre. Pedíselo a Administración.'], 403);
     $latest = $pdo->query("SELECT payload_json FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
     $snapshot = mrp_apply_recipe_overrides($pdo, json_decode((string) $latest, true) ?: []);
     $inputs = array_map(static fn (array $input): array => ['key' => mrp_key($input['item'] ?? ''), 'name' => (string) ($input['item'] ?? ''), 'unit' => (string) ($input['unit'] ?? $input['stockUnit'] ?? 'unidad'), 'unitCost' => $input['unitCost'] ?? null], $snapshot['inputs'] ?? []);
@@ -378,7 +413,7 @@ if ($method === 'GET' && $route === 'purchase-costs/catalog') {
 
 if ($method === 'POST' && $route === 'purchase-costs') {
     $user = require_user($pdo, ['administracion', 'vendedora', 'supervisora', 'compras']); ensure_mrp_schema($pdo);
-    if (!mrp_can_register_production_purchase($user)) json_response(['ok' => false, 'error' => 'Solo Yamila y Valentina de Villa Mitre pueden cargar compras de producción.'], 403);
+    if (!mrp_can_register_production_purchase($user)) json_response(['ok' => false, 'error' => 'Tu usuario no tiene el permiso «Cargar compras de producción» con acceso a Villa Mitre. Pedíselo a Administración.'], 403);
     if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
     $body = request_body(); $provider = mrp_clean_text($body['provider'] ?? '', 190); $invoice = mrp_clean_text($body['invoice'] ?? '', 100); $date = mrp_clean_text($body['purchaseDate'] ?? '', 10); $paymentMethod = mrp_clean_text($body['paymentMethod'] ?? '', 60); $lines = $body['lines'] ?? [];
     if ($provider === '' || $invoice === '' || !preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $date) || !is_array($lines) || count($lines) < 1 || count($lines) > 100) json_response(['ok' => false, 'error' => 'Indicá fecha, proveedor, factura y al menos un insumo válido.'], 422);
@@ -392,7 +427,7 @@ if ($method === 'POST' && $route === 'purchase-costs') {
 
 if ($method === 'PUT' && preg_match('#^mrp/recipes/([a-z0-9 -]+)$#i', $route, $matches)) {
     $mrpUser = require_mrp_user($pdo);
-    if (!mrp_can_edit_recipes($mrpUser)) json_response(['ok' => false, 'error' => 'Solo Jhaiber o Gerencia pueden modificar recetas.'], 403);
+    if (!mrp_can_edit_recipes($mrpUser)) json_response(['ok' => false, 'error' => 'Tu usuario no tiene el permiso «Editar recetas y costos». Pedíselo a Administración.'], 403);
     ensure_mrp_schema($pdo);
     if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
     $body = request_body(); $key = mrp_key(rawurldecode($matches[1]));
@@ -460,7 +495,7 @@ if ($method === 'GET' && $route === 'mrp/operations') {
 
 if ($method === 'POST' && $route === 'mrp/stock-counts') {
     $mrpUser = require_mrp_user($pdo);
-    if (!mrp_can_count_stock($mrpUser)) json_response(['ok' => false, 'error' => 'Solo Betzi o Administración pueden actualizar el stock real.'], 403);
+    if (!mrp_can_count_stock($mrpUser)) json_response(['ok' => false, 'error' => 'Tu usuario no tiene el permiso «Contar stock de insumos (MRP)». Pedíselo a Administración.'], 403);
     ensure_mrp_schema($pdo);
     $body = request_body();
     $key = mrp_clean_text($body['inputKey'] ?? '', 190);
@@ -483,7 +518,7 @@ if ($method === 'POST' && $route === 'mrp/production-runs') {
     $mrpUser = require_mrp_user($pdo); ensure_mrp_schema($pdo); $body = request_body();
     $week = mrp_clean_text($body['weekKey'] ?? '', 20); $recipeKey = mrp_clean_text($body['recipeKey'] ?? '', 190); $quantity = (float) ($body['quantityProduced'] ?? 0); $notes = mrp_clean_text($body['notes'] ?? '', 1000);
     if (!preg_match('/^\d{4}-S\d{1,2}$/', $week) || $recipeKey === '' || !is_finite($quantity) || $quantity <= 0) json_response(['ok'=>false,'error'=>'Indicá semana, receta y producción válida.'],422);
-    $latest = $pdo->query("SELECT payload_json FROM mrp_sync_runs WHERE status='completed' ORDER BY id DESC LIMIT 1")->fetchColumn();
+    $latest = $pdo->query("SELECT payload_json FROM mrp_sync_runs WHERE status='verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
     $snapshot = $latest ? mrp_apply_recipe_overrides($pdo, json_decode((string)$latest,true) ?: []) : []; $recipe = null;
     foreach (($snapshot['recipes'] ?? []) as $row) if (($row['sourceKey'] ?? mrp_key($row['recipe'] ?? '')) === $recipeKey) { $recipe=$row; break; }
     if (!$recipe) json_response(['ok'=>false,'error'=>'Receta no encontrada.'],404);
@@ -842,7 +877,8 @@ if ($method === 'POST' && $route === 'auth/request-reset') {
         $recoveryId = (int) $pdo->lastInsertId();
         $destination = trim((string) ($config['admin_recovery_email'] ?? ''));
         if ($destination === '') {
-            audit($pdo, (int) $user['id'], 'password_recovery_not_configured');
+            $pdo->prepare('DELETE FROM password_recovery_codes WHERE id = ?')->execute([$recoveryId]);
+            audit($pdo, $userId, 'password_recovery_not_configured');
             json_response(['ok' => false, 'error' => 'La recuperación no está configurada'], 503);
         }
         $from = trim((string) ($config['recovery_from_email'] ?? ''));
@@ -952,22 +988,37 @@ if ($method === 'GET' && $route === 'operations/states') {
         operational_sites(),
         static fn (string $site): bool => user_can_access_site($user, $site)
     ));
+    // Central recibe además, de los locales que no opera, solo pedidos y ajustes pendientes.
+    $centralSites = user_manages_central_orders($user)
+        ? array_values(array_diff(operational_sites(), $allowedSites))
+        : [];
     if (!$allowedSites) {
         json_response(['ok' => true, 'states' => []]);
     }
-    $placeholders = implode(',', array_fill(0, count($allowedSites), '?'));
+    foreach ($allowedSites as $site) {
+        // Una falla de mantenimiento nunca impide leer las operaciones.
+        try {
+            compact_oversized_site_state($pdo, $config, $site);
+        } catch (Throwable $error) {
+            error_log('LARTISAN state compaction failed for ' . $site . ': ' . $error->getMessage());
+        }
+    }
+    $readableSites = array_merge($allowedSites, $centralSites);
+    $placeholders = implode(',', array_fill(0, count($readableSites), '?'));
     $stmt = $pdo->prepare(
         "SELECT site, state_json, revision, updated_at FROM operation_site_states WHERE site IN ($placeholders)"
     );
-    $stmt->execute($allowedSites);
+    $stmt->execute($readableSites);
     $states = [];
     foreach ($stmt->fetchAll() as $row) {
         $state = json_decode((string) $row['state_json'], true);
         if (is_array($state)) {
+            $centralOnly = in_array($row['site'], $centralSites, true);
             $states[$row['site']] = [
-                'state' => operational_snapshot_for_user($user, $state),
+                'state' => $centralOnly ? central_site_view($state) : operational_snapshot_for_user($user, $state, (string) $row['site']),
                 'revision' => (int) $row['revision'],
                 'updatedAt' => $row['updated_at'],
+                'centralOnly' => $centralOnly,
             ];
         }
     }
@@ -981,7 +1032,10 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
     }
     ensure_operations_schema($pdo);
     $site = rawurldecode($matches[1]);
-    if (!user_can_access_site($user, $site)) {
+    $centralOnly = !user_can_access_site($user, $site)
+        && in_array($site, operational_sites(), true)
+        && user_manages_central_orders($user);
+    if (!user_can_access_site($user, $site) && !$centralOnly) {
         json_response(['ok' => false, 'error' => 'No tenés acceso a este local'], 403);
     }
     $body = request_body();
@@ -1006,9 +1060,19 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
         $currentRow = $revisionStatement->fetch();
         $currentRevision = $currentRow === false ? false : (int) $currentRow['revision'];
         $previousState = $currentRow === false ? [] : (json_decode((string) $currentRow['state_json'], true) ?: []);
-        $authorizedIncoming = authorize_operational_snapshot($user, $previousState, $state);
+        if ($centralOnly && $currentRow === false) {
+            // Un local sin datos no tiene pedidos que Central pueda gestionar.
+            $pdo->commit();
+            json_response(['ok' => true, 'revision' => 0, 'merged' => false, 'state' => null]);
+        }
+        $authorizedIncoming = $centralOnly
+            ? authorize_central_changes($user, $previousState, is_array($baseState) ? $baseState : [], $state)
+            : authorize_operational_snapshot($user, $previousState, $state);
         $merged = false;
-        if ($currentRow !== false && (int) $currentRevision !== $baseRevision) {
+        if ($centralOnly) {
+            // Los cambios de Central ya se aplicaron sobre el estado vigente.
+            $state = $authorizedIncoming;
+        } elseif ($currentRow !== false && (int) $currentRevision !== $baseRevision) {
             if (!is_array($baseState)) {
                 $pdo->rollBack();
                 json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
@@ -1017,6 +1081,21 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
             $merged = true;
         } else {
             $state = $authorizedIncoming;
+        }
+        // El historial completo vive en las tablas normalizadas y en
+        // operation_archive; el estado del local conserva solo lo reciente y lo
+        // abierto para que cada envío no crezca sin límite.
+        [$state, $invoiceFindings] = enforce_invoice_type_changes($pdo, $user, $previousState, $state);
+        $untrimmedState = $state;
+        [$state] = compact_operational_state($untrimmedState, $config);
+        archive_removed_operational_items($pdo, $site, $previousState, $untrimmedState, $state);
+        // Etapa de observación: se registran las diferencias de importes sin
+        // rechazar la operación. Un error de control nunca impide guardar.
+        try {
+            record_sale_validation_findings($pdo, $site, (int) $user['id'], array_merge($invoiceFindings,
+                validate_operational_sales($previousState, $untrimmedState, $site, catalog_price_lists($pdo))));
+        } catch (Throwable $validationError) {
+            error_log('LARTISAN sale validation failed: ' . $validationError->getMessage());
         }
         $changedKeys = array_values(array_filter(array_unique(array_merge(array_keys($previousState), array_keys($state))), static function ($key) use ($previousState, $state): bool {
             return ($previousState[$key] ?? null) !== ($state[$key] ?? null);
@@ -1051,7 +1130,7 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
         $pdo->prepare(
             'INSERT INTO operation_events (site, user_id, event_type, event_json) VALUES (?, ?, ?, ?)'
         )->execute([$site, $user['id'], 'operacion_actualizada', $eventJson]);
-        sync_normalized_operations($pdo, $site, $state, (int) $user['id']);
+        sync_normalized_operations($pdo, $site, $untrimmedState, (int) $user['id'], $currentRow === false ? null : $previousState);
         audit($pdo, (int) $user['id'], 'operational_state_updated', $site);
         $nextRevision = $currentRow === false ? 1 : ((int) $currentRevision + 1);
         $pdo->prepare('INSERT INTO operation_requests (request_id, site, user_id, revision) VALUES (?, ?, ?, ?)')
@@ -1062,7 +1141,7 @@ if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $ma
         throw $error;
     }
     $revision = (int) $pdo->query("SELECT revision FROM operation_site_states WHERE site = " . $pdo->quote($site))->fetchColumn();
-    json_response(['ok' => true, 'revision' => $revision, 'merged' => $merged ?? false, 'state' => ($merged ?? false) ? operational_snapshot_for_user($user, $state) : null]);
+    json_response(['ok' => true, 'revision' => $revision, 'merged' => $merged ?? false, 'state' => ($merged ?? false) ? operational_snapshot_for_user($user, $state, $site) : null]);
 }
 
 if ($method === 'POST' && $route === 'monitoring/heartbeat') {
@@ -1328,7 +1407,12 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
+    // Si la edición no trae permisos, se conservan tal cual. NULL significa "los
+    // del cargo": convertirlo en [] al bloquear o cambiar de local dejaba al
+    // usuario sin ningún permiso (por ejemplo, sin poder cobrar).
+    $reportPermissionsValue = array_key_exists('reportPermissions', $body) ? json_encode($reportPermissions, JSON_UNESCAPED_UNICODE) : $existing['report_permissions'];
+    $actionPermissionsValue = array_key_exists('actionPermissions', $body) ? json_encode($actionPermissions, JSON_UNESCAPED_UNICODE) : $existing['action_permissions'];
     $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : $existing['mfa_required'];
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
@@ -1347,7 +1431,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     $location = $locations[0] ?? $location;
     $pdo->prepare(
         'UPDATE users SET username = ?, role = ?, assigned_location = ?, assigned_locations = ?, access_all_locations = ?, active = ?, report_permissions = ?, action_permissions = ?, mfa_required = ? WHERE id = ?'
-    )->execute([$username, $role, $location, json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations, $active, json_encode($reportPermissions, JSON_UNESCAPED_UNICODE), json_encode($actionPermissions, JSON_UNESCAPED_UNICODE), $mfaRequired, $userId]);
+    )->execute([$username, $role, $location, json_encode($locations, JSON_UNESCAPED_UNICODE), $allLocations, $active, $reportPermissionsValue, $actionPermissionsValue, $mfaRequired, $userId]);
     audit($pdo, (int) $admin['id'], 'user_updated', 'user_id=' . $userId);
     json_response(['ok' => true]);
 }

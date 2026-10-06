@@ -1,8 +1,16 @@
 Options -Indexes
 RewriteEngine On
 
-<FilesMatch "^(config\.local\.php|config\.example\.php|bootstrap\.php|assistant\.php|pnl_sync\.php|README\.md|.*\.(?:zip|tar|tar\.gz|tgz|bak|sql))$">
+# Por defecto nada de esta carpeta se sirve por web: configuración, módulos
+# internos, documentación, paquetes, volcados ni certificados.
+<FilesMatch ".*">
   Require all denied
+</FilesMatch>
+
+# Excepciones explícitas: la API y el disparador de respaldo (que además exige
+# la clave X-Backup-Key y responde 404 sin ella).
+<FilesMatch "^(index|backup)\.php$">
+  Require all granted
 </FilesMatch>
 
 RewriteCond %{REQUEST_FILENAME} !-f

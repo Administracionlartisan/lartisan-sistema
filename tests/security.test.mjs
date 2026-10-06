@@ -21,9 +21,28 @@ test("financial source identifiers are configuration-only", () => {
 
 test("operational state is authorized and filtered on the server", () => {
   assert.match(api, /authorize_operational_snapshot\(\$user,\s*\$previousState,\s*\$state\)/);
-  assert.match(api, /operational_snapshot_for_user\(\$user,\s*\$state\)/);
+  // El filtro se aplica por local: cada usuario recibe solo los límites propios.
+  assert.match(api, /operational_snapshot_for_user\(\$user,\s*\$state,\s*\(string\) \$row\['site'\]\)/);
   assert.doesNotMatch(api, /\$body\['eventType'\]/);
   assert.match(api, /'operacion_actualizada'/);
+});
+
+test("server authorization never depends on personal usernames", () => {
+  const server = ["donweb-api/bootstrap.php", "donweb-api/index.php", "donweb-api/mrp_sync.php"].map(read).join("\n");
+  assert.doesNotMatch(server, /yamila|valentina|jhaiber|betzi|betzy/i);
+  assert.match(server, /user_can_action\(\$user, 'stockMrp'\)/);
+  assert.match(server, /'comprasProduccion', user_action_permissions\(\$user\)/);
+});
+
+test("central sees only orders and adjustments of the sites it does not operate", () => {
+  const bootstrap = read("donweb-api/bootstrap.php");
+  const index = read("donweb-api/index.php");
+  const view = bootstrap.slice(bootstrap.indexOf("function central_site_view"), bootstrap.indexOf("function authorize_central_changes"));
+  assert.match(view, /'stockRequests' =>/);
+  assert.match(view, /'stockAdjustments' =>/);
+  assert.doesNotMatch(view, /'sales'|'cash|'stock' =>|'payments'/);
+  assert.match(index, /\$centralOnly \? central_site_view\(\$state\)/);
+  assert.match(index, /authorize_central_changes\(\$user, \$previousState/);
 });
 
 test("public user responses never include password material", () => {

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Bloquea el push si la verificación completa falla. Ver AGENTS.md.
+# Para activarlo en un clon nuevo: git config core.hooksPath .githooks
+echo "Verificando antes de subir (npm run check)..."
+npm run check --silent
+status=$?
+if [ $status -ne 0 ]; then
+  echo "Push cancelado: hay verificaciones que fallan. Corregí el cambio (no las pruebas)."
+fi
+exit $status

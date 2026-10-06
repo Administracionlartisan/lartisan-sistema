@@ -1,5 +1,10 @@
 # Catálogo y precios
 
+> **Actualización (auditoría, octubre 2026):** la interfaz usa el catálogo de la
+> API PHP (`/sistema-api/catalog`, tabla MySQL `catalog_documents`), que entra en
+> el respaldo de la base. La ruta `/api/catalog` sobre D1 descripta abajo sigue
+> en el proyecto pero la interfaz no la utiliza.
+
 - Fuente compartida: `GET /api/catalog`, persistida en D1, tabla `catalog_revisions`.
 - Identidad: cookie HTTP-only de DonWeb, validada en su `auth/me`. GET requiere sesión; PUT exige Administración y mismo origen. No hay contraseña ni bypass en el cliente.
 - La migración Drizzle solo crea una tabla nueva. No cambia tablas operativas, cantidades de stock ni IDs.

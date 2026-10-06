@@ -44,16 +44,20 @@ export function useCatalog(userId?: string) {
   useEffect(() => {
     generation.current += 1;
     current.current = seed;
-    setDocument(seed);
-    setReady(false);
-    setError("");
-    if (!userId) return;
-    void reload();
+    // El reinicio de estado se difiere un instante (mismo patrón que la carga
+    // operativa); el catálogo es central y no cambia según el usuario.
+    const reset = window.setTimeout(() => {
+      setDocument(seed);
+      setReady(false);
+      setError("");
+      if (userId) void reload();
+    }, 0);
+    if (!userId) return () => window.clearTimeout(reset);
     const refresh = () => { if (window.document.visibilityState === "visible") void reload(); };
     const interval = window.setInterval(refresh, 30000);
     window.addEventListener("focus", refresh);
     window.addEventListener("online", refresh);
-    return () => { generation.current += 1; window.clearInterval(interval); window.removeEventListener("focus", refresh); window.removeEventListener("online", refresh); };
+    return () => { generation.current += 1; window.clearTimeout(reset); window.clearInterval(interval); window.removeEventListener("focus", refresh); window.removeEventListener("online", refresh); };
   }, [userId, reload]);
   const save = async (products: Product[], priceChanges = current.current.priceChanges, expectedRevision = current.current.revision) => {
     if (saving.current) throw new Error("Ya hay un guardado en curso.");

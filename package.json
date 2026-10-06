@@ -8,16 +8,18 @@
   "scripts": {
     "test:catalog": "node --test tests/catalog.test.mjs tests/catalog-runtime.test.mjs",
     "test:help": "node --experimental-strip-types --test tests/assistant-help.test.mjs tests/report-guide.test.mjs",
-    "test:security": "node --test tests/security.test.mjs tests/reliability-history.test.mjs",
+    "test:security": "node --experimental-strip-types --test tests/security.test.mjs tests/reliability-history.test.mjs tests/operational-outbox.test.mjs",
     "test:structure": "node --test tests/module-structure.test.mjs",
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "test:regresion": "node --test tests/regression-guards.test.mjs",
+    "check": "node scripts/check.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
-    "next": "16.3.4",
+    "next": "16.3.8",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -33,7 +35,7 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "^0.31.11",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.3.4",
+    "eslint-config-next": "16.3.8",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",

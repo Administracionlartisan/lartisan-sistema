@@ -207,12 +207,9 @@ function require_mrp_user(PDO $pdo): array
 
 function mrp_can_edit_recipes(array $user): bool
 {
-    // La autorización vive en el servidor; no depende de botones ocultos en la web.
-    // Jhaiber administra el recetario operativo y Gerencia/Administración conserva
-    // facultad completa para corregirlo o crear recetas cuando sea necesario.
-    return ($user['role'] ?? '') === 'administracion'
-        || mrp_lower((string) ($user['username'] ?? '')) === 'jhaiber.brazon'
-        || user_can_action($user, 'editarRecetas');
+    // La autorización vive en el servidor; no depende de botones ocultos en la web
+    // ni de nombres de usuario: Administración asigna «Editar recetas y costos».
+    return ($user['role'] ?? '') === 'administracion' || user_can_action($user, 'editarRecetas');
 }
 
 function mrp_can_register_production_purchase(array $user): bool
@@ -222,8 +219,8 @@ function mrp_can_register_production_purchase(array $user): bool
 
 function mrp_can_count_stock(array $user): bool
 {
-    $username = mrp_lower((string) ($user['username'] ?? ''));
-    return ($user['role'] ?? '') === 'administracion' || str_contains($username, 'betzi') || str_contains($username, 'betzy');
+    // Antes dependía de una parte del nombre de usuario fija en el código.
+    return ($user['role'] ?? '') === 'administracion' || user_can_action($user, 'stockMrp');
 }
 
 function mrp_apply_actual_stock(PDO $pdo, array $snapshot): array

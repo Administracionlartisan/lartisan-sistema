@@ -75,7 +75,7 @@ export type SavedOrder = {
 
 export type CashAdjustment = { id: string; site: string; kind: "Ingreso de caja" | "Ajuste de caja" | "Retiro de caja"; amount: number; detail: string; at: string; atISO?: string; createdBy: string; impact?: "Ingreso" | "Egreso" };
 export type CashLedgerEntry = { id: string; site: string; shiftId?: string; kind: string; direction: "Ingreso" | "Egreso" | "Informativo"; amount: number; cashImpact: number; paymentMethod?: string; reference?: string; detail: string; at: string; atISO?: string; createdBy: string };
-export type CashShift = { id: string; site: string; openedAt: string; openedAtISO?: string; openedBy: string; initialFund: number; closedAt?: string; closedAtISO?: string; closedBy?: string; expectedCash?: number; countedCash?: number; differenceAmount?: number; envelopeAmount?: number };
+export type CashShift = { id: string; site: string; openedAt: string; openedAtISO?: string; openedBy: string; initialFund: number; closedAt?: string; closedAtISO?: string; closedBy?: string; expectedCash?: number; countedCash?: number; differenceAmount?: number; envelopeAmount?: number; differenceReason?: string };
 export type OperationalLimits = { maxDiscount: number; maxExpense: number; maxCashDifference: number };
 export type PasswordResetRequest = { id: string; userId: string; username: string; site?: string; requestedAt: string; status: "Pendiente" | "Restablecida" };
 
@@ -109,7 +109,7 @@ export type StockRequest = {
   lines: { productId: number; quantity: number; preparedQuantity?: number; missingReason?: string }[];
 };
 
-export type Expense = { id: string; site: string; category: string; amount: number; detail: string; receiptName: string; createdAt: string; createdBy: string };
+export type Expense = { id: string; site: string; category: string; amount: number; detail: string; receiptName: string; createdAt: string; createdBy: string; paidWithCash?: boolean };
 export type ExpenseSyncItem = { date: string; supplier: string; category: string; document: string; total: number; amountDue: number; paid: boolean; paymentMethod: string; status: string; responsible: string };
 export type ExpenseSyncGroup = { label: string; total: number; outstanding: number; count: number };
 export type ExpenseSyncSummary = { totalExpenses: number; totalPaid: number; totalPayable: number; openCount: number; byCategory: ExpenseSyncGroup[]; bySupplier: ExpenseSyncGroup[]; openItems: ExpenseSyncItem[] };
@@ -132,7 +132,8 @@ export type OperationalSnapshot = {
   savedOrders?: SavedOrder[];
   cashAdjustments?: CashAdjustment[];
   cashLedger?: CashLedgerEntry[];
-  activeShift?: CashShift;
+  // null (no undefined) al cerrar: JSON omite undefined y el servidor conservaría el turno.
+  activeShift?: CashShift | null;
   shiftLog?: CashShift[];
   envelopeRecords?: EnvelopeRecord[];
   stockMovements?: StockMovement[];

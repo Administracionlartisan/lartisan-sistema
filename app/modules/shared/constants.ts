@@ -1,6 +1,10 @@
 import type { CashFields, ManagedUser, Role } from "./types";
 
-export const API_BASE = "https://www.lartisantaller.com/sistema-api";
+// Producción usa la API de DonWeb. Un entorno de pruebas puede apuntar a otra
+// API definiendo VITE_LARTISAN_API_BASE al compilar o levantar el servidor.
+export const API_BASE =
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_LARTISAN_API_BASE ||
+  "https://www.lartisantaller.com/sistema-api";
 
 export const EMPTY_CASH_FIELDS: CashFields = {
   fund: 0,
@@ -25,6 +29,7 @@ export const ACTION_PERMISSIONS = [
   { id: "mrp", label: "Operar compras y MRP" },
   { id: "editarRecetas", label: "Editar recetas y costos" },
   { id: "comprasProduccion", label: "Cargar compras de producción" },
+  { id: "stockMrp", label: "Contar stock de insumos (MRP)" },
 ];
 
 export const defaultActionPermissions = (role: Role) =>
