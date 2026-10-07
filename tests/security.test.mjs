@@ -50,3 +50,14 @@ test("public user responses never include password material", () => {
   const publicUser = bootstrap.slice(bootstrap.indexOf("function public_user"), bootstrap.indexOf("function ensure_user_locations_schema"));
   assert.doesNotMatch(publicUser, /password_hash|passwordHash|temporaryPassword/);
 });
+
+test("sessions expire both by total duration and by inactivity", () => {
+  const bootstrap = read("donweb-api/bootstrap.php");
+  const config = read("donweb-api/config.example.php");
+  const page = read("app/page.tsx");
+  assert.match(bootstrap, /last_seen_at > DATE_SUB\(NOW\(\), INTERVAL \$idleMinutes MINUTE\)/);
+  assert.match(bootstrap, /session_idle_minutes.*\?\? 30/);
+  assert.match(bootstrap, /INSERT INTO user_sessions \(id, user_id, expires_at, last_seen_at\).*NOW\(\)/);
+  assert.match(config, /'session_idle_minutes' => 30/);
+  assert.match(page, /La sesión se cerró por 30 minutos sin actividad/);
+});

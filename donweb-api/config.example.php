@@ -12,6 +12,9 @@ return [
         'https://admin.lartisantaller.com',
     ],
     'cookie_domain' => '.lartisantaller.com',
+    // Cierra la sesión en equipos compartidos tras este tiempo sin actividad.
+    // Entre 5 y 240 minutos; la expiración absoluta se mantiene en session_hours.
+    'session_idle_minutes' => 30,
     'session_hours' => 12,
     // Zona horaria de PHP y de la conexión MySQL (fechas de ventas, cajas,
     // vencimiento de sesiones y de códigos de recuperación).

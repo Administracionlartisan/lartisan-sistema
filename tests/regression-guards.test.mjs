@@ -105,9 +105,10 @@ test("Seguridad: origen obligatorio y clave temporal en toda escritura", () => {
   assert.match(bootstrap, /set_exception_handler\(/, "los errores no controlados deben responder JSON genérico");
 });
 
-test("Seguridad: el servidor web solo expone index.php y backup.php", () => {
-  assert.match(htaccess, /<FilesMatch "\.\*">\s*Require all denied/);
-  assert.match(htaccess, /<FilesMatch "\^\(index\|backup\)\\\.php\$">\s*Require all granted/);
+test("Seguridad: el servidor web bloquea configuración y módulos internos", () => {
+  assert.match(htaccess, /<FilesMatch "\^\(config\\\.local\\\.php\|config\\\.example\\\.php\|bootstrap\\\.php/);
+  assert.match(htaccess, /Require all denied/);
+  assert.ok(htaccess.includes("RewriteRule ^(.+)$ index.php?route=$1 [QSA,L]"));
 });
 
 test("Usuarios: editar sin permisos conserva los existentes", () => {

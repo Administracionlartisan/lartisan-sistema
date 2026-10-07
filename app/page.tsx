@@ -1776,6 +1776,34 @@ export default function Home() {
     setConfirmNewPassword("");
     setMessage("");
   };
+  useEffect(() => {
+    if (!user) return;
+    const inactivityMs = 30 * 60 * 1000;
+    let timeout = 0;
+    const closeForInactivity = () => {
+      void fetch(`${API_BASE}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      }).catch(() => undefined);
+      setUser(null);
+      setPassword("");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setMessage("La sesión se cerró por 30 minutos sin actividad. Volvé a ingresar para continuar.");
+    };
+    const resetInactivityTimer = () => {
+      window.clearTimeout(timeout);
+      timeout = window.setTimeout(closeForInactivity, inactivityMs);
+    };
+    const activityEvents: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "scroll"];
+    activityEvents.forEach((event) => window.addEventListener(event, resetInactivityTimer, { passive: true }));
+    resetInactivityTimer();
+    return () => {
+      window.clearTimeout(timeout);
+      activityEvents.forEach((event) => window.removeEventListener(event, resetInactivityTimer));
+    };
+  }, [user]);
   const changeOwnPassword = async () => {
     if (newPassword !== confirmNewPassword) {
       setMessage("Las nuevas contraseñas no coinciden.");

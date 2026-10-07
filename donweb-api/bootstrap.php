@@ -223,15 +223,23 @@ function assigned_locations(array $user): array
 
 function current_user(PDO $pdo): ?array
 {
+    global $config;
+
     $token = $_COOKIE[SESSION_COOKIE] ?? '';
     if (!is_string($token) || strlen($token) < 32) {
         return null;
     }
     $sessionId = hash('sha256', $token);
+    // La expiración absoluta evita sesiones olvidadas durante días. El límite de
+    // inactividad protege además los equipos compartidos de los locales.
+    $idleMinutes = max(5, min(240, (int) ($config['session_idle_minutes'] ?? 30)));
     $stmt = $pdo->prepare(
         "SELECT u.* FROM user_sessions s
          JOIN users u ON u.id = s.user_id
-         WHERE s.id = ? AND s.expires_at > NOW() AND u.active = 1"
+         WHERE s.id = ?
+           AND s.expires_at > NOW()
+           AND s.last_seen_at > DATE_SUB(NOW(), INTERVAL $idleMinutes MINUTE)
+           AND u.active = 1"
     );
     $stmt->execute([$sessionId]);
     $user = $stmt->fetch();
@@ -272,7 +280,7 @@ function create_session(PDO $pdo, int $userId, array $config): void
     $sessionId = hash('sha256', $token);
     $hours = max(1, min(48, (int) ($config['session_hours'] ?? 12)));
     $expiresAt = (new DateTimeImmutable())->modify('+' . $hours . ' hours');
-    $stmt = $pdo->prepare('INSERT INTO user_sessions (id, user_id, expires_at) VALUES (?, ?, ?)');
+    $stmt = $pdo->prepare('INSERT INTO user_sessions (id, user_id, expires_at, last_seen_at) VALUES (?, ?, ?, NOW())');
     $stmt->execute([$sessionId, $userId, $expiresAt->format('Y-m-d H:i:s')]);
     set_session_cookie($token, $config, $expiresAt->getTimestamp());
 }
