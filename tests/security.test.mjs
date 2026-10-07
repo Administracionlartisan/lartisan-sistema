@@ -70,3 +70,20 @@ test("order reception has a manual fallback when the scanner is unavailable", ()
   assert.match(page, /Math\.min\(expected, current \+ change\)/);
   assert.match(help, /Si la lectora falla/);
 });
+
+test("administration can operate every site and all operational modules", () => {
+  const page = read("app/page.tsx");
+  assert.match(page, /const operationalTabs = \[/);
+  assert.match(page, /user\.role === "administracion"\s*\? \[\s*\.\.\.operationalTabs/s);
+  assert.match(page, /user\.role !== "compras" && \(/);
+  assert.match(page, /user\.role === "administracion" \|\| user\.accessAllLocations \? SITES/);
+  assert.match(page, /user\?\.role === "administracion" \|\|\s*\(user\?\.role === "supervisora"/s);
+});
+
+test("administration can register a traceable bulk stock entry", () => {
+  const page = read("app/page.tsx");
+  assert.match(page, /const registerBulkStockMovement = \(\) =>/);
+  assert.match(page, /products\.map\(\(product\) => \(\{/);
+  assert.match(page, /Ingreso masivo de stock/);
+  assert.match(page, /Registro masivo registrado|Ingreso masivo registrado/);
+});
