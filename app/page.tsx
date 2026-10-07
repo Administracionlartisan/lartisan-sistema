@@ -246,8 +246,6 @@ export default function Home() {
   const [movementQuantity, setMovementQuantity] = useState(0);
   const [movementRemito, setMovementRemito] = useState("");
   const [movementDetail, setMovementDetail] = useState("");
-  const [bulkStockQuantity, setBulkStockQuantity] = useState(0);
-  const [bulkStockDetail, setBulkStockDetail] = useState("");
   const [requestQuantities, setRequestQuantities] = useState<
     Record<number, number>
   >({});
@@ -1476,16 +1474,13 @@ export default function Home() {
   const canApproveStockAdjustments =
     (user?.role === "administracion" || user?.role === "supervisora") && can("stock");
   const canManageSchedules =
-    user?.role === "administracion" ||
-    (user?.role === "supervisora" && user.reportPermissions.includes("Personal"));
+    user?.role === "supervisora" && user.reportPermissions.includes("Personal");
   const canViewSupervisorReports =
-    user?.role === "administracion" ||
-    (user?.role === "supervisora" && user.reportPermissions.length > 0);
+    user?.role === "supervisora" && user.reportPermissions.length > 0;
   const managesCentralOrders =
     can("pedidos") &&
     site === "Villa Mitre" &&
-    (user?.role === "administracion" ||
-      user?.role === "supervisora" ||
+    (user?.role === "supervisora" ||
       user?.accessAllLocations ||
       user?.location === "Villa Mitre" ||
       user?.locations?.includes("Villa Mitre"));
@@ -2713,40 +2708,6 @@ export default function Home() {
     );
     setMessage("Movimiento de stock registrado.");
   };
-  const registerBulkStockMovement = () => {
-    if (!user || user.role !== "administracion") return;
-    if (bulkStockQuantity <= 0 || !bulkStockDetail.trim()) {
-      return setMessage("Completá cantidad y detalle del ingreso masivo.");
-    }
-    const now = new Date();
-    const movements: StockMovement[] = products.map((product) => ({
-      id: crypto.randomUUID(),
-      site,
-      productId: product.id,
-      kind: "Ingreso manual",
-      quantity: bulkStockQuantity,
-      remito: "",
-      detail: bulkStockDetail.trim(),
-      at: now.toLocaleString("es-AR"),
-      atISO: now.toISOString(),
-      createdBy: user.name,
-    }));
-    setStock((items) => ({
-      ...items,
-      [site]: Object.fromEntries(products.map((product) => [
-        product.id,
-        safeStockQuantity(items[site]?.[product.id]) + bulkStockQuantity,
-      ])),
-    }));
-    setStockMovements((items) => [...movements, ...items]);
-    setBulkStockQuantity(0);
-    setBulkStockDetail("");
-    recordAudit(
-      "Ingreso masivo de stock",
-      `${site} · ${products.length} productos · +${bulkStockQuantity} unidades cada uno · ${bulkStockDetail.trim()}`,
-    );
-    setMessage(`Ingreso masivo registrado: ${products.length} productos con +${bulkStockQuantity} unidades cada uno.`);
-  };
   const withdrawEnvelopes = () => {
     if (oscarWithdrawal <= 0)
       return setMessage("Ingresá el importe que retira Oscar.");
@@ -3382,24 +3343,11 @@ export default function Home() {
   if (authLoading && !user) return <SecureLoading />;
   if (!user) return <AccessScreen {...{ portal, login, setLogin, password, setPassword, showPassword, setShowPassword, authLoading, recoverySending, recoveryStage, recoveryCode, setRecoveryCode, recoveryPassword, setRecoveryPassword, recoveryPasswordConfirm, setRecoveryPasswordConfirm, setRecoveryStage, message, setMessage, enter, requestPasswordReset, confirmEmailRecovery }} />;
   if (user.mustChangePassword) return <ForcePasswordChangeScreen {...{ currentPassword, setCurrentPassword, newPassword, setNewPassword, confirmNewPassword, setConfirmNewPassword, message, changeOwnPassword, logout }} />;
-  const operationalTabs = [
-    "Ventas",
-    "Tareas",
-    "Caja",
-    "Stock",
-    "Pedido",
-    "Devoluciones",
-    "Egresos",
-    "Incidencias",
-    "Fichaje",
-    "Clientes",
-    "Guía",
-  ];
   const baseTabs =
     user.role === "administracion"
         ? [
-          ...operationalTabs,
           "Administración",
+          "Tareas",
           "Usuarios",
           "Catálogo y precios",
           "Límites",
@@ -3465,7 +3413,7 @@ export default function Home() {
       </header>
       <div className="grid lg:grid-cols-[230px_1fr]">
         <aside id="menu-principal" className={`${navOpen ? "block" : "hidden"} border-b bg-[#fffdf8] p-4 lg:block lg:min-h-[calc(100vh-65px)] lg:border-r`}>
-          {user.role !== "compras" && (
+          {!(["administracion", "compras"] as Role[]).includes(user.role) && (
             <>
               <label className="text-xs font-bold text-slate-500">
                 SUCURSAL ACTIVA
@@ -3483,7 +3431,7 @@ export default function Home() {
                   }}
                   className="mt-2 w-full rounded border p-2"
                 >
-                  {(user.role === "administracion" || user.accessAllLocations ? SITES : user.locations?.length ? user.locations : SITES).map((s) => (
+                  {(user.accessAllLocations ? SITES : user.locations?.length ? user.locations : SITES).map((s) => (
                     <option key={s}>{s}</option>
                   ))}
                 </select>
@@ -4583,41 +4531,6 @@ export default function Home() {
                       className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white"
                     >
                       Enviar a aprobación
-                    </button>
-                  </div>
-                </div>
-              )}
-              {user.role === "administracion" && (
-                <div className="mt-5 rounded-2xl border border-[#183a67] bg-[#eef2f6] p-5">
-                  <b>Ingreso masivo de stock</b>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Agrega la misma cantidad a todos los productos del local activo y registra un movimiento trazable por cada uno.
-                  </p>
-                  <div className="mt-4 grid gap-3 md:grid-cols-[.7fr_1.8fr_auto] md:items-end">
-                    <label className="text-sm font-bold">
-                      Unidades por producto
-                      <input
-                        type="number"
-                        min="1"
-                        value={bulkStockQuantity || ""}
-                        onChange={(event) => setBulkStockQuantity(Number(event.target.value))}
-                        className="mt-1 block w-full rounded border p-2 font-normal"
-                      />
-                    </label>
-                    <label className="text-sm font-bold">
-                      Detalle obligatorio
-                      <input
-                        value={bulkStockDetail}
-                        onChange={(event) => setBulkStockDetail(event.target.value)}
-                        placeholder="Ej.: stock de prueba para validar códigos de barras"
-                        className="mt-1 block w-full rounded border p-2 font-normal"
-                      />
-                    </label>
-                    <button
-                      onClick={registerBulkStockMovement}
-                      className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white"
-                    >
-                      Registrar en todos
                     </button>
                   </div>
                 </div>
