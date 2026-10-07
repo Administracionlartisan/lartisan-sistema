@@ -1025,20 +1025,31 @@ if ($method === 'GET' && $route === 'operations/states') {
     json_response(['ok' => true, 'states' => $states]);
 }
 
-if ($method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $matches)) {
+// Algunos alojamientos compartidos bloquean por reglas propias los PUT y las
+// rutas que contienen "operations" antes de que PHP pueda recibirlos. El
+// cliente usa POST /sync para no dejar ventas, recepciones ni stock atrapados
+// en la cola local. Se mantiene la ruta PUT anterior para compatibilidad.
+$isLegacyOperationWrite = $method === 'PUT' && preg_match('#^operations/states/([^/]+)$#', $route, $matches);
+$isSyncOperationWrite = $method === 'POST' && $route === 'sync';
+if ($isLegacyOperationWrite || $isSyncOperationWrite) {
     $user = require_user($pdo);
     if (!empty($user['must_change_password'])) {
         json_response(['ok' => false, 'error' => 'Primero debés cambiar la contraseña temporal'], 403);
     }
     ensure_operations_schema($pdo);
-    $site = rawurldecode($matches[1]);
+    $body = request_body();
+    $site = $isLegacyOperationWrite
+        ? rawurldecode($matches[1])
+        : trim((string) ($body['site'] ?? ''));
+    if (!in_array($site, operational_sites(), true)) {
+        json_response(['ok' => false, 'error' => 'Local operativo inválido'], 422);
+    }
     $centralOnly = !user_can_access_site($user, $site)
         && in_array($site, operational_sites(), true)
         && user_manages_central_orders($user);
     if (!user_can_access_site($user, $site) && !$centralOnly) {
         json_response(['ok' => false, 'error' => 'No tenés acceso a este local'], 403);
     }
-    $body = request_body();
     $baseRevision = max(0, (int) ($body['baseRevision'] ?? 0));
     $requestId = trim((string) ($body['requestId'] ?? ''));
     $baseState = $body['baseState'] ?? null;

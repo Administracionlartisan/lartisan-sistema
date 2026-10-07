@@ -997,8 +997,11 @@ export default function Home() {
     const body = JSON.stringify(write);
     let response: Response;
     try {
-      response = await fetch(`${API_BASE}/operations/states/${encodeURIComponent(write.site)}`, {
-        method: "PUT",
+      // POST /sync evita las reglas de algunos hosting compartidos que bloquean
+      // PUT o la ruta /operations antes de que la operación llegue a la API.
+      // El requestId mantiene el envío idempotente si el navegador reintenta.
+      response = await fetch(`${API_BASE}/sync`, {
+        method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         // Chrome, Edge y otros navegadores rechazan sin enviarlo un keepalive de
