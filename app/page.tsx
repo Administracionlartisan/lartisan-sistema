@@ -1302,6 +1302,23 @@ export default function Home() {
     setReceivingBarcodeInput("");
     requestAnimationFrame(() => receptionScannerRef.current?.focus());
   };
+  const startManualReception = (request: StockRequest) => {
+    setReceivingRequestId(request.id);
+    setReceivedScanCounts({});
+    setReceivingBarcodeInput("");
+    setReceivingScanNotice(`Pedido ${request.id.slice(0, 8)} listo para recepción manual. Contá cada producto y cargá las unidades entregadas.`);
+  };
+  const adjustManualReceptionCount = (request: StockRequest, productId: number, change: number) => {
+    const line = request.lines.find((item) => item.productId === productId);
+    if (!line) return;
+    const expected = line.preparedQuantity ?? line.quantity;
+    const current = receivedScanCounts[productId] || 0;
+    const next = Math.max(0, Math.min(expected, current + change));
+    if (next === current) return;
+    const product = products.find((item) => item.id === productId);
+    setReceivedScanCounts((items) => ({ ...items, [productId]: next }));
+    setReceivingScanNotice(`Recepción manual: ${product?.name || "producto"} · ${next} de ${expected} unidad${expected === 1 ? "" : "es"}.`);
+  };
   const scanReceivedProduct = (rawBarcode: string, requestOverride?: StockRequest, receivedOverride?: Record<number, number>) => {
     const scanned = rawBarcode.trim().toUpperCase();
     const product = productFromScannedCode(scanned);
@@ -4850,9 +4867,12 @@ export default function Home() {
                                 <button onClick={() => startScannedReception(request)} className="mt-2 rounded bg-[#183a67] px-3 py-2 font-bold text-white">
                                   Recibir con lectora
                                 </button>
+                                <button onClick={() => startManualReception(request)} className="ml-2 mt-2 rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67]">
+                                  Recepción manual
+                                </button>
                                 {receivingRequestId === request.id && (
                                   <div className="mt-3 rounded border border-[#b8c8dd] bg-white p-3">
-                                    <b>Validación por escaneo</b>
+                                    <b>Validación de recepción</b>
                                     <input
                                       ref={receptionScannerRef}
                                       value={receivingBarcodeInput}
@@ -4867,13 +4887,13 @@ export default function Home() {
                                       className="sr-only"
                                       autoComplete="off"
                                     />
-                                    <p className="mt-1 text-xs text-slate-600">Escaneá cada unidad entregada. El stock se actualiza sólo cuando la lista coincide con el despacho.</p>
+                                    <p className="mt-1 text-xs text-slate-600">Escaneá cada unidad entregada. Si la lectora falla, usá los botones − y + para registrar el conteo manual. El stock se actualiza sólo cuando la lista coincide con el despacho.</p>
                                     <div className="mt-2 space-y-1 text-xs">
                                       {request.lines.map((line) => {
                                         const product = products.find((item) => item.id === line.productId);
                                         const expected = line.preparedQuantity ?? line.quantity;
                                         const received = receivedScanCounts[line.productId] || 0;
-                                        return <p key={line.productId}><b>{product?.name || "Producto"}</b>: {received}/{expected} {received === expected ? "✓" : "pendiente"}</p>;
+                                        return <div key={line.productId} className="flex items-center justify-between gap-2"><p><b>{product?.name || "Producto"}</b>: {received}/{expected} {received === expected ? "✓" : "pendiente"}</p><span className="flex gap-1"><button type="button" aria-label={`Restar una unidad de ${product?.name || "producto"}`} onClick={() => adjustManualReceptionCount(request, line.productId, -1)} disabled={received === 0} className="rounded border px-2 py-1 font-bold disabled:opacity-40">−</button><button type="button" aria-label={`Sumar una unidad de ${product?.name || "producto"}`} onClick={() => adjustManualReceptionCount(request, line.productId, 1)} disabled={received >= expected} className="rounded border px-2 py-1 font-bold disabled:opacity-40">+</button></span></div>;
                                       })}
                                     </div>
                                     {receivingScanNotice && <p className="mt-2 text-xs font-semibold text-[#183a67]" role="status">{receivingScanNotice}</p>}

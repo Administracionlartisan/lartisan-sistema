@@ -61,3 +61,12 @@ test("sessions expire both by total duration and by inactivity", () => {
   assert.match(config, /'session_idle_minutes' => 30/);
   assert.match(page, /La sesión se cerró por 30 minutos sin actividad/);
 });
+
+test("order reception has a manual fallback when the scanner is unavailable", () => {
+  const page = read("app/page.tsx");
+  const help = read("app/data/assistantKnowledge.ts");
+  assert.match(page, /Recepción manual/);
+  assert.match(page, /adjustManualReceptionCount/);
+  assert.match(page, /Math\.min\(expected, current \+ change\)/);
+  assert.match(help, /Si la lectora falla/);
+});
