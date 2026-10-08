@@ -1700,6 +1700,87 @@ export default function Home() {
     }, new Map<number, { id: number; name: string; category: string; units: number; gross: number }>()),
     ([, row]) => row,
   ).sort((a, b) => b.units - a.units || b.gross - a.gross);
+  const profitabilityRows = Array.from(
+    reportSales.reduce((summary, sale) => {
+      const saleGross = sale.items.reduce((total, product) => total + product.price, 0);
+      sale.items.forEach((product) => {
+        const current = summary.get(product.id) || {
+          id: product.id,
+          name: product.name,
+          category: products.find((catalogProduct) => catalogProduct.id === product.id)?.category || product.category,
+          units: 0,
+          gross: 0,
+          discount: 0,
+          net: 0,
+        };
+        const allocatedDiscount = saleGross > 0 ? (sale.discount * product.price) / saleGross : 0;
+        current.units += 1;
+        current.gross += product.price;
+        current.discount += allocatedDiscount;
+        current.net += Math.max(0, product.price - allocatedDiscount);
+        summary.set(product.id, current);
+      });
+      return summary;
+    }, new Map<number, { id: number; name: string; category: string; units: number; gross: number; discount: number; net: number }>()),
+    ([, row]) => row,
+  ).sort((a, b) => b.net - a.net || b.units - a.units);
+  const profitabilityByCategory = Array.from(
+    profitabilityRows.reduce((summary, row) => {
+      const current = summary.get(row.category) || { category: row.category, units: 0, gross: 0, discount: 0, net: 0 };
+      current.units += row.units;
+      current.gross += row.gross;
+      current.discount += row.discount;
+      current.net += row.net;
+      summary.set(row.category, current);
+      return summary;
+    }, new Map<string, { category: string; units: number; gross: number; discount: number; net: number }>()),
+    ([, row]) => row,
+  ).sort((a, b) => b.net - a.net);
+  const stockReportRows = products.map((product) => {
+    const sites = reportSites.map((local) => ({
+      site: local,
+      stock: safeStockQuantity(stock[local]?.[product.id]),
+      minimum: Math.max(0, Number(minimumStock[local]?.[product.id]) || 0),
+    }));
+    const lowest = sites.reduce((current, row) => row.stock < current.stock ? row : current, sites[0]);
+    return {
+      id: product.id,
+      name: product.name,
+      category: product.category,
+      stock: sites.reduce((total, row) => total + row.stock, 0),
+      minimum: sites.reduce((total, row) => total + row.minimum, 0),
+      lowestSite: lowest?.site || "—",
+      lowestStock: lowest?.stock || 0,
+      belowMinimum: sites.some((row) => row.stock <= row.minimum),
+    };
+  }).sort((a, b) => Number(b.belowMinimum) - Number(a.belowMinimum) || a.lowestStock - b.lowestStock || a.name.localeCompare(b.name));
+  const stockMovementsForReport = stockMovements
+    .filter((movement) => {
+      const day = movement.atISO?.slice(0, 10);
+      return Boolean(day && reportSites.includes(movement.site) && day >= reportFrom && day <= reportTo);
+    })
+    .sort((a, b) => (b.atISO || "").localeCompare(a.atISO || ""));
+  const pendingStockAdjustments = stockAdjustments.filter((adjustment) =>
+    adjustment.status === "Pendiente" && reportSites.includes(adjustment.site),
+  );
+  const promotionRows = reportSites.map((local) => {
+    const localSales = reportSales.filter((sale) => sale.site === local);
+    const discounted = localSales.filter((sale) => sale.discount > 0);
+    const invited = localSales.filter((sale) => sale.invitation || Object.values(sale.invitedQuantities || {}).some((quantity) => quantity > 0));
+    const invitationUnits = invited.reduce((total, sale) => total + Object.values(sale.invitedQuantities || {}).reduce((sum, quantity) => sum + quantity, 0), 0);
+    const gross = discounted.reduce((total, sale) => total + sale.gross, 0);
+    const discount = discounted.reduce((total, sale) => total + sale.discount, 0);
+    return { site: local, operations: localSales.filter((sale) => sale.discount > 0 || sale.invitation || Object.values(sale.invitedQuantities || {}).some((quantity) => quantity > 0)).length, discounted: discounted.length, invited: invited.length, invitationUnits, gross, discount, net: gross - discount };
+  });
+  const promotionTotals = promotionRows.reduce((total, row) => ({
+    operations: total.operations + row.operations,
+    discounted: total.discounted + row.discounted,
+    invited: total.invited + row.invited,
+    invitationUnits: total.invitationUnits + row.invitationUnits,
+    gross: total.gross + row.gross,
+    discount: total.discount + row.discount,
+    net: total.net + row.net,
+  }), { operations: 0, discounted: 0, invited: 0, invitationUnits: 0, gross: 0, discount: 0, net: 0 });
   const cashReportRows = reportSites.map((local) => {
     const active = activeShiftBySite[local];
     const lastClosed = shiftLog.find((shift) => shift.site === local && shift.closedAt);
@@ -2535,10 +2616,13 @@ export default function Home() {
     const reportRows: Record<string, Array<Array<string | number | null>>> = {
       DetalleVentas: [["Fecha", "Operación", "Local", "Cliente", "Comprobante", "Medio", "Bruto", "Descuento", "Neto", "Estado"], ...reportSales.map((sale) => [sale.createdAtISO, sale.id, sale.site, sale.customer, sale.invoiceType, sale.method, sale.gross, sale.discount, sale.net, sale.status])],
       Productos: [["Producto", "Categoría", "Unidades", "Venta bruta"], ...productPerformance.map((row) => [row.name, row.category, row.units, row.gross])],
+      Rentabilidad: [["Producto", "Categoría", "Unidades", "Venta bruta", "Descuento distribuido", "Venta neta", "Costo unitario", "Margen"], ...profitabilityRows.map((row) => [row.name, row.category, row.units, Math.round(row.gross), Math.round(row.discount), Math.round(row.net), "Sin costo cargado", "No calculable"])],
       Pagos: [["Medio de pago", "Importe"], ...paymentReportRows.map((row) => [row.method, row.amount])],
       VendidoCobrado: [["Local", "Vendido", "Cobrado", "Diferencia"], ...soldCollectedRows.map((row) => [row.site, row.sold, row.collected, row.difference])],
       Cajas: [["Local", "Apertura", "Abrió", "Fondo", "Cierre", "Cerró", "Esperado", "Contado", "Diferencia", "Sobre"], ...cashHistory.map((row) => [row.site, row.openedAt, row.openedBy, row.initialFund, row.closedAt || "", row.closedBy || "", row.expectedCash ?? "", row.countedCash ?? "", row.differenceAmount ?? "", row.envelopeAmount ?? ""])],
       Auditoria: [["Fecha", "Usuario", "Local", "Acción", "Detalle"], ...auditHistory.map((row) => [row.at, row.userName, row.site, row.action, row.detail])],
+      Stock: [["Producto", "Categoría", "Stock actual", "Mínimo total", "Local más bajo", "Stock más bajo", "Bajo mínimo"], ...stockReportRows.map((row) => [row.name, row.category, row.stock, row.minimum, row.lowestSite, row.lowestStock, row.belowMinimum ? "Sí" : "No"])],
+      Promociones: [["Local", "Operaciones con beneficio", "Con descuento", "Con invitación", "Unidades invitadas", "Venta bruta beneficiada", "Descuento", "Venta neta"], ...promotionRows.map((row) => [row.site, row.operations, row.discounted, row.invited, row.invitationUnits, row.gross, row.discount, row.net])],
     };
     downloadCsv(`Informe_${adminReport}_${reportFrom}_${reportTo}.csv`, [...heading, ...(reportRows[adminReport] || [
       ["Local", "Venta neta", "Tickets", "Ticket promedio", "Estado caja"],
@@ -7222,24 +7306,20 @@ export default function Home() {
                     </div>
                   )}
                   {adminReport === "Rentabilidad" && (
-                    <div className="mt-5 grid gap-4 md:grid-cols-3">
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Margen bruto</b>
-                        <p className="mt-2 text-sm">
-                          Venta neta menos costo del producto vendido.
-                        </p>
+                    <div className="mt-5 space-y-4">
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <div className="rounded bg-[#eef2f6] p-4"><b>Venta neta</b><p className="mt-2 text-2xl font-bold">{money.format(adminTotals.net)}</p><p className="text-sm">Ventas activas del período.</p></div>
+                        <div className="rounded bg-[#eef2f6] p-4"><b>Descuentos</b><p className="mt-2 text-2xl font-bold">{money.format(adminTotals.gross - adminTotals.net)}</p><p className="text-sm">Distribuidos proporcionalmente por producto.</p></div>
+                        <div className="rounded bg-[#fff5d8] p-4"><b>Margen no calculable</b><p className="mt-2 text-sm">No hay costos unitarios vigentes cargados. Este informe no inventa márgenes.</p></div>
                       </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Contribución</b>
-                        <p className="mt-2 text-sm">
-                          Productos y categorías que más aportan al resultado.
-                        </p>
+                      <div className="overflow-auto rounded border">
+                        <table className="w-full min-w-[780px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Producto</th><th className="p-3 text-left">Categoría</th><th className="p-3 text-right">Unidades</th><th className="p-3 text-right">Bruto</th><th className="p-3 text-right">Descuento</th><th className="p-3 text-right">Neto</th><th className="p-3 text-left">Margen</th></tr></thead>
+                          <tbody>{profitabilityRows.length ? profitabilityRows.map((row) => <tr key={row.id} className="border-t"><td className="p-3 font-bold">{row.name}</td><td className="p-3">{row.category}</td><td className="p-3 text-right">{row.units}</td><td className="p-3 text-right">{money.format(row.gross)}</td><td className="p-3 text-right">{money.format(row.discount)}</td><td className="p-3 text-right font-bold">{money.format(row.net)}</td><td className="p-3 text-amber-700">Sin costo cargado</td></tr>) : <tr><td colSpan={7} className="p-4 text-slate-500">No hay ventas activas en el período seleccionado.</td></tr>}</tbody>
+                        </table>
+                        <p className="border-t p-3 text-xs text-slate-500">La venta neta por producto asigna el descuento de cada operación en proporción a su precio. Para calcular margen, primero deben cargarse costos unitarios vigentes.</p>
                       </div>
-                      <div className="rounded bg-[#fff5d8] p-4">
-                        <b>Dato requerido</b>
-                        <p className="mt-2 text-sm">
-                          Falta cargar el costo vigente de cada producto.
-                        </p>
+                      <div className="overflow-auto rounded border">
+                        <table className="w-full min-w-[620px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-3 text-left">Categoría</th><th className="p-3 text-right">Unidades</th><th className="p-3 text-right">Venta bruta</th><th className="p-3 text-right">Descuento</th><th className="p-3 text-right">Venta neta</th></tr></thead><tbody>{profitabilityByCategory.map((row) => <tr key={row.category} className="border-t"><td className="p-3 font-bold">{row.category}</td><td className="p-3 text-right">{row.units}</td><td className="p-3 text-right">{money.format(row.gross)}</td><td className="p-3 text-right">{money.format(row.discount)}</td><td className="p-3 text-right font-bold">{money.format(row.net)}</td></tr>)}</tbody></table>
                       </div>
                     </div>
                   )}
@@ -7589,27 +7669,15 @@ export default function Home() {
                     </div>
                   )}
                   {adminReport === "Stock" && (
-                    <div className="mt-5 grid gap-4 md:grid-cols-3">
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Conteo físico</b>
-                        <p className="mt-2 text-sm">
-                          Comparativo entre stock teórico y real cargado por
-                          un perfil autorizado.
-                        </p>
+                    <div className="mt-5 space-y-4">
+                      <div className="grid gap-4 md:grid-cols-4">
+                        <div className="rounded bg-[#eef2f6] p-4"><b>Stock actual</b><p className="mt-2 text-2xl font-bold">{stockReportRows.reduce((total, row) => total + row.stock, 0)}</p><p className="text-sm">Unidades en los locales elegidos.</p></div>
+                        <div className="rounded bg-[#fff5d8] p-4"><b>Bajo mínimo</b><p className="mt-2 text-2xl font-bold">{stockReportRows.filter((row) => row.belowMinimum).length}</p><p className="text-sm">Productos con al menos un local a revisar.</p></div>
+                        <div className="rounded bg-[#eef2f6] p-4"><b>Movimientos del período</b><p className="mt-2 text-2xl font-bold">{stockMovementsForReport.length}</p><p className="text-sm">Sólo registros con fecha guardada.</p></div>
+                        <div className="rounded bg-[#fff1ec] p-4"><b>Ajustes pendientes</b><p className="mt-2 text-2xl font-bold">{pendingStockAdjustments.length}</p><p className="text-sm">Requieren aprobación operativa.</p></div>
                       </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Movimientos</b>
-                        <p className="mt-2 text-sm">
-                          Ingresos desde Central, ventas, ajustes y
-                          transferencias excepcionales.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#fff5d8] p-4">
-                        <b>Mínimos</b>
-                        <p className="mt-2 text-sm">
-                          Listado de productos a reponer por local.
-                        </p>
-                      </div>
+                      <div className="overflow-auto rounded border"><table className="w-full min-w-[820px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Producto</th><th className="p-3 text-left">Categoría</th><th className="p-3 text-right">Stock actual</th><th className="p-3 text-right">Mínimo total</th><th className="p-3 text-left">Local más bajo</th><th className="p-3 text-right">Stock más bajo</th><th className="p-3 text-center">Control</th></tr></thead><tbody>{stockReportRows.map((row) => <tr key={row.id} className="border-t"><td className="p-3 font-bold">{row.name}</td><td className="p-3">{row.category}</td><td className="p-3 text-right">{row.stock}</td><td className="p-3 text-right">{row.minimum}</td><td className="p-3">{row.lowestSite}</td><td className="p-3 text-right font-bold">{row.lowestStock}</td><td className={`p-3 text-center font-bold ${row.belowMinimum ? "text-red-700" : "text-green-700"}`}>{row.belowMinimum ? "Reponer" : "OK"}</td></tr>)}</tbody></table></div>
+                      <div className="overflow-auto rounded border"><div className="border-b bg-[#eef2f6] p-3"><b>Movimientos registrados en el período</b><p className="text-xs text-slate-600">Los movimientos anteriores que no guardaron fecha ISO no se incluyen en este filtro.</p></div><table className="w-full min-w-[820px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-3 text-left">Fecha</th><th className="p-3 text-left">Local</th><th className="p-3 text-left">Producto</th><th className="p-3 text-left">Movimiento</th><th className="p-3 text-right">Cantidad</th><th className="p-3 text-left">Detalle</th></tr></thead><tbody>{stockMovementsForReport.length ? stockMovementsForReport.slice(0, 50).map((movement) => <tr key={movement.id} className="border-t"><td className="p-3 whitespace-nowrap">{movement.at}</td><td className="p-3">{movement.site}</td><td className="p-3 font-bold">{products.find((product) => product.id === movement.productId)?.name || `Producto ${movement.productId}`}</td><td className="p-3">{movement.kind}</td><td className="p-3 text-right">{movement.quantity > 0 ? "+" : ""}{movement.quantity}</td><td className="p-3 text-slate-600">{movement.detail || movement.remito || "—"}</td></tr>) : <tr><td colSpan={6} className="p-4 text-slate-500">No hay movimientos fechados para el período y local seleccionados.</td></tr>}</tbody></table></div>
                     </div>
                   )}
                   {adminReport === "Reposicion" && (
@@ -7930,26 +7998,9 @@ export default function Home() {
                     </div>
                   )}
                   {adminReport === "Promociones" && (
-                    <div className="mt-5 grid gap-4 md:grid-cols-3">
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Uso</b>
-                        <p className="mt-2 text-sm">
-                          Cantidad de operaciones por promoción o beneficio.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Resultado</b>
-                        <p className="mt-2 text-sm">
-                          Venta generada, descuento aplicado y ticket promedio.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#fff5d8] p-4">
-                        <b>Rentabilidad</b>
-                        <p className="mt-2 text-sm">
-                          Margen posterior al beneficio, disponible al cargar
-                          costos.
-                        </p>
-                      </div>
+                    <div className="mt-5 space-y-4">
+                      <div className="grid gap-4 md:grid-cols-4"><div className="rounded bg-[#eef2f6] p-4"><b>Operaciones con beneficio</b><p className="mt-2 text-2xl font-bold">{promotionTotals.operations}</p><p className="text-sm">Descuento o invitación registrada.</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Descuento otorgado</b><p className="mt-2 text-2xl font-bold">{money.format(promotionTotals.discount)}</p><p className="text-sm">Sobre operaciones del período.</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Invitaciones</b><p className="mt-2 text-2xl font-bold">{promotionTotals.invitationUnits}</p><p className="text-sm">Unidades marcadas como invitación.</p></div><div className="rounded bg-[#fff5d8] p-4"><b>Margen no disponible</b><p className="mt-2 text-sm">Se necesitan costos unitarios para evaluar rentabilidad del beneficio.</p></div></div>
+                      <div className="overflow-auto rounded border"><table className="w-full min-w-[900px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Local</th><th className="p-3 text-right">Operaciones</th><th className="p-3 text-right">Con descuento</th><th className="p-3 text-right">Con invitación</th><th className="p-3 text-right">Unidades invitadas</th><th className="p-3 text-right">Bruto</th><th className="p-3 text-right">Descuento</th><th className="p-3 text-right">Neto</th></tr></thead><tbody>{promotionRows.map((row) => <tr key={row.site} className="border-t"><td className="p-3 font-bold">{row.site}</td><td className="p-3 text-right">{row.operations}</td><td className="p-3 text-right">{row.discounted}</td><td className="p-3 text-right">{row.invited}</td><td className="p-3 text-right">{row.invitationUnits}</td><td className="p-3 text-right">{money.format(row.gross)}</td><td className="p-3 text-right">{money.format(row.discount)}</td><td className="p-3 text-right font-bold">{money.format(row.net)}</td></tr>)}</tbody></table><p className="border-t p-3 text-xs text-slate-500">El sistema aún no administra campañas identificadas por nombre o vigencia. Este reporte consolida descuentos manuales e invitaciones efectivamente guardados.</p></div>
                     </div>
                   )}
                   {adminReport === "Calidad" && (
