@@ -3254,6 +3254,23 @@ export default function Home() {
     }
   };
 
+  const authorizeCashSheets = async () => {
+    if (user?.role !== "administracion") return;
+    setSyncStatus("Preparando la autorización segura de Google Sheets…");
+    try {
+      const response = await fetch(`${API_BASE}/admin/cash-sheets/authorization-url`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await response.json() as { ok?: boolean; authorizationUrl?: string; error?: string };
+      if (!response.ok || !data.ok || !data.authorizationUrl) throw new Error(data.error || "No se pudo iniciar la autorización.");
+      window.location.assign(data.authorizationUrl);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "No se pudo iniciar la autorización.";
+      setSyncStatus(`Google Sheets no quedó conectado: ${detail}`);
+    }
+  };
+
   const confirmClose = () => {
     if (!user) return;
     if (!cashIsOpen) return setMessage("No hay una caja abierta para cerrar.");
@@ -4551,6 +4568,14 @@ export default function Home() {
                       distintos ya cargados. La conexión se administra únicamente en el servidor.
                     </p>
                     <p className="mt-2 text-slate-500">{syncStatus}</p>
+                    {user.role === "administracion" && (
+                      <button
+                        onClick={() => void authorizeCashSheets()}
+                        className="mt-3 rounded border border-[#183a67] px-3 py-2 text-xs font-bold text-[#183a67]"
+                      >
+                        Conectar Google Sheets para cierres
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
