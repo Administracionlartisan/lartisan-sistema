@@ -536,6 +536,13 @@ function ensure_operations_schema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
     }
+    // Las primeras instalaciones ya tenían esta tabla, pero no guardaban
+    // quién realizó el último cambio. Sin esta migración, un UPDATE posterior
+    // falla con "Unknown column updated_by" y la cola del navegador queda
+    // reintentando indefinidamente. CREATE TABLE IF NOT EXISTS no agrega
+    // columnas a una tabla existente, por eso la verificación es explícita.
+    ensure_column($pdo, 'operation_site_states', 'updated_by', 'BIGINT UNSIGNED NULL AFTER revision');
+    ensure_column($pdo, 'operation_site_states', 'updated_at', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER updated_by');
     if (!table_exists($pdo, 'operation_events')) {
         $pdo->exec(
         "CREATE TABLE IF NOT EXISTS operation_events (
@@ -562,6 +569,16 @@ function ensure_operations_schema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
     }
+    // Las tres tablas también existían en instalaciones anteriores. Completar
+    // sus campos aditivos hace que una actualización de código no transforme
+    // una cola local en un reintento infinito por una migración incompleta.
+    ensure_column($pdo, 'operation_events', 'user_id', 'BIGINT UNSIGNED NULL AFTER site');
+    ensure_column($pdo, 'operation_events', 'event_type', "VARCHAR(80) NOT NULL DEFAULT 'operacion_actualizada' AFTER user_id");
+    ensure_column($pdo, 'operation_events', 'event_json', 'LONGTEXT NOT NULL AFTER event_type');
+    ensure_column($pdo, 'operation_events', 'created_at', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER event_json');
+    ensure_column($pdo, 'operation_requests', 'user_id', 'BIGINT UNSIGNED NULL AFTER site');
+    ensure_column($pdo, 'operation_requests', 'revision', 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER user_id');
+    ensure_column($pdo, 'operation_requests', 'created_at', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER revision');
     ensure_normalized_operations_schema($pdo);
     ensure_operation_archive_schema($pdo);
     ensure_sale_validation_schema($pdo);
@@ -764,6 +781,15 @@ function ensure_operation_archive_schema(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
     }
+    // Las primeras instalaciones podían tener una tabla de archivo creada por
+    // una versión anterior. CREATE TABLE IF NOT EXISTS no completa esas
+    // columnas, pero las operaciones actuales necesitan todas para archivar
+    // historial sin bloquear la sincronización.
+    ensure_column($pdo, 'operation_archive', 'site', "VARCHAR(80) NOT NULL DEFAULT '' AFTER id");
+    ensure_column($pdo, 'operation_archive', 'field', "VARCHAR(40) NOT NULL DEFAULT '' AFTER site");
+    ensure_column($pdo, 'operation_archive', 'item_key', "VARCHAR(190) NOT NULL DEFAULT '' AFTER field");
+    ensure_column($pdo, 'operation_archive', 'item_json', 'LONGTEXT NOT NULL AFTER item_key');
+    ensure_column($pdo, 'operation_archive', 'archived_at', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER item_json');
 }
 
 /**

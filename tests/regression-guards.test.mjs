@@ -60,6 +60,7 @@ test("Ventas: la cola de pendientes usa IndexedDB, en orden y acumulando", () =>
   assert.match(outbox, /indexedDB\.open/);
   assert.doesNotMatch(outbox, /localStorage\.setItem/, "no volver a guardar la cola en localStorage");
   assert.match(page, /drainingSites/, "el envío por local debe ser secuencial (drainSite)");
+  assert.match(page, /for \(const local of outbox\.sites\(\)\) await drainSite\(local\)/, "los locales pendientes deben sincronizarse en secuencia");
   assert.match(page, /await outbox\.markSent\(local, write\.requestId\)/, "un envío despachado se reintenta con el mismo requestId");
 });
 

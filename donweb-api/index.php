@@ -1141,7 +1141,15 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         $pdo->prepare(
             'INSERT INTO operation_events (site, user_id, event_type, event_json) VALUES (?, ?, ?, ?)'
         )->execute([$site, $user['id'], 'operacion_actualizada', $eventJson]);
-        sync_normalized_operations($pdo, $site, $untrimmedState, (int) $user['id'], $currentRow === false ? null : $previousState);
+        // El estado operativo es la fuente de verdad para caja, ventas y stock.
+        // Las tablas normalizadas alimentan reportes; una estructura antigua o
+        // una inconsistencia allí no puede dejar una operación comercial
+        // atrapada en la cola del local.
+        try {
+            sync_normalized_operations($pdo, $site, $untrimmedState, (int) $user['id'], $currentRow === false ? null : $previousState);
+        } catch (Throwable $normalizationError) {
+            error_log('LARTISAN normalized operations sync failed for ' . $site . ': ' . $normalizationError->getMessage());
+        }
         audit($pdo, (int) $user['id'], 'operational_state_updated', $site);
         $nextRevision = $currentRow === false ? 1 : ((int) $currentRevision + 1);
         $pdo->prepare('INSERT INTO operation_requests (request_id, site, user_id, revision) VALUES (?, ?, ?, ?)')

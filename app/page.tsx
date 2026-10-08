@@ -1091,7 +1091,10 @@ export default function Home() {
   const flushPendingWrites = async () => {
     const outbox = await getOutbox();
     if (!outbox || !navigator.onLine) return;
-    await Promise.all(outbox.sites().map((local) => drainSite(local)));
+    // Cada local conserva su orden estricto y los locales se drenan también
+    // en secuencia. Así los envíos keepalive chicos no compiten por el cupo
+    // global del navegador cuando hay contingencias en más de un local.
+    for (const local of outbox.sites()) await drainSite(local);
     setPendingSync(outbox.count());
     if (outbox.count() > 0) throw new Error("Quedan operaciones pendientes.");
   };
@@ -3331,7 +3334,6 @@ export default function Home() {
     if (connectionMode === "Contingencia")
       return setMessage("Volvé a modo En línea antes de sincronizar.");
     if (!pendingSync) return setMessage("No hay operaciones pendientes de sincronización.");
-    recordAudit("Sincronización solicitada", `${pendingSync} operación(es) pendientes.`);
     setMessage("Sincronizando operaciones pendientes. Esperá la confirmación antes de recargar.");
     try {
       // Pedir sincronizar reintenta también un local que el servidor había rechazado.
