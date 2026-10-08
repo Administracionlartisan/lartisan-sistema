@@ -1004,12 +1004,12 @@ export default function Home() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        // Un estado operativo completo puede estar muy cerca del límite de
-        // keepalive. Algunos navegadores cuentan además cabeceras y devuelven
-        // "Failed to fetch" incluso por debajo de los 64 KB nominales. Se usa
-        // margen conservador; las escrituras mayores esperan la confirmación
-        // normal y siguen protegidas por la cola y requestId idempotente.
-        keepalive: body.length < 60_000 && body.length <= 52_000,
+        // No usar keepalive en escrituras interactivas. Algunos navegadores
+        // pueden completar el POST pero rechazar la respuesta cuando el cuerpo
+        // se acerca a su cupo interno, mostrando falsamente "Failed to fetch".
+        // La bandeja persistente y requestId idempotente ya protegen un cierre
+        // o corte: el próximo inicio reintenta sin duplicar la operación.
+        keepalive: false,
         body,
       });
     } catch (error) {

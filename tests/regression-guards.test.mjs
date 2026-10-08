@@ -49,11 +49,11 @@ test("SQL: cada INSERT tiene la misma cantidad de columnas que de valores", () =
   assert.deepEqual(problems, []);
 });
 
-test("Ventas: un keepalive solo para envíos chicos", () => {
-  // Chrome y Edge descartan sin enviar un fetch keepalive de más de 64 KB: las ventas quedaban pendientes para siempre.
-  assert.match(page, /keepalive: body\.length < 60_000/, "sendPendingWrite debe usar keepalive solo si el cuerpo es menor a 60 KB");
+test("Ventas: las escrituras interactivas no usan keepalive", () => {
+  // El POST normal permite esperar y confirmar la respuesta. La cola IndexedDB
+  // conserva el pendiente si se cierra el navegador o se pierde Internet.
+  assert.match(page, /keepalive:\s*false/, "sendPendingWrite no debe usar keepalive en una operación interactiva");
   assert.doesNotMatch(page, /keepalive:\s*true/, "keepalive: true vuelve a romper el guardado en Chrome y Edge");
-  assert.match(page, /body\.length <= 52_000/, "el margen de keepalive debe dejar espacio para cabeceras y evitar Failed to fetch cerca de 64 KB");
 });
 
 test("Ventas: la cola de pendientes usa IndexedDB, en orden y acumulando", () => {
