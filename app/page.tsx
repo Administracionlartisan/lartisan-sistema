@@ -990,7 +990,7 @@ export default function Home() {
   };
   type SendResult =
     | { kind: "saved"; revision?: number; merged?: boolean }
-    | { kind: "retry" }
+    | { kind: "retry"; message?: string }
     | { kind: "session" }
     | { kind: "rejected"; message: string };
   const sendPendingWrite = async (write: PendingOperationalWrite): Promise<SendResult> => {
@@ -1009,8 +1009,8 @@ export default function Home() {
         keepalive: body.length < 60_000,
         body,
       });
-    } catch {
-      return { kind: "retry" };
+    } catch (error) {
+      return { kind: "retry", message: error instanceof Error ? error.message : "No se pudo contactar a la API." };
     }
     if (response.ok) {
       const data = (await response.json().catch(() => ({}))) as { revision?: number; merged?: boolean };
@@ -1018,7 +1018,10 @@ export default function Home() {
     }
     if (response.status === 401) return { kind: "session" };
     // Sin respuesta útil, sobrecarga o conflicto transitorio: se reintenta igual.
-    if (response.status >= 500 || [408, 409, 425, 429].includes(response.status)) return { kind: "retry" };
+    if (response.status >= 500 || [408, 409, 425, 429].includes(response.status)) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      return { kind: "retry", message: data.error || `La API respondió HTTP ${response.status}.` };
+    }
     const data = (await response.json().catch(() => ({}))) as { error?: string };
     return { kind: "rejected", message: data.error || `El servidor rechazó la operación (HTTP ${response.status}).` };
   };
@@ -1047,7 +1050,7 @@ export default function Home() {
         const result = await sendPendingWrite(exactBase ? { ...write, baseRevision: serverRevision.current[local] ?? write.baseRevision } : write);
         lastResult = result.kind;
         if (result.kind === "retry") {
-          setMessage("La operación quedó pendiente en este equipo. Se reintentará sola; no repitas el cobro.");
+          setMessage(`La operación quedó pendiente en este equipo. ${result.message || "Se reintentará sola."} No repitas el cobro.`);
           break;
         }
         if (result.kind === "session") {
