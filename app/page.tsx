@@ -3231,6 +3231,29 @@ export default function Home() {
       `${sale.id.slice(0, 8)} · ${nextInvoiceType}`,
     );
   };
+  const synchronizeCashClose = async (
+    closeId: string,
+    payload: { businessDate: string; payments: { method: string; amount: number }[]; metrics: Record<string, number> },
+  ) => {
+    setSyncStatus("Enviando el cierre a Google Sheets…");
+    try {
+      const response = await fetch(`${API_BASE}/cash-sheets/close`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ site, closeId, ...payload }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; sync?: { alreadySynced?: boolean; sheet?: string; row?: number } };
+      if (!response.ok || !data.ok || !data.sync) throw new Error(data.error || "Google no confirmó la actualización.");
+      setSyncStatus(`${data.sync.alreadySynced ? "Cierre ya sincronizado" : "Drive sincronizado"}: ${data.sync.sheet}, fila ${data.sync.row}.`);
+    } catch (error) {
+      // El cierre comercial ya quedó registrado y la API conserva el intento
+      // por closeId; reintentar no duplica ni pisa una fila distinta.
+      const detail = error instanceof Error ? error.message : "No se pudo contactar a Google Sheets.";
+      setSyncStatus(`Cierre guardado en el sistema. Drive pendiente: ${detail}`);
+    }
+  };
+
   const confirmClose = () => {
     if (!user) return;
     if (!cashIsOpen) return setMessage("No hay una caja abierta para cerrar.");
@@ -3249,6 +3272,24 @@ export default function Home() {
       return setMessage(
         `La diferencia de ${money.format(cashVariance)} supera el máximo autorizado de ${money.format(siteLimits.maxCashDifference)}. Indicá el motivo para cerrar; quedará como alerta para Administración.`,
       );
+    const closeId = activeShift?.id || crypto.randomUUID();
+    const closeMoment = new Date();
+    const shiftSales = sales.filter((sale) =>
+      sale.site === site && sale.status === "activa" &&
+      (!activeShift?.openedAtISO || Date.parse(sale.createdAtISO) >= Date.parse(activeShift.openedAtISO)),
+    );
+    const closePayload = {
+      businessDate: dateKey(closeMoment),
+      payments: totals,
+      metrics: {
+        total: totals.reduce((sum, item) => sum + item.amount, 0),
+        tickets: shiftSales.length,
+        discounts: shiftSales.reduce((sum, sale) => sum + sale.discount, 0),
+        counted,
+        envelope,
+        difference: cashVariance,
+      },
+    };
     setClosed(true);
     setCashOpenBySite((items) => ({ ...items, [site]: false }));
     if (differenceExceeded) {
@@ -3268,7 +3309,7 @@ export default function Home() {
     }
     setCashDifferenceReason("");
     if (activeShift) {
-      const closedNow = new Date();
+      const closedNow = closeMoment;
       const finalShift = {
         ...activeShift,
         closedAt: closedNow.toLocaleString("es-AR"),
@@ -3331,7 +3372,7 @@ export default function Home() {
       cashImpact: 0,
       detail: `Esperado ${money.format(expected)} · Diferencia ${money.format(cashVariance)}`,
     });
-    setSyncStatus("Cierre listo para sincronizar mediante la integración segura del servidor.");
+    void synchronizeCashClose(closeId, closePayload);
     recordAudit(
       "Cierre confirmado",
       `Cobros ${money.format(totals.reduce((a, x) => a + x.amount, 0))} · Sobre ${money.format(envelope)}`,
@@ -4494,18 +4535,20 @@ export default function Home() {
                   </button>
                   {closed && (
                     <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
-                      Cierre guardado localmente. Está listo para generar su
-                      resumen.
+                      Cierre guardado en el sistema. El estado de Google Sheets
+                      se muestra abajo.
                     </p>
                   )}
                   <div className="mt-4 rounded border border-[#d9d4c9] bg-[#fffdf8] p-3 text-xs">
                     <b>Integración Google Sheets</b>
                     <p className="mt-1">
                       Hoja destino: {SHEET_CONFIG[site].sheet}. Cada medio de
-                      pago se mapeará contra el encabezado propio del local.
+                      pago se valida contra el encabezado propio del local antes
+                      de actualizar la fila del día.
                     </p>
                     <p className="mt-1 text-slate-500">
-                      La fuente y sus credenciales se administran únicamente en el servidor.
+                      No se duplican cierres ni se reemplazan fórmulas o valores
+                      distintos ya cargados. La conexión se administra únicamente en el servidor.
                     </p>
                     <p className="mt-2 text-slate-500">{syncStatus}</p>
                   </div>

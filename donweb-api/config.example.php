@@ -52,6 +52,39 @@ return [
     'expense_sync' => [
         'range' => "'GASTOS OPERATIVOS'!A7:Z10000",
     ],
+    // Cierres diarios: esta integración escribe sólo las celdas configuradas
+    // de la fila ya existente para la fecha. Las credenciales OAuth se guardan
+    // cifradas en la base de datos; no copie tokens ni secretos en este archivo.
+    // El owner de cada archivo debe dar permiso Editor a la cuenta de Google que
+    // complete la autorización desde Administración.
+    'cash_sheet_sync' => [
+        'redirect_uri' => 'https://www.lartisantaller.com/sistema-api/admin/cash-sheets/google-callback',
+        'locations' => [
+            'Recoleta' => [
+                'spreadsheet_id' => '131eexo3o0ALWmrOhu0HfUnTLTVH33aHTGQ2sEMlwHtk', 'sheet' => 'INGRESOS', 'header_row' => 5,
+                'date_header' => 'FECHA', 'total_header' => 'FACT TOTAL', 'tickets_header' => 'Tickets', 'discounts_header' => 'DESCUENTOS',
+                'payment_headers' => ['Efectivo' => 'EFECT', 'Tarjeta' => 'TRJE', 'Open Pay' => 'Open Pay', 'Mercado Pago / QR' => 'MP/QR', 'Banco Nación' => 'Banco Nación', 'Banco Provincia' => 'Banco Provincia', 'Banco Galicia' => 'Banco Galicia', 'Transferencia' => 'TRANSFERENCIA', 'MP Delivery' => 'MP Delivery', 'Pedidos Ya Efectivo' => 'PEDIDOS YA EFECTIVO', 'Pedidos Ya' => 'PEDIDOS YA', 'Rappi' => 'RAPPI'],
+            ],
+            'Villa Mitre' => [
+                'spreadsheet_id' => '1Tkd2Mhe28OsCzOl9-TAEEFyFAczFrCbe3b08Vf2oF2k', 'sheet' => 'INGRESOS', 'header_row' => 5,
+                'date_header' => 'FECHA', 'total_header' => 'FACT TOTAL', 'tickets_header' => 'Tickets', 'discounts_header' => 'DESCUENTOS',
+                'payment_headers' => ['Efectivo' => 'EFECT', 'Tarjeta' => 'TRJE', 'Clover' => 'Clover', 'Banco Frances' => 'Banco Frances', 'Banco Provincia' => 'banco provincia', 'QR Galicia' => 'QR GALICIA', 'QR Banco Nación' => 'QR BANCO NACION', 'Mercado Pago / QR' => 'MP/QR', 'Transferencia' => 'Transferencia', 'MP Delivery' => 'MP DELIVERY', 'Pedidos Ya Efectivo' => 'Pedidos Ya Efectivo', 'Pedidos Ya Online' => 'Pedidos Ya online', 'Rappi' => 'RAPPI'],
+            ],
+            'Congreso' => [
+                'spreadsheet_id' => '14BEXikqLBuiGeBKyIqwSRkCRAFfopPYM7ZhnjKdrPBk', 'sheet' => 'ingresos', 'header_row' => 5,
+                'date_header' => 'FECHA', 'total_header' => 'FACT TOTAL', 'tickets_header' => 'Tickets', 'discounts_header' => 'DESCUENTOS',
+                'payment_headers' => ['Efectivo' => 'EFECT', 'Tarjeta' => 'TRJE', 'Clover' => 'Clover', 'Open Pay' => 'Open Pay( Banco Frances)', 'Banco Provincia' => 'BANCO PROVINCIA', 'BNA + QR' => 'BNA+QR', 'QR Galicia' => 'QR Galicia', 'Mercado Pago / QR' => 'MP', 'Transferencia' => 'TRANSFERENCIA', 'MP Delivery' => 'MP DELIVERY', 'Pedidos Ya Tarjeta' => 'PEDIDOS YA tarjeta', 'Pedidos Ya Efectivo' => 'Pedidos Ya Efectivo', 'Rappi' => 'RAPPI'],
+            ],
+            'Maure' => [
+                'spreadsheet_id' => '10RKMEItTwD1Dw_T671cLT1QcS1qCUvm1ZhcjlsoYGU0', 'sheet' => 'INGRESOS DIARIOS', 'header_row' => 5,
+                'date_header' => 'FECHA', 'total_header' => 'FACT TOTAL', 'tickets_header' => 'Tickets', 'discounts_header' => 'DESCUENTOS',
+                'payment_headers' => ['Efectivo' => 'EFECT', 'Tarjeta' => 'TRJE', 'Clover' => 'Clover', 'Open Pay' => 'Open Pay(Banco Frances)', 'Banco Provincia' => 'BANCO PROVINCIA', 'BNA + QR' => 'BNA+QR', 'QR Galicia' => 'GALICIA PROMO', 'Mercado Pago / QR' => 'MP PROMOS', 'Transferencia' => 'TRANSFERENCIA', 'MP Delivery' => 'MP DELIVERY', 'Pedidos Ya Tarjeta' => 'PEDIDOS YA tarjeta', 'Pedidos Ya Efectivo' => 'Pedidos Ya Efectivo', 'Rappi' => 'RAPPI'],
+            ],
+            // Falta el enlace/ID de Novo Pacheco. No se habilita escritura en
+            // ese local hasta que se configure y se verifiquen sus encabezados.
+            'Novo Pacheco' => ['spreadsheet_id' => '', 'sheet' => '', 'header_row' => 5],
+        ],
+    ],
     // En producción esta sección se guarda fuera de public_html en
     // lartisan-ai-config.php.
     'openai' => [

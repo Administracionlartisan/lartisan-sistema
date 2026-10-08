@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/pnl_sync.php';
+require __DIR__ . '/cash_sheet_sync.php';
 require __DIR__ . '/mrp_sync.php';
 require __DIR__ . '/assistant.php';
 require __DIR__ . '/arca_wsfe.php';
@@ -281,6 +282,69 @@ if ($method === 'GET' && $route === 'admin/pnl/authorization-url') {
     } catch (RuntimeException $error) {
         // Ej.: "La conexión de Google no está configurada todavía."
         json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    }
+}
+
+// La autorización de escritura de cierres no comparte el token de lectura de
+// P&L. Así se puede revocar una sin afectar la otra y nunca se amplían
+// silenciosamente permisos que Administración no aprobó.
+if ($method === 'GET' && $route === 'admin/cash-sheets/google-callback') {
+    $state = (string) ($_GET['state'] ?? '');
+    $code = (string) ($_GET['code'] ?? '');
+    ensure_cash_sheet_sync_schema($pdo);
+    $lookup = $pdo->prepare('SELECT user_id FROM cash_sheet_oauth_states WHERE state_hash = ? AND expires_at > NOW() LIMIT 1');
+    $lookup->execute([hash('sha256', $state)]);
+    $userId = $lookup->fetchColumn();
+    $pdo->prepare('DELETE FROM cash_sheet_oauth_states WHERE state_hash = ?')->execute([hash('sha256', $state)]);
+    $success = false;
+    $message = 'No se pudo validar la autorización de Google Sheets.';
+    try {
+        if (!$userId || $code === '') throw new RuntimeException($message);
+        cash_sheet_exchange_authorization_code($pdo, $config, $code);
+        audit($pdo, (int) $userId, 'cash_sheets_google_connected', 'escritura_cierres');
+        $success = true;
+        $message = 'Google Sheets quedó conectado para los cierres. Volvé a Administración para hacer la prueba controlada.';
+    } catch (Throwable $error) {
+        $message = 'No se pudo conectar Google Sheets: ' . htmlspecialchars($error->getMessage(), ENT_QUOTES, 'UTF-8');
+    }
+    http_response_code($success ? 200 : 400);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><title>L’ARTISAN · Google Sheets</title><body style="font-family:Arial,sans-serif;padding:40px;color:#183a67"><h1>' . ($success ? 'Conexión lista' : 'No se pudo completar') . '</h1><p>' . $message . '</p><p><a href="https://admin.lartisantaller.com/">Volver a Administración</a></p></body></html>';
+    exit;
+}
+
+if ($method === 'GET' && $route === 'admin/cash-sheets/status') {
+    require_user($pdo, ['administracion']);
+    ensure_cash_sheet_sync_schema($pdo);
+    $locations = is_array($config['cash_sheet_sync']['locations'] ?? null) ? $config['cash_sheet_sync']['locations'] : [];
+    $configured = [];
+    foreach (operational_sites() as $site) {
+        $item = $locations[$site] ?? [];
+        $configured[$site] = is_array($item) && trim((string) ($item['spreadsheet_id'] ?? '')) !== '' && trim((string) ($item['sheet'] ?? '')) !== '';
+    }
+    $last = $pdo->query("SELECT site,status,business_date,sheet_name,target_row,finished_at,error_message FROM cash_sheet_sync_runs ORDER BY started_at DESC LIMIT 20")->fetchAll();
+    json_response(['ok' => true, 'connected' => cash_sheet_is_connected($pdo, $config), 'configured' => $configured, 'lastRuns' => $last]);
+}
+
+if ($method === 'GET' && $route === 'admin/cash-sheets/authorization-url') {
+    $admin = require_user($pdo, ['administracion']);
+    try {
+        json_response(['ok' => true, 'authorizationUrl' => cash_sheet_authorization_url($pdo, $config, (int) $admin['id'])]);
+    } catch (RuntimeException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    }
+}
+
+if ($method === 'POST' && $route === 'cash-sheets/close') {
+    $user = require_user($pdo);
+    try {
+        $result = cash_sheet_sync_close($pdo, $config, $user, request_body());
+        json_response(['ok' => true, 'sync' => $result]);
+    } catch (InvalidArgumentException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    } catch (RuntimeException $error) {
+        error_log('LARTISAN cash-sheet sync failed: ' . $error->getMessage());
+        json_response(['ok' => false, 'error' => $error->getMessage()], 503);
     }
 }
 

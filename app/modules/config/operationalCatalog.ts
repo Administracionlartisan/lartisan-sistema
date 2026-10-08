@@ -271,7 +271,7 @@ export const SHEET_CONFIG: Record<
     },
   },
   Maure: {
-    sheet: "ingresos",
+    sheet: "INGRESOS DIARIOS",
     fields: {
       Efectivo: "EFECT",
       Tarjeta: "TRJE",
@@ -322,7 +322,7 @@ export const DRIVE_INTEGRATIONS = [
   },
   {
     site: "Maure",
-    incomeSheet: "ingresos",
+    incomeSheet: "INGRESOS DIARIOS",
     expenseSheet: "GASTOS OPERATIVOS",
     incomeStatus: "Encabezados verificados",
   },
