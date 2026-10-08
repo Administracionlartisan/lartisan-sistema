@@ -1057,6 +1057,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
     if (!is_array($state) || !preg_match('/^[a-f0-9-]{36}$/i', $requestId)) {
         json_response(['ok' => false, 'error' => 'Datos operativos inválidos'], 422);
     }
+    $syncStage = 'preparar';
     $pdo->beginTransaction();
     try {
         $requestLookup = $pdo->prepare('SELECT revision FROM operation_requests WHERE request_id = ? AND site = ? LIMIT 1');
@@ -1076,6 +1077,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $pdo->commit();
             json_response(['ok' => true, 'revision' => 0, 'merged' => false, 'state' => null]);
         }
+        $syncStage = 'autorizar';
         $authorizedIncoming = $centralOnly
             ? authorize_central_changes($user, $previousState, is_array($baseState) ? $baseState : [], $state)
             : authorize_operational_snapshot($user, $previousState, $state);
@@ -1096,9 +1098,28 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         // El historial completo vive en las tablas normalizadas y en
         // operation_archive; el estado del local conserva solo lo reciente y lo
         // abierto para que cada envío no crezca sin límite.
-        [$state, $invoiceFindings] = enforce_invoice_type_changes($pdo, $user, $previousState, $state);
+        $syncStage = 'validar_comprobante';
+        try {
+            [$state, $invoiceFindings] = enforce_invoice_type_changes($pdo, $user, $previousState, $state);
+        } catch (Throwable $invoiceValidationError) {
+            // La protección fiscal debe ser conservadora sin bloquear el resto
+            // de la operación. Ante una falla técnica se conservan los tipos de
+            // comprobante previamente guardados y se permiten stock, caja,
+            // pedidos y recepciones.
+            error_log('LARTISAN invoice validation fallback: ' . $invoiceValidationError->getMessage());
+            $previousSales = is_array($previousState['sales'] ?? null) ? $previousState['sales'] : [];
+            $knownSales = operational_items_by_id($previousSales);
+            foreach (is_array($state['sales'] ?? null) ? $state['sales'] : [] as $index => $sale) {
+                if (!is_array($sale) || !isset($sale['id']) || !is_scalar($sale['id'])) continue;
+                $before = $knownSales[(string) $sale['id']] ?? null;
+                if (is_array($before)) $state['sales'][$index]['invoiceType'] = $before['invoiceType'] ?? null;
+            }
+            $invoiceFindings = [];
+        }
         $untrimmedState = $state;
+        $syncStage = 'recortar';
         [$state] = compact_operational_state($untrimmedState, $config);
+        $syncStage = 'archivar_recorte';
         archive_removed_operational_items($pdo, $site, $previousState, $untrimmedState, $state);
         // Etapa de observación: se registran las diferencias de importes sin
         // rechazar la operación. Un error de control nunca impide guardar.
@@ -1127,6 +1148,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $pdo->rollBack();
             json_response(['ok' => false, 'error' => 'La operación supera el tamaño permitido'], 422);
         }
+        $syncStage = 'guardar_estado';
         if ($currentRow === false) {
             if ($baseRevision !== 0) {
                 $pdo->rollBack();
@@ -1138,6 +1160,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $pdo->prepare('UPDATE operation_site_states SET state_json = ?, revision = revision + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE site = ?')
                 ->execute([$stateJson, $user['id'], $site]);
         }
+        $syncStage = 'guardar_evento';
         $pdo->prepare(
             'INSERT INTO operation_events (site, user_id, event_type, event_json) VALUES (?, ?, ?, ?)'
         )->execute([$site, $user['id'], 'operacion_actualizada', $eventJson]);
@@ -1150,14 +1173,28 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         } catch (Throwable $normalizationError) {
             error_log('LARTISAN normalized operations sync failed for ' . $site . ': ' . $normalizationError->getMessage());
         }
+        $syncStage = 'auditar';
         audit($pdo, (int) $user['id'], 'operational_state_updated', $site);
         $nextRevision = $currentRow === false ? 1 : ((int) $currentRevision + 1);
+        $syncStage = 'confirmar_solicitud';
         $pdo->prepare('INSERT INTO operation_requests (request_id, site, user_id, revision) VALUES (?, ?, ?, ?)')
             ->execute([$requestId, $site, $user['id'], $nextRevision]);
+        $syncStage = 'confirmar';
         $pdo->commit();
     } catch (Throwable $error) {
-        $pdo->rollBack();
-        throw $error;
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        $failureDetail = preg_replace('/[\r\n]+/', ' ', $error->getMessage()) ?: 'Sin detalle disponible.';
+        $failureDetail = substr($syncStage . ': ' . $failureDetail, 0, 800);
+        error_log('LARTISAN operation sync failed at ' . $syncStage . ' for ' . $site . ': ' . $failureDetail);
+        // El intento fallido se audita fuera de la transacción revertida para
+        // poder diagnosticar una cola pendiente sin exponer el detalle técnico
+        // al equipo de ventas.
+        try {
+            audit($pdo, (int) $user['id'], 'operational_sync_failed', $site . ' · ' . $failureDetail);
+        } catch (Throwable $auditError) {
+            error_log('LARTISAN operation sync failure audit failed: ' . $auditError->getMessage());
+        }
+        json_response(['ok' => false, 'error' => 'No se pudo guardar la operación en la etapa ' . $syncStage . '.'], 500);
     }
     $revision = (int) $pdo->query("SELECT revision FROM operation_site_states WHERE site = " . $pdo->quote($site))->fetchColumn();
     json_response(['ok' => true, 'revision' => $revision, 'merged' => $merged ?? false, 'state' => ($merged ?? false) ? operational_snapshot_for_user($user, $state, $site) : null]);

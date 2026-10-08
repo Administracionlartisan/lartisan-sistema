@@ -16,6 +16,28 @@ if (!is_file($configPath)) {
 
 $config = require $configPath;
 
+// El hosting todavía usa PHP 7.4. Estas funciones estándar se incorporaron en
+// PHP 8; se definen de forma compatible para que el mismo código funcione en
+// ambos entornos sin alterar datos operativos.
+if (!function_exists('str_starts_with')) {
+    function str_starts_with(string $haystack, string $needle): bool
+    {
+        return $needle === '' || strncmp($haystack, $needle, strlen($needle)) === 0;
+    }
+}
+if (!function_exists('str_ends_with')) {
+    function str_ends_with(string $haystack, string $needle): bool
+    {
+        return $needle === '' || substr($haystack, -strlen($needle)) === $needle;
+    }
+}
+if (!function_exists('str_contains')) {
+    function str_contains(string $haystack, string $needle): bool
+    {
+        return $needle === '' || strpos($haystack, $needle) !== false;
+    }
+}
+
 // Una sola zona horaria para PHP y MySQL (ver db()). Antes PHP quedaba en la
 // del servidor (UTC) y MySQL en la suya: sesiones y códigos de recuperación
 // vencían horas más tarde y las ventas nocturnas caían en el día siguiente.
@@ -734,12 +756,23 @@ function enforce_invoice_type_changes(PDO $pdo, array $user, array $previous, ar
         $reason = null;
         if (!$canChange) {
             $reason = 'sin permiso para cambiar el comprobante';
-        } elseif (table_exists($pdo, 'arca_fiscal_documents')) {
-            if ($fiscal === null) {
-                $fiscal = $pdo->prepare("SELECT status FROM arca_fiscal_documents WHERE sale_reference = ? AND status IN ('authorized','issuing','requires_reconciliation') LIMIT 1");
+        } else {
+            // La comprobación fiscal no puede dejar ventas, caja, stock o
+            // recepciones retenidos en la cola. Si la tabla aún se está
+            // migrando o la consulta falla, se conserva el comprobante previo
+            // (postura segura) y se permite guardar el resto de la operación.
+            try {
+                if (table_exists($pdo, 'arca_fiscal_documents')) {
+                    if ($fiscal === null) {
+                        $fiscal = $pdo->prepare("SELECT status FROM arca_fiscal_documents WHERE sale_reference = ? AND status IN ('authorized','issuing','requires_reconciliation') LIMIT 1");
+                    }
+                    $fiscal->execute([(string) $sale['id']]);
+                    if ($fiscal->fetchColumn() !== false) $reason = 'la venta ya tiene un comprobante ARCA emitido o en curso';
+                }
+            } catch (Throwable $error) {
+                error_log('LARTISAN fiscal invoice-change check deferred: ' . $error->getMessage());
+                $reason = 'no se pudo validar el estado fiscal; se conservó el comprobante anterior';
             }
-            $fiscal->execute([(string) $sale['id']]);
-            if ($fiscal->fetchColumn() !== false) $reason = 'la venta ya tiene un comprobante ARCA emitido o en curso';
         }
         if ($reason === null) continue;
         $state['sales'][$index]['invoiceType'] = $before['invoiceType'] ?? null;
@@ -891,7 +924,11 @@ function operational_archive_key(string $field, array $item, int $index): string
 }
 
 /** @return array<string, array> clave => registro */
-function operational_list_by_key(string $field, mixed $list): array
+// El hosting actual ejecuta una versión anterior a PHP 8. El tipo `mixed`
+// allí se interpreta como una clase y rechaza valores válidos (por ejemplo,
+// arreglos de operaciones), así que estos helpers aceptan la entrada sin
+// tipo estricto y la normalizan internamente.
+function operational_list_by_key(string $field, $list): array
 {
     $result = [];
     if (!is_array($list)) return $result;
@@ -1265,7 +1302,7 @@ function iso_datetime(?string $value): ?string
     }
 }
 
-function historical_datetime(mixed $value): ?string
+function historical_datetime($value): ?string
 {
     $text = trim((string) $value);
     if ($text === '') return null;
@@ -1276,7 +1313,7 @@ function historical_datetime(mixed $value): ?string
     return iso_datetime($text);
 }
 
-function historical_number(mixed $value): float
+function historical_number($value): float
 {
     if (is_int($value) || is_float($value)) return (float) $value;
     $text = preg_replace('/[^0-9,.-]/u', '', trim((string) $value)) ?? '';
@@ -1297,7 +1334,7 @@ function historical_number(mixed $value): float
 }
 
 /** @return array<string, array> pagos agrupados por venta */
-function operational_payments_by_sale(mixed $payments): array
+function operational_payments_by_sale($payments): array
 {
     $grouped = [];
     foreach (is_array($payments) ? $payments : [] as $payment) {
@@ -1307,7 +1344,7 @@ function operational_payments_by_sale(mixed $payments): array
 }
 
 /** @return array<string, array> registros por id */
-function operational_items_by_id(mixed $items): array
+function operational_items_by_id($items): array
 {
     $result = [];
     foreach (is_array($items) ? $items : [] as $item) {

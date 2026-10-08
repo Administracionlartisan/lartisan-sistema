@@ -1004,9 +1004,12 @@ export default function Home() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        // Chrome, Edge y otros navegadores rechazan sin enviarlo un keepalive de
-        // más de 64 KB ("Failed to fetch"); solo los envíos chicos lo usan.
-        keepalive: body.length < 60_000,
+        // Un estado operativo completo puede estar muy cerca del límite de
+        // keepalive. Algunos navegadores cuentan además cabeceras y devuelven
+        // "Failed to fetch" incluso por debajo de los 64 KB nominales. Se usa
+        // margen conservador; las escrituras mayores esperan la confirmación
+        // normal y siguen protegidas por la cola y requestId idempotente.
+        keepalive: body.length < 60_000 && body.length <= 52_000,
         body,
       });
     } catch (error) {
