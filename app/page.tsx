@@ -135,6 +135,7 @@ export default function Home() {
     [reportTo, setReportTo] = useState(() => initialReportRange().to),
     [newGuideTitle, setNewGuideTitle] = useState(""),
     [newGuideDetail, setNewGuideDetail] = useState(""),
+    [attendanceReminder, setAttendanceReminder] = useState<"Entrada" | "Salida" | null>(null),
     [adminReport, setAdminReport] = useState("Resumen"),
     [pnlConnection, setPnlConnection] = useState<{ connected: boolean; rows: string[][]; updatedAt: string | null }>({ connected: false, rows: [], updatedAt: null }),
     [pnlSyncing, setPnlSyncing] = useState(false),
@@ -3335,6 +3336,8 @@ export default function Home() {
       "Cierre confirmado",
       `Cobros ${money.format(totals.reduce((a, x) => a + x.amount, 0))} · Sobre ${money.format(envelope)}`,
     );
+    setAttendanceReminder("Salida");
+    setMessage("Caja cerrada. Recordá marcar tu salida en Fichaje antes de retirarte.");
   };
   const openCash = () => {
     if (!user) return;
@@ -3406,6 +3409,7 @@ export default function Home() {
     setAttendanceRecords((items) => [record, ...items]);
     recordAudit(`Fichaje de ${kind.toLowerCase()}`, `${user.name} · ${site}${record.lateMinutes ? ` · tardanza ${record.lateMinutes} min` : ""}`);
     setClock(`${kind} registrada a las ${now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
+    setAttendanceReminder(null);
   };
   const createCashTransfer = () => {
     if (!user) return;
@@ -3447,6 +3451,23 @@ export default function Home() {
       setMessage("Todavía quedan operaciones pendientes. No repitas cobros y revisá la conexión.");
     }
   };
+  useEffect(() => {
+    if (!user || !operationalReady || ["administracion", "compras"].includes(user.role)) return;
+    const today = dateKey(new Date());
+    const lastTodayRecord = attendanceRecords.find((record) =>
+      record.userName === user.name && record.site === site && record.atISO.slice(0, 10) === today,
+    );
+    if (lastTodayRecord?.kind === "Entrada") return;
+    const reminderKey = `lartisan:attendance-reminder:${user.id}:${today}`;
+    try {
+      if (window.sessionStorage.getItem(reminderKey)) return;
+      window.sessionStorage.setItem(reminderKey, "shown");
+    } catch {
+      // Si el navegador bloquea sessionStorage, el recordatorio sigue siendo seguro.
+    }
+    const timer = window.setTimeout(() => setAttendanceReminder("Entrada"), 0);
+    return () => window.clearTimeout(timer);
+  }, [attendanceRecords, operationalReady, site, user]);
   if (authLoading && !user) return <SecureLoading />;
   if (!user) return <AccessScreen {...{ portal, login, setLogin, password, setPassword, showPassword, setShowPassword, authLoading, recoverySending, recoveryStage, recoveryCode, setRecoveryCode, recoveryPassword, setRecoveryPassword, recoveryPasswordConfirm, setRecoveryPasswordConfirm, setRecoveryStage, message, setMessage, enter, requestPasswordReset, confirmEmailRecovery }} />;
   if (user.mustChangePassword) return <ForcePasswordChangeScreen {...{ currentPassword, setCurrentPassword, newPassword, setNewPassword, confirmNewPassword, setConfirmNewPassword, message, changeOwnPassword, logout }} />;
@@ -3501,6 +3522,29 @@ export default function Home() {
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
+      {attendanceReminder && user.role !== "administracion" && user.role !== "compras" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="attendance-reminder-title">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <p className="text-sm font-black uppercase tracking-wide text-[#ec3a35]">Recordatorio de fichaje</p>
+            <h2 id="attendance-reminder-title" className="mt-2 text-xl font-black">
+              {attendanceReminder === "Entrada" ? "Marcá tu entrada antes de comenzar" : "Antes de retirarte, marcá tu salida"}
+            </h2>
+            <p className="mt-3 text-sm text-slate-700">
+              {attendanceReminder === "Entrada"
+                ? `Tu sesión en ${site} quedó iniciada. El fichaje de entrada debe registrarse con tu usuario personal.`
+                : `La caja de ${site} ya se cerró. Registrá la salida con tu usuario para que el turno quede completo.`}
+            </p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button onClick={() => { setTab("Fichaje"); setAttendanceReminder(null); window.scrollTo({ top: 0, behavior: "smooth" }); }} className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white">
+                Ir a Fichaje
+              </button>
+              <button onClick={() => setAttendanceReminder(null)} className="rounded border px-4 py-2.5 font-bold">
+                Lo haré ahora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b bg-[#fffdf8] px-4 py-3 sm:px-5">
         <b className="font-serif text-xl tracking-[.15em] sm:text-2xl" aria-label="L'ARTISAN sistema interno">
           L&apos;ARTISAN
