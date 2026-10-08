@@ -91,6 +91,8 @@ export default function Home() {
     [tab, setTab] = useState("Ventas"),
     [navOpen, setNavOpen] = useState(false),
     [productSearch, setProductSearch] = useState(""),
+    [stockSearch, setStockSearch] = useState(""),
+    [stockGroup, setStockGroup] = useState("Todos los grupos"),
     [scannerResult, setScannerResult] = useState(""),
     [salesScannerValue, setSalesScannerValue] = useState(""),
     [pedidoScannerValue, setPedidoScannerValue] = useState(""),
@@ -1209,6 +1211,16 @@ export default function Home() {
     (cat === "Todos" || product.category === cat) &&
     `${product.name} ${product.detail} ${product.category} ${product.code} ${product.barcode}`.toLowerCase().includes(productSearch.trim().toLowerCase()),
   );
+  const stockGroups = useMemo(
+    () => Array.from(new Set(products.map((product) => product.category))).sort((a, b) => a.localeCompare(b)),
+    [products],
+  );
+  const visibleStockProducts = products.filter((product) => {
+    const query = stockSearch.trim().toLowerCase();
+    const matchesGroup = stockGroup === "Todos los grupos" || product.category === stockGroup;
+    const matchesSearch = !query || `${product.name} ${product.detail} ${product.category} ${product.code} ${product.barcode}`.toLowerCase().includes(query);
+    return matchesGroup && matchesSearch;
+  });
   const total = cart.reduce((a, p) => a + p.price, 0);
   const isOnlineChannel = saleChannel === "Online";
   const selectedPrice = (product: Product) =>
@@ -4475,6 +4487,31 @@ export default function Home() {
                   </p>
                 </div>
               )}
+              <div className="mb-4 grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-[1fr_260px]">
+                <label className="text-sm font-bold">
+                  Buscar producto o insumo
+                  <input
+                    value={stockSearch}
+                    onChange={(event) => setStockSearch(event.target.value)}
+                    placeholder="Nombre, presentación, código o código de barras"
+                    className="mt-1 w-full rounded border p-2 font-normal"
+                  />
+                </label>
+                <label className="text-sm font-bold">
+                  Grupo
+                  <select
+                    value={stockGroup}
+                    onChange={(event) => setStockGroup(event.target.value)}
+                    className="mt-1 w-full rounded border p-2 font-normal"
+                  >
+                    <option>Todos los grupos</option>
+                    {stockGroups.map((group) => <option key={group}>{group}</option>)}
+                  </select>
+                </label>
+                <p className="text-xs text-slate-500 md:col-span-2">
+                  Mostrando {visibleStockProducts.length} de {products.length} productos del inventario de {site}.
+                </p>
+              </div>
               <div className="overflow-auto rounded-xl border bg-white">
                 <table className="w-full min-w-[620px] text-sm">
                   <thead className="bg-[#eef2f6]">
@@ -4489,7 +4526,7 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody>
-                    {products.map((p) => {
+                    {visibleStockProducts.map((p) => {
                       const countedStock = realStock[site]?.[p.id] ?? "";
                       const countedQuantity = Number(countedStock);
                       const hasValidCount = countedStock !== "" && Number.isFinite(countedQuantity);
@@ -4574,6 +4611,9 @@ export default function Home() {
                       </tr>
                       );
                     })}
+                    {!visibleStockProducts.length && (
+                      <tr><td colSpan={7} className="p-4 text-center text-slate-500">No hay productos o insumos que coincidan con la búsqueda y el grupo elegidos.</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
