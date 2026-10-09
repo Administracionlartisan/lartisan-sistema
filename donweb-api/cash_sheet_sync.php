@@ -42,6 +42,30 @@ function ensure_cash_sheet_sync_schema(PDO $pdo): void
         INDEX idx_cash_sheet_site_date (site, business_date),
         INDEX idx_cash_sheet_status (status, started_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // Registro independiente del cierre: no se modifica el renglón histórico
+    // de ingresos cuando una venta se anula después de cerrada la caja.
+    $pdo->exec("CREATE TABLE IF NOT EXISTS cash_sheet_adjustment_runs (
+        adjustment_id CHAR(36) NOT NULL PRIMARY KEY,
+        sale_id CHAR(36) NOT NULL,
+        close_id CHAR(36) NOT NULL,
+        site VARCHAR(80) NOT NULL,
+        business_date DATE NOT NULL,
+        amount DECIMAL(14,2) NOT NULL,
+        payment_method VARCHAR(120) NOT NULL,
+        reason VARCHAR(500) NOT NULL,
+        audit_reference VARCHAR(500) NOT NULL,
+        status ENUM('running','verified','failed') NOT NULL,
+        payload_hash CHAR(64) NOT NULL,
+        target_row INT NULL,
+        response_json TEXT NULL,
+        error_message VARCHAR(1000) NULL,
+        triggered_by BIGINT UNSIGNED NOT NULL,
+        started_at DATETIME NOT NULL,
+        finished_at DATETIME NULL,
+        INDEX idx_cash_sheet_adjustment_close (close_id),
+        INDEX idx_cash_sheet_adjustment_sale (sale_id),
+        INDEX idx_cash_sheet_adjustment_status (status, started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 function cash_sheet_oauth_client(array $config): array
@@ -240,9 +264,17 @@ function cash_sheet_apps_script_sync(array $config, array $payload): array
         'payments' => $payload['payments'],
         'metrics' => $payload['metrics'],
     ];
+    // Contrato canónico v2: base64 del JSON UTF-8 sin escapes, firmado con
+    // HMAC-SHA256. El orden de estas claves coincide con Apps Script.
+    foreach (['kind', 'adjustmentId', 'saleId', 'amount', 'paymentMethod', 'reason', 'auditReference'] as $key) {
+        if (array_key_exists($key, $payload) && $payload[$key] !== null) $body[$key] = $payload[$key];
+    }
     $canonical = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($canonical === false) throw new RuntimeException('No se pudo preparar el cierre para Apps Script.');
-    $body['signature'] = hash_hmac('sha256', $canonical, (string) $sync['apps_script_secret']);
+    $canonicalB64 = base64_encode($canonical);
+    $body['signatureV2'] = hash_hmac('sha256', $canonicalB64, (string) $sync['apps_script_secret']);
+    $body['canonicalB64'] = $canonicalB64;
+    $body['canonical'] = $canonical;
     $response = cash_sheet_http((string) $sync['apps_script_url'], [
         'method' => 'POST',
         'headers' => ['Content-Type: application/json'],
@@ -253,6 +285,79 @@ function cash_sheet_apps_script_sync(array $config, array $payload): array
         throw new RuntimeException(substr($detail, 0, 1000));
     }
     return $response['json'];
+}
+
+function cash_sheet_sync_adjustment(PDO $pdo, array $config, array $user, array $input): array
+{
+    ensure_cash_sheet_sync_schema($pdo);
+    $site = trim((string) ($input['site'] ?? ''));
+    $closeId = trim((string) ($input['closeId'] ?? ''));
+    $saleId = trim((string) ($input['saleId'] ?? ''));
+    $adjustmentId = trim((string) ($input['adjustmentId'] ?? ''));
+    $businessDate = trim((string) ($input['businessDate'] ?? ''));
+    $paymentMethod = trim((string) ($input['paymentMethod'] ?? ''));
+    $reason = trim((string) ($input['reason'] ?? ''));
+    $auditReference = trim((string) ($input['auditReference'] ?? ''));
+    if (!in_array($site, operational_sites(), true) || !user_can_access_site($user, $site) || !user_can_action($user, 'anular')) {
+        throw new InvalidArgumentException('No tenés permiso para registrar este ajuste.');
+    }
+    foreach ([$closeId, $saleId, $adjustmentId] as $id) {
+        if (!preg_match('/^[a-f0-9-]{36}$/i', $id)) throw new InvalidArgumentException('Identificador de ajuste inválido.');
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $businessDate) || $paymentMethod === '' || $reason === '' || $auditReference === '') {
+        throw new InvalidArgumentException('Datos de ajuste incompletos.');
+    }
+    $amount = round((float) ($input['amount'] ?? 0), 2);
+    if (!is_finite($amount) || $amount <= 0) throw new InvalidArgumentException('Importe de ajuste inválido.');
+    // Solo hay ajuste si el cierre original ya quedó verificado y pertenece al
+    // mismo local. Esto impide compensar cierres inexistentes o cruzados.
+    $close = $pdo->prepare("SELECT site,status FROM cash_sheet_sync_runs WHERE close_id=? LIMIT 1");
+    $close->execute([$closeId]);
+    $closeRun = $close->fetch();
+    if (!$closeRun || (string) $closeRun['site'] !== $site || (string) $closeRun['status'] !== 'verified') {
+        throw new InvalidArgumentException('El cierre original no está sincronizado para este local.');
+    }
+    $payload = [
+        'kind' => 'post_close_cancellation_adjustment',
+        'adjustmentId' => $adjustmentId,
+        'closeId' => $closeId,
+        'saleId' => $saleId,
+        'site' => $site,
+        'businessDate' => $businessDate,
+        'amount' => $amount,
+        'paymentMethod' => $paymentMethod,
+        'reason' => $reason,
+        'auditReference' => $auditReference,
+        'payments' => [],
+        'metrics' => [],
+    ];
+    $payloadHash = hash('sha256', (string) json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    $existing = $pdo->prepare('SELECT * FROM cash_sheet_adjustment_runs WHERE adjustment_id=? LIMIT 1');
+    $existing->execute([$adjustmentId]);
+    $run = $existing->fetch();
+    if ($run) {
+        if (!hash_equals((string) $run['payload_hash'], $payloadHash)) throw new InvalidArgumentException('Ese ajuste ya fue enviado con datos distintos.');
+        if ((string) $run['status'] === 'verified') {
+            return ['alreadySynced' => true, 'row' => (int) $run['target_row'], 'adjustmentId' => $adjustmentId];
+        }
+        $pdo->prepare("UPDATE cash_sheet_adjustment_runs SET status='running', error_message=NULL, started_at=NOW(), finished_at=NULL WHERE adjustment_id=?")->execute([$adjustmentId]);
+    } else {
+        $pdo->prepare("INSERT INTO cash_sheet_adjustment_runs (adjustment_id,sale_id,close_id,site,business_date,amount,payment_method,reason,audit_reference,status,payload_hash,triggered_by,started_at) VALUES (?,?,?,?,?,?,?,?,?,'running',?,?,NOW())")
+            ->execute([$adjustmentId, $saleId, $closeId, $site, $businessDate, $amount, $paymentMethod, $reason, $auditReference, $payloadHash, (int) $user['id']]);
+    }
+    try {
+        if (cash_sheet_provider($config) !== 'apps_script') throw new RuntimeException('El ajuste posterior requiere la integración Apps Script v2.');
+        $result = cash_sheet_apps_script_sync($config, $payload);
+        $encoded = json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $pdo->prepare("UPDATE cash_sheet_adjustment_runs SET status='verified', target_row=?, response_json=?, finished_at=NOW() WHERE adjustment_id=?")
+            ->execute([(int) ($result['row'] ?? 0) ?: null, $encoded ?: null, $adjustmentId]);
+        audit($pdo, (int) $user['id'], 'cash_close_post_cancellation_adjustment', $site . ' · venta ' . $saleId . ' · cierre ' . $closeId);
+        return ['alreadySynced' => !empty($result['alreadySynced']), 'row' => (int) ($result['row'] ?? 0), 'adjustmentId' => $adjustmentId];
+    } catch (Throwable $error) {
+        $message = substr(preg_replace('/[\r\n]+/', ' ', $error->getMessage()) ?: 'No se pudo sincronizar el ajuste.', 0, 1000);
+        $pdo->prepare("UPDATE cash_sheet_adjustment_runs SET status='failed', error_message=?, finished_at=NOW() WHERE adjustment_id=?")->execute([$message, $adjustmentId]);
+        throw $error;
+    }
 }
 
 function cash_sheet_fetch_values(string $token, string $spreadsheetId, string $range, string $render = 'FORMATTED_VALUE'): array

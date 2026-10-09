@@ -76,6 +76,27 @@ export type SavedOrder = {
 };
 
 export type CashAdjustment = { id: string; site: string; kind: "Ingreso de caja" | "Ajuste de caja" | "Retiro de caja"; amount: number; detail: string; at: string; atISO?: string; createdBy: string; impact?: "Ingreso" | "Egreso" };
+/**
+ * Compensación remota de una venta anulada luego de que su turno ya fue
+ * cerrado. Vive en el estado operativo para que un corte de red no pierda la
+ * identidad idempotente ni fuerce a recrear la anulación.
+ */
+export type PostCloseCancellationAdjustment = {
+  id: string;
+  saleId: string;
+  closeId: string;
+  site: string;
+  businessDate: string;
+  amount: number;
+  paymentMethod: string;
+  reason: string;
+  auditReference: string;
+  status: "pending" | "synced";
+  attempts: number;
+  lastError?: string;
+  createdAtISO: string;
+  syncedAtISO?: string;
+};
 export type CashLedgerEntry = { id: string; site: string; shiftId?: string; kind: string; direction: "Ingreso" | "Egreso" | "Informativo"; amount: number; cashImpact: number; paymentMethod?: string; reference?: string; detail: string; at: string; atISO?: string; createdBy: string };
 export type CashShift = { id: string; site: string; openedAt: string; openedAtISO?: string; openedBy: string; initialFund: number; closedAt?: string; closedAtISO?: string; closedBy?: string; expectedCash?: number; countedCash?: number; differenceAmount?: number; envelopeAmount?: number; differenceReason?: string };
 export type OperationalLimits = { maxDiscount: number; maxExpense: number; maxCashDifference: number };
@@ -137,6 +158,7 @@ export type OperationalSnapshot = {
   stockRequests?: StockRequest[];
   savedOrders?: SavedOrder[];
   cashAdjustments?: CashAdjustment[];
+  postCloseAdjustments?: PostCloseCancellationAdjustment[];
   cashLedger?: CashLedgerEntry[];
   // null (no undefined) al cerrar: JSON omite undefined y el servidor conservaría el turno.
   activeShift?: CashShift | null;

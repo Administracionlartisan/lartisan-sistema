@@ -351,6 +351,19 @@ if ($method === 'POST' && $route === 'cash-sheets/close') {
     }
 }
 
+if ($method === 'POST' && $route === 'cash-sheets/adjustment') {
+    $user = require_user($pdo);
+    try {
+        $result = cash_sheet_sync_adjustment($pdo, $config, $user, request_body());
+        json_response(['ok' => true, 'sync' => $result]);
+    } catch (InvalidArgumentException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    } catch (RuntimeException $error) {
+        error_log('LARTISAN cash-sheet adjustment failed: ' . $error->getMessage());
+        json_response(['ok' => false, 'error' => $error->getMessage()], 503);
+    }
+}
+
 if ($method === 'GET' && $route === 'admin/pnl/latest') {
     require_user($pdo, ['administracion']);
     ensure_pnl_sync_schema($pdo);

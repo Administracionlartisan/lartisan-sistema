@@ -30,6 +30,7 @@ import type {
   OperationalLimits, OperationalSnapshot, PasswordResetRequest, Payment,
   PriceChange, Product, ReturnTransaction, Role, Sale, SavedOrder,
   StockAdjustment, StockMovement, StockRequest, SystemHealth, CustomerRecord,
+  PostCloseCancellationAdjustment,
 } from "./modules/shared/types";
 import {
   DRIVE_INTEGRATIONS, GUIDE_UPDATES, INITIAL_SCHEDULES,
@@ -200,12 +201,14 @@ export default function Home() {
   const centralOnlySites = useRef(new Set<string>());
   const reloadAfterDrain = useRef(false);
   const pendingReceiptRef = useRef<Sale | null>(null);
+  const syncingAdjustmentIds = useRef(new Set<string>());
   const salesScannerRef = useRef<HTMLInputElement | null>(null);
   const pedidoScannerRef = useRef<HTMLInputElement | null>(null);
   const receptionScannerRef = useRef<HTMLInputElement | null>(null);
   const scannerBufferRef = useRef<{ value: string; lastKeyAt: number; input: HTMLInputElement | HTMLTextAreaElement | null; originalValue: string }>({ value: "", lastKeyAt: 0, input: null, originalValue: "" });
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [cashAdjustments, setCashAdjustments] = useState<CashAdjustment[]>([]);
+  const [postCloseAdjustments, setPostCloseAdjustments] = useState<PostCloseCancellationAdjustment[]>([]);
   const [cashLedger, setCashLedger] = useState<CashLedgerEntry[]>([]);
   const [activeShiftBySite, setActiveShiftBySite] = useState<
     Record<string, CashShift | undefined>
@@ -847,6 +850,7 @@ export default function Home() {
       setStockRequests(all("stockRequests") as StockRequest[]);
       setSavedOrders(all("savedOrders") as SavedOrder[]);
       setCashAdjustments(all("cashAdjustments") as CashAdjustment[]);
+      setPostCloseAdjustments(all("postCloseAdjustments") as PostCloseCancellationAdjustment[]);
       setCashLedger(all("cashLedger") as CashLedgerEntry[]);
       setShiftLog(all("shiftLog") as CashShift[]);
       setEnvelopeRecords(all("envelopeRecords") as EnvelopeRecord[]);
@@ -971,6 +975,7 @@ export default function Home() {
       stockRequests: filterBySite(stockRequests),
       savedOrders: filterBySite(savedOrders),
       cashAdjustments: filterBySite(cashAdjustments),
+      postCloseAdjustments: filterBySite(postCloseAdjustments),
       cashLedger: filterBySite(cashLedger),
       // null y no undefined: JSON omite undefined y el servidor conservaría el
       // turno anterior como abierto después de cerrar la caja.
@@ -1171,6 +1176,7 @@ export default function Home() {
     stockRequests,
     savedOrders,
     cashAdjustments,
+    postCloseAdjustments,
     cashLedger,
     activeShiftBySite,
     shiftLog,
@@ -3014,6 +3020,58 @@ export default function Home() {
     window.print();
     window.setTimeout(cleanup, 1000);
   };
+  /** Envía siempre la misma identidad: reintentar nunca puede crear otro ajuste. */
+  const syncPostCloseCancellation = async (adjustment: PostCloseCancellationAdjustment) => {
+    if (syncingAdjustmentIds.current.has(adjustment.id)) return;
+    syncingAdjustmentIds.current.add(adjustment.id);
+    try {
+      const response = await fetch(`${API_BASE}/cash-sheets/adjustment`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          site: adjustment.site,
+          closeId: adjustment.closeId,
+          adjustmentId: adjustment.id,
+          saleId: adjustment.saleId,
+          businessDate: adjustment.businessDate,
+          amount: adjustment.amount,
+          paymentMethod: adjustment.paymentMethod,
+          reason: adjustment.reason,
+          auditReference: adjustment.auditReference,
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Drive no confirmó el ajuste.");
+      setPostCloseAdjustments((items) => items.map((item) =>
+        item.id === adjustment.id
+          ? { ...item, status: "synced", lastError: undefined, syncedAtISO: new Date().toISOString() }
+          : item,
+      ));
+      setSyncStatus("Anulación compensada en Drive sin modificar el cierre original.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "sin respuesta";
+      setPostCloseAdjustments((items) => items.map((item) =>
+        item.id === adjustment.id
+          ? { ...item, status: "pending", attempts: item.attempts + 1, lastError: detail }
+          : item,
+      ));
+      setSyncStatus(`Anulación guardada; ajuste de Drive pendiente: ${detail}`);
+    } finally {
+      syncingAdjustmentIds.current.delete(adjustment.id);
+    }
+  };
+  useEffect(() => {
+    if (!user || !operationalReady) return;
+    const pending = postCloseAdjustments.filter((item) => item.status === "pending");
+    if (!pending.length) return;
+    let disposed = false;
+    const retry = () => {
+      if (!disposed) pending.forEach((item) => { void syncPostCloseCancellation(item); });
+    };
+    const timer = window.setTimeout(retry, 500);
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [user?.id, operationalReady, postCloseAdjustments]);
   const cancelSale = (sale: Sale) => {
     if (!can("anular"))
       return setMessage("Tu usuario no tiene permiso para anular ventas.");
@@ -3087,6 +3145,32 @@ export default function Home() {
       "Venta anulada",
       `${sale.id.slice(0, 8)} · ${money.format(sale.net)} · ${sale.method}`,
     );
+    // Una venta del turno cerrado debe compensarse en Drive. La clave es el
+    // ID estable de la venta: el servidor y Apps Script la usan para que ni
+    // recargas ni reintentos generen una segunda fila.
+    const closeId = salePayments.find((item) => item.shiftId)?.shiftId;
+    const closedShift = closeId
+      ? shiftLog.find((item) => item.id === closeId && item.site === sale.site && Boolean(item.closedAtISO || item.closedAt))
+      : undefined;
+    const amount = Math.round(salePayments.reduce((sum, item) => sum + item.amount, 0) * 100) / 100;
+    if (closedShift && amount > 0) {
+      const adjustment: PostCloseCancellationAdjustment = {
+        id: sale.id,
+        saleId: sale.id,
+        closeId: closedShift.id,
+        site: sale.site,
+        businessDate: dateKey(new Date(closedShift.closedAtISO || closedShift.closedAt || sale.createdAtISO)),
+        amount,
+        paymentMethod: salePayments.length === 1 ? salePayments[0].method : "Múltiple",
+        reason: "Anulación posterior al cierre",
+        auditReference: `sale:${sale.id};close:${closedShift.id}`,
+        status: "pending",
+        attempts: 0,
+        createdAtISO: new Date().toISOString(),
+      };
+      setPostCloseAdjustments((items) => items.some((item) => item.id === adjustment.id) ? items : [adjustment, ...items]);
+      void syncPostCloseCancellation(adjustment);
+    }
     setMessage(
       "Venta anulada: se restituyó el stock y se descontó del cierre.",
     );

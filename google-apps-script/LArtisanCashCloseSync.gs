@@ -41,23 +41,64 @@ const LARTISAN_LOCATIONS = {
 function doPost(e) {
   try {
     const request = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    const signature = String(request.signature || '');
-    delete request.signature;
-    const canonical = JSON.stringify({
+    const signatureV2 = String(request.signatureV2 || '');
+    const canonicalB64 = String(request.canonicalB64 || '');
+    const canonical = String(request.canonical || '');
+    delete request.signatureV2;
+    delete request.canonicalB64;
+    delete request.canonical;
+    const signedPayload = {
       version: request.version, closeId: request.closeId, site: request.site,
       businessDate: request.businessDate, payments: request.payments, metrics: request.metrics,
-    });
+      kind: request.kind, adjustmentId: request.adjustmentId, saleId: request.saleId,
+      amount: request.amount, paymentMethod: request.paymentMethod, reason: request.reason,
+      auditReference: request.auditReference,
+    };
     const secret = PropertiesService.getScriptProperties().getProperty('LARTISAN_SYNC_SECRET');
-    if (!secret || signature !== hmacHex_(canonical, secret)) throw new Error('Firma de cierre no válida.');
+    let decoded = '';
+    try { decoded = Utilities.newBlob(Utilities.base64Decode(canonicalB64)).getDataAsString('UTF-8'); } catch (_) {}
+    if (!secret || !canonicalB64 || decoded !== canonical || signatureV2 !== hmacHex_(canonicalB64, secret)) throw new Error('Firma de cierre no válida.');
+    if (JSON.stringify(JSON.parse(canonical || '{}')) !== JSON.stringify(signedPayload)) throw new Error('El cierre firmado no coincide con los datos recibidos.');
     if (request.version !== 1 || !/^[a-f0-9-]{36}$/i.test(String(request.closeId || ''))) throw new Error('Solicitud de cierre inválida.');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(request.businessDate || ''))) throw new Error('Fecha de cierre inválida.');
     const location = LARTISAN_LOCATIONS[request.site];
     if (!location) throw new Error('El local no está habilitado para esta integración.');
-    const result = syncClose_(location, request);
+    const result = request.kind === 'post_close_cancellation_adjustment' ? syncAdjustment_(location, request) : syncClose_(location, request);
     return json_({ ok: true, ...result });
   } catch (error) {
     return json_({ ok: false, error: String(error && error.message || error) });
   }
+}
+
+// El histórico de ingresos nunca se toca: la compensación vive en una pestaña
+// separada y su propiedad estable sobrevive a reintentos simultáneos.
+function syncAdjustment_(location, request) {
+  if (!/^[a-f0-9-]{36}$/i.test(String(request.adjustmentId || '')) || !/^[a-f0-9-]{36}$/i.test(String(request.saleId || ''))) throw new Error('Ajuste inválido.');
+  if (!(Number(request.amount) > 0) || !String(request.paymentMethod || '').trim() || !String(request.reason || '').trim() || !String(request.auditReference || '').trim()) throw new Error('Datos de ajuste incompletos.');
+  const store = PropertiesService.getScriptProperties();
+  const key = 'LARTISAN_ADJUSTMENT_' + request.adjustmentId;
+  const prior = store.getProperty(key);
+  if (prior) return JSON.parse(prior);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const again = store.getProperty(key);
+    if (again) return JSON.parse(again);
+    const book = SpreadsheetApp.openById(location.spreadsheetId);
+    const name = 'AJUSTES SISTEMA';
+    let sheet = book.getSheetByName(name);
+    if (!sheet) {
+      sheet = book.insertSheet(name);
+      sheet.appendRow(['FECHA','LOCAL','IMPORTE','MEDIO','MOTIVO','VENTA_ID','CIERRE_ID','AJUSTE_ID','REFERENCIA_AUDITORIA']);
+    }
+    sheet.appendRow([
+      request.businessDate, request.site, -Math.abs(Number(request.amount)), request.paymentMethod,
+      request.reason, request.saleId, request.closeId, request.adjustmentId, request.auditReference,
+    ]);
+    const result = { alreadySynced: false, sheet: name, row: sheet.getLastRow(), adjustmentId: request.adjustmentId };
+    store.setProperty(key, JSON.stringify(result));
+    return result;
+  } finally { lock.releaseLock(); }
 }
 
 function syncClose_(location, request) {
