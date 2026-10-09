@@ -20,6 +20,8 @@ import { useCatalog } from "./modules/config/useCatalog";
 import { findScannedProduct } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
 import CustomerPanel from "./modules/clientes/CustomerPanel";
+import InternalChatPanel from "./modules/chat/InternalChatPanel";
+import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
@@ -3764,6 +3766,7 @@ export default function Home() {
           "Protección de datos",
           "Actualizaciones",
           "Integraciones",
+          "Chat interno",
         ]
       : user.role === "compras"
         ? ["MRP", ...(can("comprasProduccion") ? ["Compras de producción"] : [])]
@@ -3778,6 +3781,7 @@ export default function Home() {
           "Incidencias",
           "Fichaje",
           "Clientes",
+          "Chat interno",
           "Guía",
           ...(can("mrp") ? ["MRP"] : []),
           ...(can("comprasProduccion") ? ["Compras de producción"] : []),
@@ -3831,6 +3835,7 @@ export default function Home() {
           <span className={`rounded-full px-2 py-1 text-xs font-bold ${connectionMode === "En línea" ? "bg-[#eef5ef] text-green-800" : "bg-[#fff5d8] text-[#9c302a]"}`} title={connectionMode === "En línea" ? "Las operaciones se guardan en el sistema" : "Las operaciones quedan pendientes hasta recuperar conexión"}>
             {connectionMode === "En línea" ? "● En línea" : "● Contingencia"}
           </span>
+          {user.role !== "compras" && <ChatUnreadIndicator onOpen={() => { setTab("Chat interno"); setNavOpen(false); }} />}
           <button onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen} aria-controls="menu-principal" className="rounded border px-3 py-2 font-bold lg:hidden">Menú</button>
           <span>
           {user.name} ·{" "}
@@ -6033,6 +6038,8 @@ export default function Home() {
                 nueva función o un cambio de procedimiento.
               </p>
             </>
+          ) : tab === "Chat interno" ? (
+            <InternalChatPanel userId={user.id} />
           ) : tab === "Clientes" ? (
             <CustomerPanel site={site} customers={customers} sales={sales} returnsLog={returnsLog} canWrite={can("cobrar") || user.role === "administracion"} onSave={(record) => { const now = new Date().toISOString(); setCustomers(items => { const old = items.find(x => x.id === record.id); return old ? items.map(x => x.id === record.id ? { ...record, createdAt: old.createdAt, updatedAt: now, createdBy: old.createdBy, active: true } : x) : [{ ...record, createdAt: now, updatedAt: now, createdBy: user.name, active: true }, ...items]; }); recordAudit("Cliente actualizado", record.documentType + " " + record.documentNumber); }} onDeactivate={(id) => { setCustomers(items => items.map(item => item.id === id ? { ...item, active:false, updatedAt:new Date().toISOString() } : item)); recordAudit("Cliente desactivado", id); }} />
           ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
