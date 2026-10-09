@@ -175,4 +175,66 @@ export class OperationalOutbox {
   unblockAll() {
     return Promise.all(this.sites().map((site) => this.save(site, { ...this.get(site), blocked: undefined })));
   }
+
+  /**
+   * Corrige exclusivamente la apertura de caja que quedó en la cola local
+   * antes de que la interfaz recibiera la ventana excepcional de fecha
+   * operativa. No toca nada ya confirmado por la API ni ventas, cobros,
+   * devoluciones o ajustes: exige que la diferencia sea solamente la apertura
+   * de caja y mantiene el mismo requestId para conservar la idempotencia.
+   */
+  async normalizeLegacyTestOpening(site: string, businessDate: string, label: string): Promise<boolean> {
+    if (site !== "Maure" || businessDate !== "2026-10-15" || label !== "PRUEBA DE VALIDACIÓN") return false;
+    const queue = this.get(site);
+    const write = queue.writes[0];
+    if (!write || write.event.action !== "Caja abierta" || write.event.testOperatingDate || write.event.testLabel) return false;
+    const before = write.baseState;
+    const after = write.state;
+    const newItems = (key: "sales" | "payments" | "returnsLog" | "stockMovements" | "shiftLog" | "cashLedger") => {
+      const known = new Set((before[key] ?? []).filter((item): item is { id: string } => Boolean(item && typeof item === "object" && "id" in item && typeof item.id === "string")).map((item) => item.id));
+      return (after[key] ?? []).filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && "id" in item && typeof item.id === "string" && !known.has(item.id)));
+    };
+    // Una apertura no puede traer ventas, pagos, devoluciones ni movimientos de
+    // stock. Esta guarda evita que el arreglo de compatibilidad amplíe el
+    // alcance de una operación ya encolada.
+    if (!after.cashOpen || !after.activeShift || newItems("sales").length || newItems("payments").length || newItems("returnsLog").length || newItems("stockMovements").length || newItems("shiftLog").length !== 1 || newItems("cashLedger").length !== 1) return false;
+
+    const withBusinessDate = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)
+      ? `${businessDate}${value.slice(10)}`
+      : value;
+    const targetIso = withBusinessDate(write.queuedAt);
+    if (typeof targetIso !== "string") return false;
+    const formatLocal = (iso: string) => new Date(iso).toLocaleString("es-AR", {
+      timeZone: "America/Argentina/Buenos_Aires", day: "numeric", month: "numeric", year: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    const normalizeRecord = (item: Record<string, unknown>) => ({
+      ...item,
+      ...(typeof item.openedAtISO === "string" ? { openedAtISO: withBusinessDate(item.openedAtISO), openedAt: formatLocal(withBusinessDate(item.openedAtISO) as string) } : {}),
+      ...(typeof item.atISO === "string" ? { atISO: withBusinessDate(item.atISO), at: formatLocal(withBusinessDate(item.atISO) as string) } : {}),
+    });
+    const knownShiftIds = new Set((before.shiftLog ?? []).map((item) => item.id));
+    const knownLedgerIds = new Set((before.cashLedger ?? []).map((item) => item.id));
+    const state: OperationalSnapshot = {
+      ...after,
+      activeShift: normalizeRecord(after.activeShift as unknown as Record<string, unknown>) as typeof after.activeShift,
+      shiftLog: (after.shiftLog ?? []).map((item) => knownShiftIds.has(item.id) ? item : normalizeRecord(item as unknown as Record<string, unknown>)) as typeof after.shiftLog,
+      cashLedger: (after.cashLedger ?? []).map((item) => knownLedgerIds.has(item.id) ? item : normalizeRecord(item as unknown as Record<string, unknown>)) as typeof after.cashLedger,
+    };
+    const repaired: PendingOperationalWrite = {
+      ...write,
+      state,
+      event: {
+        ...write.event,
+        action: "Caja abierta",
+        detail: `${label} · Apertura de caja Maure normalizada desde la cola local previa a la activación de la fecha operativa.`.slice(0, 800),
+        recordedAt: targetIso,
+        testOperatingDate: businessDate,
+        testLabel: label,
+      },
+      queuedAt: targetIso,
+    };
+    await this.save(site, { ...queue, blocked: undefined, writes: [repaired, ...queue.writes.slice(1)] });
+    return true;
+  }
 }

@@ -1149,6 +1149,24 @@ export default function Home() {
     if (outbox.count() > 0) throw new Error("Quedan operaciones pendientes.");
   };
   useEffect(() => {
+    // La primera apertura de la prueba pudo quedar en cola unos milisegundos
+    // antes de recibir la ventana de fecha desde la API. Se corrige solamente
+    // esa escritura local, con sus restricciones dentro de OperationalOutbox;
+    // no modifica ninguna operación ya guardada ni otras clases de operación.
+    if (!user || site !== "Maure" || !testOperatingDate.active || testOperatingDate.site !== "Maure" || testOperatingDate.businessDate !== "2026-10-15") return;
+    void getOutbox()?.then(async (outbox) => {
+      const repaired = await outbox.normalizeLegacyTestOpening("Maure", "2026-10-15", "PRUEBA DE VALIDACIÓN");
+      if (!repaired) return;
+      setMessage("Se normalizó la única apertura de caja pendiente con la fecha de prueba auditada. Se enviará sin duplicarla.");
+      setPendingSync(outbox.count());
+      await drainSite("Maure");
+    }).catch(() => {
+      setMessage("No se pudo normalizar la apertura pendiente en este equipo. No se creó ninguna operación adicional.");
+    });
+  // La cola se abre por usuario y el método contiene el alcance estricto.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, site, testOperatingDate.active, testOperatingDate.site, testOperatingDate.businessDate]);
+  useEffect(() => {
     if (!user || !operationalReady || operationalVersion === 0) return;
     const event = operationalEventRef.current || {
       action: "Actualización operativa",
