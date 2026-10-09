@@ -2339,14 +2339,14 @@ export default function Home() {
       `Aumento aplicado a ${affected.length} productos para los cinco locales.`,
     );
   };
-  const recordAudit = (action: string, detail: string) => {
+  const recordAudit = (action: string, detail: string, auditSite = site) => {
     const auditDetail = isValidationTest ? `PRUEBA DE VALIDACIÓN · fecha operativa 15/10/2026 · ${detail}` : detail;
     operationalEventRef.current = { action, detail: auditDetail };
     setAudit((events) => [
       {
         id: crypto.randomUUID(),
         at: new Date().toLocaleString("es-AR"),
-        site,
+        site: auditSite,
         action,
         detail: auditDetail,
       },
@@ -3453,7 +3453,7 @@ export default function Home() {
       const data = await response.json() as { ok?: boolean; error?: string; testOperatingDate?: { active?: boolean; site?: string; businessDate?: string; label?: string; enabledAt?: string } };
       if (!response.ok || !data.ok || !data.testOperatingDate?.active) throw new Error(data.error || "No se pudo habilitar la fecha de prueba.");
       setTestOperatingDate({ active: true, ...data.testOperatingDate });
-      recordAudit("Fecha operativa de prueba habilitada", "Maure · 15/10/2026 · PRUEBA DE VALIDACIÓN");
+      recordAudit("Fecha operativa de prueba habilitada", "Maure · 15/10/2026 · PRUEBA DE VALIDACIÓN", "Maure");
       setMessage("Fecha de prueba habilitada exclusivamente para Maure. El reloj del equipo no fue modificado.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "No se pudo habilitar la fecha de prueba.");

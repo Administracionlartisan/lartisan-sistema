@@ -83,8 +83,16 @@ function validate_test_operating_snapshot(PDO $pdo, string $site, array $previou
     $active = active_test_operating_date($pdo);
     if ($active === null || $site !== (string) $active['site']) return;
     $businessDate = (string) $active['business_date'];
-    if ((string) ($event['testOperatingDate'] ?? '') !== $businessDate
-        || (string) ($event['testLabel'] ?? '') !== 'PRUEBA DE VALIDACIÓN') {
+    $hasCanonicalEvent = (string) ($event['testOperatingDate'] ?? '') === $businessDate
+        && (string) ($event['testLabel'] ?? '') === 'PRUEBA DE VALIDACIÓN';
+    // Migración de una única cola local creada por la primera versión del modo
+    // de prueba: al compactar una escritura pendiente se perdían los campos
+    // canónicos del evento, aunque el detalle auditado sí estaba identificado.
+    // Sólo se acepta mientras la ventana estricta de Maure está activa; las
+    // colecciones nuevas se siguen verificando más abajo contra la misma fecha.
+    $legacyLabeledReplay = !$hasCanonicalEvent
+        && str_contains((string) ($event['detail'] ?? ''), 'PRUEBA DE VALIDACIÓN');
+    if (!$hasCanonicalEvent && !$legacyLabeledReplay) {
         throw new InvalidArgumentException('La operación de prueba debe conservar su fecha y etiqueta auditadas.');
     }
     foreach (['sales', 'shiftLog', 'cashLedger', 'stockMovements', 'returnsLog', 'audit'] as $collection) {
@@ -105,6 +113,9 @@ function validate_test_operating_snapshot(PDO $pdo, string $site, array $previou
             }
             if ($collection === 'sales' && !str_contains((string) ($item['customer'] ?? ''), 'PRUEBA DE VALIDACIÓN')) {
                 throw new InvalidArgumentException('La venta de prueba debe estar identificada para auditoría.');
+            }
+            if ($collection === 'stockMovements' && !str_contains((string) ($item['detail'] ?? ''), 'PRUEBA DE VALIDACIÓN')) {
+                throw new InvalidArgumentException('El movimiento de stock de prueba debe estar identificado para auditoría.');
             }
         }
     }
