@@ -45,6 +45,7 @@ export type Sale = {
   method: string;
   invoiceType: "Factura B" | "Factura B electrónica" | "Factura A" | "Remito interno";
   customer: string;
+  customerId?: string;
   customerDocumentType?: "Consumidor final" | "DNI" | "CUIT";
   customerDocumentNumber?: string;
   customerTaxCondition?: string;
@@ -60,6 +61,7 @@ export type SavedOrder = {
   site: string;
   createdAt: string;
   customer: string;
+  customerId?: string;
   items: Product[];
   discount: number;
   payment: string;
@@ -96,6 +98,9 @@ export type StockMovement = {
 export type EnvelopeRecord = { id: string; site: string; amount: number; status: "En Caja Mayor" | "Retirado por Oscar"; at: string; withdrawnAmount: number };
 export type AuditEvent = { id: string; at: string; site: string; action: string; detail: string; userName?: string };
 export type Payment = { method: string; amount: number; saleId?: string; site?: string; shiftId?: string; createdAtISO?: string };
+/** Cliente persistido con clave documental única: los datos comerciales nunca se
+ * deducen por nombre para evitar unir personas distintas. */
+export type CustomerRecord = { id: string; site: string; name: string; documentType: "DNI" | "CUIT" | "Otro"; documentNumber: string; email?: string; phone?: string; address?: string; consentPromotions: boolean; createdAt: string; updatedAt: string; createdBy: string; active: boolean };
 export type PriceChange = { id: string; at: string; percentage: number; category: string; effectiveDate: string; beforePrices: Record<number, number>; afterPrices: Record<number, number> };
 export type EmployeeSchedule = { id: string; employee: string; site: string; startsAt: string; endsAt: string; toleranceMinutes: number };
 
@@ -128,6 +133,7 @@ export type OperationalSnapshot = {
   stockCountComments?: Record<number, string>;
   sales?: Sale[];
   payments?: Payment[];
+  customers?: CustomerRecord[];
   stockRequests?: StockRequest[];
   savedOrders?: SavedOrder[];
   cashAdjustments?: CashAdjustment[];

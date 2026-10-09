@@ -19,6 +19,7 @@ import CatalogEditor from "./modules/administracion/CatalogEditor";
 import { useCatalog } from "./modules/config/useCatalog";
 import { findScannedProduct } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
+import CustomerPanel from "./modules/clientes/CustomerPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
@@ -28,7 +29,7 @@ import type {
   ExpenseSyncSnapshot,
   OperationalLimits, OperationalSnapshot, PasswordResetRequest, Payment,
   PriceChange, Product, ReturnTransaction, Role, Sale, SavedOrder,
-  StockAdjustment, StockMovement, StockRequest, SystemHealth,
+  StockAdjustment, StockMovement, StockRequest, SystemHealth, CustomerRecord,
 } from "./modules/shared/types";
 import {
   DRIVE_INTEGRATIONS, GUIDE_UPDATES, INITIAL_SCHEDULES,
@@ -113,6 +114,8 @@ export default function Home() {
     [customerDocumentNumber, setCustomerDocumentNumber] = useState(""),
     [customerTaxCondition, setCustomerTaxCondition] = useState(""),
     [customerAddress, setCustomerAddress] = useState(""),
+    [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null),
+    [customers, setCustomers] = useState<CustomerRecord[]>([]),
     [invitedQuantities, setInvitedQuantities] = useState<Record<number, number>>({}),
     [message, setMessage] = useState(""),
     [cashAdjustmentKind, setCashAdjustmentKind] =
@@ -833,6 +836,14 @@ export default function Home() {
       }));
       setSales(all("sales") as Sale[]);
       setPayments(all("payments") as Payment[]);
+      // Compatibilidad con las primeras cargas del módulo: los registros
+      // previos no incluían local y se recuperan dentro del mismo estado del
+      // local, sin mezclarlos con la cartera de otra sucursal.
+      setCustomers(entries.flatMap(([local, entry]) =>
+        Array.isArray(entry.state.customers)
+          ? (entry.state.customers as CustomerRecord[]).map(customer => ({ ...customer, site: customer.site || local }))
+          : [],
+      ));
       setStockRequests(all("stockRequests") as StockRequest[]);
       setSavedOrders(all("savedOrders") as SavedOrder[]);
       setCashAdjustments(all("cashAdjustments") as CashAdjustment[]);
@@ -956,6 +967,7 @@ export default function Home() {
       stockCountComments: stockCountComments[local] || {},
       sales: localSales,
       payments: payments.filter((item) => item.saleId && saleIds.has(item.saleId)),
+      customers: customers.filter((item) => item.site === local),
       stockRequests: filterBySite(stockRequests),
       savedOrders: filterBySite(savedOrders),
       cashAdjustments: filterBySite(cashAdjustments),
@@ -2642,6 +2654,7 @@ export default function Home() {
       Auditoria: [["Fecha", "Usuario", "Local", "Acción", "Detalle"], ...auditHistory.map((row) => [row.at, row.userName, row.site, row.action, row.detail])],
       Stock: [["Producto", "Categoría", "Stock actual", "Mínimo total", "Local más bajo", "Stock más bajo", "Bajo mínimo"], ...stockReportRows.map((row) => [row.name, row.category, row.stock, row.minimum, row.lowestSite, row.lowestStock, row.belowMinimum ? "Sí" : "No"])],
       Promociones: [["Local", "Operaciones con beneficio", "Con descuento", "Con invitación", "Unidades invitadas", "Venta bruta beneficiada", "Descuento", "Venta neta"], ...promotionRows.map((row) => [row.site, row.operations, row.discounted, row.invited, row.invitationUnits, row.gross, row.discount, row.net])],
+      Clientes: [["Cliente", "Documento", "Local", "Ventas", "Devoluciones", "Última compra", "Venta neta"], ...customers.filter(customer => reportSite === "Todos los locales" || customer.site === reportSite).map(customer => { const customerSales = reportSales.filter(sale => sale.customerId === customer.id); const saleIds = new Set(customerSales.map(sale => sale.id)); return [customer.name, `${customer.documentType} ${customer.documentNumber}`, customer.site, customerSales.length, returnsLog.filter(item => saleIds.has(item.saleId)).length, customerSales[0]?.createdAtISO || "", customerSales.reduce((total, sale) => total + sale.net, 0)]; })],
     };
     downloadCsv(`Informe_${adminReport}_${reportFrom}_${reportTo}.csv`, [...heading, ...(reportRows[adminReport] || [
       ["Local", "Venta neta", "Tickets", "Ticket promedio", "Estado caja"],
@@ -2715,6 +2728,7 @@ export default function Home() {
       site,
       createdAt: new Date().toLocaleString("es-AR"),
       customer,
+      customerId: selectedCustomerId || undefined,
       items: [...cart],
       discount,
       payment,
@@ -2926,6 +2940,7 @@ export default function Home() {
       method: splitPayment ? "Múltiple" : payment,
       invoiceType,
       customer,
+      customerId: selectedCustomerId || undefined,
       customerDocumentType,
       customerDocumentNumber: customerDocumentNumber.replace(/\D/g, ""),
       customerTaxCondition,
@@ -2988,6 +3003,7 @@ export default function Home() {
     setSplitPayment(false);
     setSplitPayments([{ method: "Efectivo", amount: 0 }, { method: "Transferencia", amount: 0 }]);
     setCustomer("Consumidor final");
+    setSelectedCustomerId(null);
   };
   const printReceipt = () => {
     if (!receiptSale) return;
@@ -4129,9 +4145,13 @@ export default function Home() {
                   </label>
                   <label className="mt-3 block text-sm font-bold">
                     Cliente
+                    <select value={selectedCustomerId || ""} onChange={(event) => { const selected = customers.find(item => item.id === event.target.value); setSelectedCustomerId(selected?.id || null); if (!selected) return; setCustomer(selected.name); setCustomerDocumentType(selected.documentType === "Otro" ? "DNI" : selected.documentType); setCustomerDocumentNumber(selected.documentNumber); setCustomerAddress(selected.address || ""); }} className="mt-1 w-full rounded border p-2 font-normal">
+                      <option value="">Buscar cliente registrado por documento…</option>
+                      {customers.filter(item => item.site === site && item.active).map(item => <option key={item.id} value={item.id}>{item.name} · {item.documentType} {item.documentNumber}</option>)}
+                    </select>
                     <input
                       value={customer}
-                      onChange={(event) => setCustomer(event.target.value)}
+                      onChange={(event) => { setCustomer(event.target.value); setSelectedCustomerId(null); }}
                       className="mt-1 w-full rounded border p-2 font-normal"
                       placeholder="Consumidor final o razón social"
                     />
@@ -5843,17 +5863,7 @@ export default function Home() {
               </p>
             </>
           ) : tab === "Clientes" ? (
-            <>
-              <Heading
-                k="CLIENTES"
-                h="Base de clientes"
-                p="Opcional en cada venta; se pedirá consentimiento antes de promociones."
-              />
-              {/* El alta de clientes todavía no está implementada: el botón no tenía acción. */}
-              <button disabled className="rounded bg-[#183a67] px-4 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
-                Registrar cliente (próximamente)
-              </button>
-            </>
+            <CustomerPanel site={site} customers={customers} sales={sales} returnsLog={returnsLog} canWrite={can("cobrar") || user.role === "administracion"} onSave={(record) => { const now = new Date().toISOString(); setCustomers(items => { const old = items.find(x => x.id === record.id); return old ? items.map(x => x.id === record.id ? { ...record, createdAt: old.createdAt, updatedAt: now, createdBy: old.createdBy, active: true } : x) : [{ ...record, createdAt: now, updatedAt: now, createdBy: user.name, active: true }, ...items]; }); recordAudit("Cliente actualizado", record.documentType + " " + record.documentNumber); }} onDeactivate={(id) => { setCustomers(items => items.map(item => item.id === id ? { ...item, active:false, updatedAt:new Date().toISOString() } : item)); recordAudit("Cliente desactivado", id); }} />
           ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
             <MrpPanel initialView="Recetas y costos" />
           ) : tab === "Legajos" && user.role === "administracion" ? (
@@ -8174,26 +8184,9 @@ export default function Home() {
                     </div>
                   )}
                   {adminReport === "Clientes" && (
-                    <div className="mt-5 grid gap-4 md:grid-cols-3">
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Base activa</b>
-                        <p className="mt-2 text-sm">
-                          Clientes con consentimiento de contacto.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Recurrencia</b>
-                        <p className="mt-2 text-sm">
-                          Frecuencia de compra, última visita y ticket promedio.
-                        </p>
-                      </div>
-                      <div className="rounded bg-[#eef2f6] p-4">
-                        <b>Campañas</b>
-                        <p className="mt-2 text-sm">
-                          Segmentos para promociones sin exponer datos
-                          innecesarios.
-                        </p>
-                      </div>
+                    <div className="mt-5 space-y-4">
+                      <div className="grid gap-4 md:grid-cols-3"><div className="rounded bg-[#eef2f6] p-4"><b>Base activa</b><p className="mt-2 text-2xl font-bold">{customers.filter(customer => customer.active && (reportSite === "Todos los locales" || customer.site === reportSite)).length}</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Ventas identificadas</b><p className="mt-2 text-2xl font-bold">{reportSales.filter(sale => Boolean(sale.customerId)).length}</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Devoluciones vinculadas</b><p className="mt-2 text-2xl font-bold">{returnsLog.filter(item => reportSales.some(sale => sale.id === item.saleId)).length}</p></div></div>
+                      <div className="overflow-auto rounded border"><table className="w-full min-w-[800px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Cliente</th><th className="p-3 text-left">Documento</th><th className="p-3 text-left">Local</th><th className="p-3 text-right">Ventas</th><th className="p-3 text-right">Devoluciones</th><th className="p-3 text-right">Venta neta</th></tr></thead><tbody>{customers.filter(customer => reportSite === "Todos los locales" || customer.site === reportSite).map(customer => { const customerSales = reportSales.filter(sale => sale.customerId === customer.id); const saleIds = new Set(customerSales.map(sale => sale.id)); return <tr key={customer.id} className="border-t"><td className="p-3 font-bold">{customer.name}{!customer.active && <span className="ml-2 text-xs text-slate-500">Inactivo</span>}</td><td className="p-3">{customer.documentType} {customer.documentNumber}</td><td className="p-3">{customer.site}</td><td className="p-3 text-right">{customerSales.length}</td><td className="p-3 text-right">{returnsLog.filter(item => saleIds.has(item.saleId)).length}</td><td className="p-3 text-right">{money.format(customerSales.reduce((total, sale) => total + sale.net, 0))}</td></tr>})}{!customers.length && <tr><td colSpan={6} className="p-4 text-slate-500">No hay clientes registrados para este filtro.</td></tr>}</tbody></table></div>
                     </div>
                   )}
                   {adminReport === "Promociones" && (

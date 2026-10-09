@@ -434,6 +434,9 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
         'envelopeRecords' => ['cobrar'],
         'cashLedger' => ['cobrar', 'egresos', 'transferirCaja'],
         'attendanceRecords' => ['cobrar', 'pedidos', 'incidencias'],
+        // La cartera pertenece al local y requiere una acción comercial; el
+        // servidor la filtra igual que el resto del snapshot.
+        'customers' => ['cobrar'],
     ];
     $serverOnly = ['prices', 'onlinePrices', 'limitsBySite', 'priceChanges', 'audit'];
     $result = $previous;
