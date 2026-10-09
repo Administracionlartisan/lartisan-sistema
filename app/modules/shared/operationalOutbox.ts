@@ -187,7 +187,10 @@ export class OperationalOutbox {
     if (site !== "Maure" || businessDate !== "2026-10-15" || label !== "PRUEBA DE VALIDACIÓN") return false;
     const queue = this.get(site);
     const write = queue.writes[0];
-    if (!write || write.event.action !== "Caja abierta" || write.event.testOperatingDate || write.event.testLabel) return false;
+    // Algunas versiones anteriores persistían el texto genérico
+    // «Actualización operativa». La identidad se determina por la diferencia
+    // exacta de estado que se valida debajo, no por una etiqueta mutable.
+    if (!write || write.event.testOperatingDate || write.event.testLabel) return false;
     const before = write.baseState;
     const after = write.state;
     const newItems = (key: "sales" | "payments" | "returnsLog" | "stockMovements" | "shiftLog" | "cashLedger") => {
