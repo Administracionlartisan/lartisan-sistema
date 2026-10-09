@@ -9,6 +9,7 @@ require __DIR__ . '/test_operating_date.php';
 require __DIR__ . '/mrp_sync.php';
 require __DIR__ . '/assistant.php';
 require __DIR__ . '/arca_wsfe.php';
+require __DIR__ . '/internal_chat.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -44,6 +45,7 @@ foreach ([
     'mrp' => static fn () => ensure_mrp_schema($pdo),
     'arca_wsfe' => static fn () => ensure_arca_wsfe_schema($pdo),
     'test_operating_date' => static fn () => ensure_test_operating_date_schema($pdo),
+    'internal_chat' => static fn () => ensure_internal_chat_schema($pdo),
 ] as $schema => $ensure) {
     try {
         $ensure();
@@ -765,6 +767,81 @@ if ($method === 'POST' && $route === 'auth/logout') {
 if ($method === 'GET' && $route === 'auth/me') {
     $user = require_user($pdo);
     json_response(['ok' => true, 'user' => public_user($user, $config)]);
+}
+
+// Chat interno: cada lectura y escritura vuelve a comprobar la participación
+// en el servidor. No hay rutas públicas ni enlaces que concedan acceso.
+if (str_starts_with($route, 'chat')) {
+    $chatUser = require_user($pdo);
+    ensure_internal_chat_schema($pdo);
+    chat_ensure_default_groups($pdo);
+    if ($method === 'GET' && preg_match('#^chat/attachments/([a-f0-9]{32})$#', $route, $matches)) {
+        chat_serve_attachment($pdo, $chatUser, $matches[1]);
+    }
+    if ($method === 'GET' && $route === 'chat/bootstrap') {
+        $settings = $pdo->prepare('SELECT sound_enabled,desktop_enabled FROM internal_chat_settings WHERE user_id=?');
+        $settings->execute([(int) $chatUser['id']]); $row = $settings->fetch() ?: ['sound_enabled' => 1, 'desktop_enabled' => 0];
+        $candidates = $pdo->query('SELECT id,full_name,role,assigned_location FROM users WHERE active=1 ORDER BY full_name ASC')->fetchAll();
+        $contacts = array_values(array_map(static fn ($item) => ['id' => (string) $item['id'], 'name' => $item['full_name'], 'role' => $item['role'], 'site' => $item['assigned_location']], array_filter($candidates, static fn ($item) => chat_can_contact($chatUser, $item))));
+        json_response(['ok' => true, 'settings' => ['sound' => (bool) $row['sound_enabled'], 'desktop' => (bool) $row['desktop_enabled']], 'contacts' => $contacts]);
+    }
+    if ($method === 'GET' && $route === 'chat/threads') {
+        $statement = $pdo->prepare('SELECT t.id FROM internal_chat_threads t JOIN internal_chat_participants p ON p.thread_id=t.id WHERE p.user_id=? ORDER BY t.site_name IS NULL, t.title');
+        $statement->execute([(int) $chatUser['id']]);
+        $threads = array_map(static fn ($id) => chat_serialized_thread($pdo, (string) $id, (int) $chatUser['id']), $statement->fetchAll(PDO::FETCH_COLUMN));
+        json_response(['ok' => true, 'threads' => $threads]);
+    }
+    if ($method === 'GET' && $route === 'chat/messages') {
+        $threadId = (string) ($_GET['thread'] ?? ''); chat_require_member($pdo, $threadId, $chatUser);
+        $query = trim((string) ($_GET['q'] ?? ''));
+        $messages = chat_message_rows($pdo, $threadId, (int) $chatUser['id'], $query);
+        foreach ($messages as &$message) $message['own'] = $message['sender']['id'] === (string) $chatUser['id'];
+        unset($message);
+        json_response(['ok' => true, 'messages' => $messages]);
+    }
+    if ($method === 'POST' && $route === 'chat/direct') {
+        $body = request_body(); $recipientId = (int) ($body['recipientId'] ?? 0);
+        $statement = $pdo->prepare('SELECT * FROM users WHERE id=? AND active=1'); $statement->execute([$recipientId]); $recipient = $statement->fetch();
+        if (!$recipient || !chat_can_contact($chatUser, $recipient)) json_response(['ok' => false, 'error' => 'No podés iniciar una conversación con este usuario.'], 403);
+        $ids = [(int) $chatUser['id'], $recipientId]; sort($ids, SORT_NUMERIC); $key = 'direct:' . implode(':', $ids);
+        $existing = $pdo->prepare("SELECT t.id FROM internal_chat_threads t JOIN internal_chat_participants a ON a.thread_id=t.id AND a.user_id=? JOIN internal_chat_participants b ON b.thread_id=t.id AND b.user_id=? WHERE t.kind=? LIMIT 1");
+        $existing->execute([$ids[0], $ids[1], $key]); $threadId = (string) ($existing->fetchColumn() ?: '');
+        if ($threadId === '') { $threadId = chat_id(); $pdo->prepare('INSERT INTO internal_chat_threads (id,kind,title,created_by) VALUES (?,?,?,?)')->execute([$threadId, $key, $recipient['full_name'], (int) $chatUser['id']]); foreach ($ids as $id) $pdo->prepare('INSERT INTO internal_chat_participants (thread_id,user_id) VALUES (?,?)')->execute([$threadId,$id]); audit($pdo, (int) $chatUser['id'], 'internal_chat_direct_created', 'thread=' . $threadId); }
+        json_response(['ok' => true, 'thread' => chat_serialized_thread($pdo, $threadId, (int) $chatUser['id'])]);
+    }
+    if ($method === 'POST' && $route === 'chat/messages') {
+        $body = request_body(); $threadId = (string) ($body['threadId'] ?? ''); chat_require_member($pdo, $threadId, $chatUser);
+        $clientId = strtolower(trim((string) ($body['clientId'] ?? '')));
+        if (!preg_match('/^[a-f0-9-]{16,36}$/', $clientId)) json_response(['ok' => false, 'error' => 'Identificador de envío inválido.'], 422);
+        $rate = $pdo->prepare('SELECT COUNT(*) FROM internal_chat_messages WHERE user_id=? AND created_at>=DATE_SUB(NOW(), INTERVAL 10 MINUTE)'); $rate->execute([(int) $chatUser['id']]);
+        if ((int) $rate->fetchColumn() >= 80) json_response(['ok' => false, 'error' => 'Esperá unos minutos antes de enviar más mensajes.'], 429);
+        $existing = $pdo->prepare('SELECT id FROM internal_chat_messages WHERE user_id=? AND client_message_id=?'); $existing->execute([(int) $chatUser['id'], $clientId]);
+        $messageId = (string) ($existing->fetchColumn() ?: '');
+        if ($messageId === '') {
+            try { $text = chat_normalize_text($body['body'] ?? '', 4000); } catch (InvalidArgumentException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
+            $rawAttachments = is_array($body['attachments'] ?? null) ? $body['attachments'] : [];
+            if (count($rawAttachments) > 3) json_response(['ok' => false, 'error' => 'Podés adjuntar hasta tres archivos por mensaje.'], 422);
+            try { $files = array_map('chat_attachment_payload', $rawAttachments); } catch (InvalidArgumentException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
+            $messageId = chat_id(); $pdo->beginTransaction();
+            try { $pdo->prepare('INSERT INTO internal_chat_messages (id,thread_id,user_id,client_message_id,body) VALUES (?,?,?,?,?)')->execute([$messageId,$threadId,(int)$chatUser['id'],$clientId,$text]); $insertFile=$pdo->prepare('INSERT INTO internal_chat_attachments (id,message_id,original_name,mime_type,byte_size,content) VALUES (?,?,?,?,?,?)'); foreach($files as $file) $insertFile->execute([$file['id'],$messageId,$file['name'],$file['mime'],strlen($file['content']),$file['content']]); audit($pdo,(int)$chatUser['id'],'internal_chat_message_created','thread='.$threadId.';message='.$messageId.';attachments='.count($files)); $pdo->commit(); } catch(Throwable $error) { if($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+        }
+        json_response(['ok' => true, 'messageId' => $messageId]);
+    }
+    if ($method === 'POST' && $route === 'chat/read') {
+        $body=request_body(); $threadId=(string)($body['threadId']??''); chat_require_member($pdo,$threadId,$chatUser); $pdo->prepare('UPDATE internal_chat_participants SET last_read_at=NOW() WHERE thread_id=? AND user_id=?')->execute([$threadId,(int)$chatUser['id']]); json_response(['ok'=>true]);
+    }
+    if ($method === 'POST' && $route === 'chat/settings') {
+        $body=request_body(); $pdo->prepare('INSERT INTO internal_chat_settings (user_id,sound_enabled,desktop_enabled) VALUES (?,?,?) ON DUPLICATE KEY UPDATE sound_enabled=VALUES(sound_enabled),desktop_enabled=VALUES(desktop_enabled)')->execute([(int)$chatUser['id'],!empty($body['sound'])?1:0,!empty($body['desktop'])?1:0]); audit($pdo,(int)$chatUser['id'],'internal_chat_settings_updated'); json_response(['ok'=>true]);
+    }
+    if ($method === 'POST' && preg_match('#^chat/messages/([a-f0-9]{32})/(edit|delete)$#', $route, $matches)) {
+        $statement=$pdo->prepare('SELECT m.*,t.id AS thread_access FROM internal_chat_messages m JOIN internal_chat_participants t ON t.thread_id=m.thread_id AND t.user_id=? WHERE m.id=?'); $statement->execute([(int)$chatUser['id'],$matches[1]]); $message=$statement->fetch();
+        if(!$message || (int)$message['user_id'] !== (int)$chatUser['id'] || $message['deleted_at']) json_response(['ok'=>false,'error'=>'No podés modificar este mensaje.'],403);
+        if(strtotime((string)$message['created_at']) < time()-900) json_response(['ok'=>false,'error'=>'El mensaje sólo puede modificarse durante 15 minutos.'],422);
+        if($matches[2] === 'edit') { $body=request_body(); try{$text=chat_normalize_text($body['body']??'',4000);}catch(InvalidArgumentException $error){json_response(['ok'=>false,'error'=>$error->getMessage()],422);} $pdo->prepare('UPDATE internal_chat_messages SET body=?,edited_at=NOW() WHERE id=?')->execute([$text,$message['id']]); audit($pdo,(int)$chatUser['id'],'internal_chat_message_edited','message='.$message['id']); }
+        else { $pdo->prepare('UPDATE internal_chat_messages SET body=\'\',deleted_at=NOW() WHERE id=?')->execute([$message['id']]); audit($pdo,(int)$chatUser['id'],'internal_chat_message_deleted','message='.$message['id']); }
+        json_response(['ok'=>true]);
+    }
+    json_response(['ok' => false, 'error' => 'Ruta de chat no encontrada.'], 404);
 }
 
 if ($method === 'GET' && $route === 'catalog') {
