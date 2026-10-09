@@ -1453,21 +1453,26 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onScannerKey, true);
   }, [tab, site, cashIsOpen, stock, prices, onlinePrices, products, catalog.ready, saleChannel, receivingRequestId, stockRequests, receivedScanCounts]);
   const siteLimits = limitsBySite[site];
-  const currentCashLedger = cashLedger.filter(
-    (entry) => entry.site === site && entry.shiftId === activeShift?.id,
-  );
+  // La conciliación en pantalla corresponde exclusivamente al turno abierto.
+  // Una anulación posterior conserva su asiento en el libro mayor del turno
+  // original, pero no puede convertir una caja cerrada en un falso saldo.
+  const currentCashLedger = activeShift?.id
+    ? cashLedger.filter(
+        (entry) => entry.site === site && entry.shiftId === activeShift.id,
+      )
+    : [];
   const siteCashLedger = cashLedger.filter((entry) => entry.site === site);
   const ledgerCashBalance = currentCashLedger.reduce(
     (total, entry) => total + entry.cashImpact,
     0,
   );
   const appendCashLedgerEntry = (
-    entry: Omit<CashLedgerEntry, "id" | "site" | "shiftId" | "at" | "createdBy">,
+    entry: Omit<CashLedgerEntry, "id" | "site" | "at" | "createdBy">,
   ) => {
     const ledgerEntry: CashLedgerEntry = {
       id: crypto.randomUUID(),
       site,
-      shiftId: activeShift?.id,
+      shiftId: entry.shiftId ?? activeShift?.id,
       at: new Date().toLocaleString("es-AR"),
       atISO: new Date().toISOString(),
       createdBy: user?.name || "Sistema",
@@ -1884,9 +1889,10 @@ export default function Home() {
     );
     return intervals;
   }, [hourInterval, reportFrom, reportSite, reportTo, sales]);
-  const expected = ledgerCashBalance - expenses - withdrawals,
-    cashRemaining = counted - (requiresEnvelope ? envelope : 0),
-    cashVariance = counted - expected;
+  const cashControlIsOpen = Boolean(cashIsOpen && activeShift?.id);
+  const expected = cashControlIsOpen ? ledgerCashBalance - expenses - withdrawals : 0,
+    cashRemaining = cashControlIsOpen ? counted - (requiresEnvelope ? envelope : 0) : 0,
+    cashVariance = cashControlIsOpen ? counted - expected : 0;
   const logout = async () => {
     await fetch(`${API_BASE}/auth/logout`, {
       method: "POST",
@@ -3015,6 +3021,10 @@ export default function Home() {
         cashImpact: item.method === "Efectivo" ? -amount : 0,
         paymentMethod: item.method,
         reference: sale.id,
+        // El asiento se vincula al turno que cobró la venta, incluso si la
+        // anulación se registra después del cierre. Así el libro mayor queda
+        // trazable sin contaminar la próxima caja abierta.
+        shiftId: item.shiftId,
         detail: "Reversión de cobro por venta anulada",
       });
     });
@@ -4434,6 +4444,7 @@ export default function Home() {
                     type="number"
                     value={expenses}
                     onChange={(e) => setExpenses(Number(e.target.value))}
+                    disabled={!cashControlIsOpen}
                     className="mt-1 w-full rounded border p-2"
                   />
                   <label className="mt-3 block text-sm font-bold">
@@ -4443,20 +4454,25 @@ export default function Home() {
                     type="number"
                     value={withdrawals}
                     onChange={(e) => setWithdrawals(Number(e.target.value))}
+                    disabled={!cashControlIsOpen}
                     className="mt-1 w-full rounded border p-2"
                   />
-                  <p className="mt-3 rounded bg-[#eef2f6] p-2 font-bold">
-                    Efectivo esperado: {money.format(expected)}
-                  </p>
-                  <label className="mt-3 block text-sm font-bold">
-                    Efectivo contado en caja
-                  </label>
-                  <input
-                    type="number"
-                    value={counted}
-                    onChange={(e) => setCounted(Number(e.target.value))}
-                    className="mt-1 w-full rounded border p-2"
-                  />
+                  {cashControlIsOpen ? <>
+                    <p className="mt-3 rounded bg-[#eef2f6] p-2 font-bold">
+                      Efectivo esperado: {money.format(expected)}
+                    </p>
+                    <label className="mt-3 block text-sm font-bold">
+                      Efectivo contado en caja
+                    </label>
+                    <input
+                      type="number"
+                      value={counted}
+                      onChange={(e) => setCounted(Number(e.target.value))}
+                      className="mt-1 w-full rounded border p-2"
+                    />
+                  </> : <p className="mt-3 rounded bg-[#eef2f6] p-3 text-sm text-slate-600">
+                    Caja cerrada: la conciliación del turno quedó registrada. Abrí una caja para iniciar una nueva conciliación.
+                  </p>}
                   {requiresEnvelope && (
                     <>
                       <label className="mt-3 block text-sm font-bold">
@@ -4466,6 +4482,7 @@ export default function Home() {
                         type="number"
                         value={envelope}
                         onChange={(e) => setEnvelope(Number(e.target.value))}
+                        disabled={!cashControlIsOpen}
                         className="mt-1 w-full rounded border p-2"
                       />
                       <p className="mt-1 text-xs text-slate-500">
@@ -4474,17 +4491,19 @@ export default function Home() {
                       </p>
                     </>
                   )}
-                  <p
-                    className="mt-3 rounded bg-[#eef2f6] p-3 font-bold"
-                  >
-                    Efectivo que queda en caja: {money.format(cashRemaining)}
-                  </p>
-                  <p
-                    className={`mt-2 rounded p-3 text-sm font-bold ${cashVariance === 0 ? "bg-[#eef5ef]" : "bg-[#fff1ec]"}`}
-                  >
-                    Diferencia contra efectivo esperado: {money.format(cashVariance)}
-                  </p>
-                  {Math.abs(cashVariance) > siteLimits.maxCashDifference && (
+                  {cashControlIsOpen && <>
+                    <p
+                      className="mt-3 rounded bg-[#eef2f6] p-3 font-bold"
+                    >
+                      Efectivo que queda en caja: {money.format(cashRemaining)}
+                    </p>
+                    <p
+                      className={`mt-2 rounded p-3 text-sm font-bold ${cashVariance === 0 ? "bg-[#eef5ef]" : "bg-[#fff1ec]"}`}
+                    >
+                      Diferencia contra efectivo esperado: {money.format(cashVariance)}
+                    </p>
+                  </>}
+                  {cashControlIsOpen && Math.abs(cashVariance) > siteLimits.maxCashDifference && (
                     <label className="mt-3 block text-sm font-bold">
                       Motivo de la diferencia (obligatorio para cerrar)
                       <input
