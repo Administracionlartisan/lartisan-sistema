@@ -40,6 +40,24 @@ test("sin continuidad comprobada no se acumula", () => {
   assert.deepEqual(queue.writes[1].baseState, s(0));
 });
 
+test("la compactación conserva la fecha operativa restringida y su etiqueta", () => {
+  let queue = appendToQueue({ writes: [] }, write("a", s(1), s(0)), false);
+  const validationWrite = {
+    ...write("b", s(2), s(1)),
+    site: "Maure",
+    event: {
+      action: "Ingreso manual de prueba",
+      detail: "PRUEBA DE VALIDACIÓN",
+      recordedAt: "2026-10-15T12:00:00Z",
+      testOperatingDate: "2026-10-15",
+      testLabel: "PRUEBA DE VALIDACIÓN",
+    },
+  };
+  queue = appendToQueue(queue, validationWrite, true);
+  assert.equal(queue.writes[0].event.testOperatingDate, "2026-10-15");
+  assert.equal(queue.writes[0].event.testLabel, "PRUEBA DE VALIDACIÓN");
+});
+
 test("solo se confirma el primer envío de la cola", () => {
   const queue = { writes: [write("a", s(1), s(0)), write("b", s(2), s(1))] };
   assert.equal(acknowledgeInQueue(queue, "b").writes.length, 2);

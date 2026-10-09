@@ -41,9 +41,12 @@ export function appendToQueue(queue: SiteQueue, write: PendingOperationalWrite, 
       queuedAt: last.queuedAt,
       operations: (last.operations ?? 1) + incoming.operations,
       event: {
-        action: incoming.event.action,
+        // Conserva la identidad de la operación (incluida la fecha operativa
+        // restringida) al compactar reintentos. Si se descartaran estos campos,
+        // la API rechazaría un cambio auditado de Maure por carecer de su
+        // etiqueta y fecha de prueba.
+        ...incoming.event,
         detail: `${incoming.event.detail} (${(last.operations ?? 1) + incoming.operations} operaciones acumuladas sin conexión)`.slice(0, 800),
-        recordedAt: incoming.event.recordedAt,
       },
     };
   } else {
