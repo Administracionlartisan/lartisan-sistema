@@ -52,13 +52,13 @@ return [
     'expense_sync' => [
         'range' => "'GASTOS OPERATIVOS'!A7:Z10000",
     ],
-    // Cierres diarios: esta integración escribe sólo las celdas configuradas
-    // de la fila ya existente para la fecha. Las credenciales OAuth se guardan
-    // cifradas en la base de datos; no copie tokens ni secretos en este archivo.
-    // El owner de cada archivo debe dar permiso Editor a la cuenta de Google que
-    // complete la autorización desde Administración.
+    // Cierres diarios: Apps Script escribe sólo las celdas configuradas de la
+    // fila ya existente para la fecha. Se ejecuta con la cuenta propietaria de
+    // las planillas, por lo que no exige permisos sobre Google Cloud.
     'cash_sheet_sync' => [
-        'redirect_uri' => 'https://www.lartisantaller.com/sistema-api/admin/cash-sheets/google-callback',
+        'provider' => 'apps_script',
+        'apps_script_url' => 'PEGAR_URL_DE_LA_IMPLEMENTACION_WEB',
+        'apps_script_secret' => 'CLAVE_ALEATORIA_DE_32_O_MAS_CARACTERES',
         'locations' => [
             'Recoleta' => [
                 'spreadsheet_id' => '131eexo3o0ALWmrOhu0HfUnTLTVH33aHTGQ2sEMlwHtk', 'sheet' => 'INGRESOS', 'header_row' => 5,

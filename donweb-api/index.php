@@ -323,11 +323,14 @@ if ($method === 'GET' && $route === 'admin/cash-sheets/status') {
         $configured[$site] = is_array($item) && trim((string) ($item['spreadsheet_id'] ?? '')) !== '' && trim((string) ($item['sheet'] ?? '')) !== '';
     }
     $last = $pdo->query("SELECT site,status,business_date,sheet_name,target_row,finished_at,error_message FROM cash_sheet_sync_runs ORDER BY started_at DESC LIMIT 20")->fetchAll();
-    json_response(['ok' => true, 'connected' => cash_sheet_is_connected($pdo, $config), 'configured' => $configured, 'lastRuns' => $last]);
+    json_response(['ok' => true, 'provider' => cash_sheet_provider($config), 'connected' => cash_sheet_is_connected($pdo, $config), 'configured' => $configured, 'lastRuns' => $last]);
 }
 
 if ($method === 'GET' && $route === 'admin/cash-sheets/authorization-url') {
     $admin = require_user($pdo, ['administracion']);
+    if (cash_sheet_provider($config) === 'apps_script') {
+        json_response(['ok' => false, 'error' => 'La integración usa Apps Script. Publicá el script con el dueño de las planillas y configurá su URL segura en el servidor.'], 409);
+    }
     try {
         json_response(['ok' => true, 'authorizationUrl' => cash_sheet_authorization_url($pdo, $config, (int) $admin['id'])]);
     } catch (RuntimeException $error) {

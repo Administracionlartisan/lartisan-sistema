@@ -3235,7 +3235,7 @@ export default function Home() {
     closeId: string,
     payload: { businessDate: string; payments: { method: string; amount: number }[]; metrics: Record<string, number> },
   ) => {
-    setSyncStatus("Enviando el cierre a Google Sheets…");
+    setSyncStatus("Enviando el cierre a la planilla del local…");
     try {
       const response = await fetch(`${API_BASE}/cash-sheets/close`, {
         method: "POST",
@@ -3244,31 +3244,20 @@ export default function Home() {
         body: JSON.stringify({ site, closeId, ...payload }),
       });
       const data = await response.json() as { ok?: boolean; error?: string; sync?: { alreadySynced?: boolean; sheet?: string; row?: number } };
-      if (!response.ok || !data.ok || !data.sync) throw new Error(data.error || "Google no confirmó la actualización.");
+      if (!response.ok || !data.ok || !data.sync) throw new Error(data.error || "La planilla no confirmó la actualización.");
       setSyncStatus(`${data.sync.alreadySynced ? "Cierre ya sincronizado" : "Drive sincronizado"}: ${data.sync.sheet}, fila ${data.sync.row}.`);
     } catch (error) {
       // El cierre comercial ya quedó registrado y la API conserva el intento
       // por closeId; reintentar no duplica ni pisa una fila distinta.
-      const detail = error instanceof Error ? error.message : "No se pudo contactar a Google Sheets.";
+      const detail = error instanceof Error ? error.message : "No se pudo contactar a la planilla.";
       setSyncStatus(`Cierre guardado en el sistema. Drive pendiente: ${detail}`);
     }
   };
 
   const authorizeCashSheets = async () => {
     if (user?.role !== "administracion") return;
-    setSyncStatus("Preparando la autorización segura de Google Sheets…");
-    try {
-      const response = await fetch(`${API_BASE}/admin/cash-sheets/authorization-url`, {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const data = await response.json() as { ok?: boolean; authorizationUrl?: string; error?: string };
-      if (!response.ok || !data.ok || !data.authorizationUrl) throw new Error(data.error || "No se pudo iniciar la autorización.");
-      window.location.assign(data.authorizationUrl);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "No se pudo iniciar la autorización.";
-      setSyncStatus(`Google Sheets no quedó conectado: ${detail}`);
-    }
+    setSyncStatus("Esta integración se configura con Apps Script desde la cuenta propietaria de las planillas.");
+    setSyncStatus("Apps Script debe ser publicado una vez por el dueño de las planillas. Luego Administración carga su URL /exec y la clave compartida en el servidor; no hace falta Google Cloud.");
   };
 
   const confirmClose = () => {
@@ -4552,12 +4541,12 @@ export default function Home() {
                   </button>
                   {closed && (
                     <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
-                      Cierre guardado en el sistema. El estado de Google Sheets
+                      Cierre guardado en el sistema. El estado de la planilla
                       se muestra abajo.
                     </p>
                   )}
                   <div className="mt-4 rounded border border-[#d9d4c9] bg-[#fffdf8] p-3 text-xs">
-                    <b>Integración Google Sheets</b>
+                    <b>Integración de planilla diaria</b>
                     <p className="mt-1">
                       Hoja destino: {SHEET_CONFIG[site].sheet}. Cada medio de
                       pago se valida contra el encabezado propio del local antes
@@ -4573,7 +4562,7 @@ export default function Home() {
                         onClick={() => void authorizeCashSheets()}
                         className="mt-3 rounded border border-[#183a67] px-3 py-2 text-xs font-bold text-[#183a67]"
                       >
-                        Conectar Google Sheets para cierres
+                        Ver requisitos de Apps Script
                       </button>
                     )}
                   </div>

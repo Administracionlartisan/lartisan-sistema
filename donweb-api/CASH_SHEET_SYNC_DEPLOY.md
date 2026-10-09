@@ -1,31 +1,26 @@
-# Publicación de cierres en Google Sheets
+# Sincronización de cierres diarios con Google Apps Script
 
-Archivos a publicar en `public_html/sistema-api`:
+Al cerrar una caja, el sistema conserva primero el cierre comercial y después envía el resumen a la fila ya existente de la planilla diaria del local. Apps Script corre con la cuenta propietaria de las planillas, por lo que no requiere permisos de Google Cloud ni crear un cliente OAuth.
 
-- `index.php`
-- `cash_sheet_sync.php`
+## Instalación única (la hace el dueño de las planillas)
 
-No se debe reemplazar `config.local.php`. En el archivo privado de integración
-fuera de `public_html` (`/lartisan-backup-config.php`) se debe añadir la
-sección `cash_sheet_sync` de `config.example.php`. Conservar las claves de
-respaldo que ya existen y agregar esta nueva sección, no reemplazar el archivo
-completo.
+1. Abrir [script.google.com](https://script.google.com/) con la cuenta propietaria de las cuatro planillas.
+2. Crear un proyecto nuevo y pegar el contenido de `google-apps-script/LArtisanCashCloseSync.gs`.
+3. En **Configuración del proyecto → Propiedades del script**, crear `LARTISAN_SYNC_SECRET` con una clave aleatoria de al menos 32 caracteres.
+4. Elegir **Implementar → Nueva implementación → Aplicación web**. Configurar **Ejecutar como: Yo** y **Quién tiene acceso: Cualquier persona**. Autorizar el acceso a las planillas al publicar.
+5. Copiar la URL final que termina en `/exec` y entregarla, junto con la clave creada, únicamente al administrador del servidor.
+6. En el archivo privado `lartisan-cash-sheet-config.php` de Ferozo (fuera de `public_html`) completar `apps_script_url` y `apps_script_secret` con esos dos valores exactos.
 
-En Google Cloud, dentro del cliente OAuth ya utilizado por el sistema, agregar
-la URI de redirección exacta:
+Novo Pacheco permanece excluido: no se habilita ninguna escritura para ese local.
 
-`https://www.lartisantaller.com/sistema-api/admin/cash-sheets/google-callback`
+## Protecciones
 
-Luego, una persona con acceso de edición a las planillas debe abrir la ruta de
-autorización como Administración:
+- Firma HMAC SHA-256: la URL sola no permite generar cierres válidos.
+- Idempotencia por `closeId`: reintentar no duplica la escritura.
+- No agrega filas; exige una fila existente para la fecha.
+- No reemplaza fórmulas ni valores distintos ya cargados.
+- Los medios de pago se validan contra el encabezado específico de cada local.
 
-`GET /sistema-api/admin/cash-sheets/authorization-url`
+## Prueba de aceptación
 
-La cuenta Google elegida debe tener permiso Editor en las planillas de
-Recoleta, Villa Mitre, Congreso y Maure. Novo Pacheco queda bloqueado hasta
-registrar su ID, pestaña y encabezados verificados.
-
-La integración sólo actualiza la fila preexistente de la fecha del cierre. No
-crea filas, no pisa fórmulas y se detiene si alguna celda ya contiene un valor
-distinto. Cada cierre se identifica por un UUID y un reintento no duplica la
-carga.
+Con una caja de prueba, cerrar con importes pequeños y verificar que el cierre quede guardado en el sistema, que se actualice sólo la fila del día correcto y que un segundo intento responda que ya está sincronizado.

@@ -54,6 +54,20 @@ if (is_file($privateIntegrationPath)) {
     }
 }
 
+// La escritura de cierres en Google Sheets se configura por separado de los
+// respaldos: así no es necesario abrir ni mezclar el archivo que contiene
+// credenciales de Drive. El archivo vive fuera de public_html.
+$privateCashSheetPath = dirname(__DIR__, 2) . '/lartisan-cash-sheet-config.php';
+if (is_file($privateCashSheetPath)) {
+    $privateCashSheetConfig = require $privateCashSheetPath;
+    if (is_array($privateCashSheetConfig)) {
+        $config['cash_sheet_sync'] = array_replace_recursive(
+            $config['cash_sheet_sync'] ?? [],
+            $privateCashSheetConfig
+        );
+    }
+}
+
 // La clave de OpenAI vive fuera de public_html y nunca se envía al navegador.
 $privateAiPath = dirname(__DIR__, 2) . '/lartisan-ai-config.php';
 if (is_file($privateAiPath)) {

@@ -88,9 +88,23 @@ function cash_sheet_stored_refresh_token(PDO $pdo, array $config): string
     return is_string($token) ? $token : '';
 }
 
+function cash_sheet_provider(array $config): string
+{
+    $provider = strtolower(trim((string) ($config['cash_sheet_sync']['provider'] ?? 'oauth')));
+    return $provider === 'apps_script' ? 'apps_script' : 'oauth';
+}
+
+function cash_sheet_apps_script_is_configured(array $config): bool
+{
+    $sync = $config['cash_sheet_sync'] ?? [];
+    return filter_var((string) ($sync['apps_script_url'] ?? ''), FILTER_VALIDATE_URL) !== false
+        && strlen(trim((string) ($sync['apps_script_secret'] ?? ''))) >= 24;
+}
+
 function cash_sheet_is_connected(PDO $pdo, array $config): bool
 {
     ensure_cash_sheet_sync_schema($pdo);
+    if (cash_sheet_provider($config) === 'apps_script') return cash_sheet_apps_script_is_configured($config);
     return cash_sheet_stored_refresh_token($pdo, $config) !== '';
 }
 
@@ -205,10 +219,40 @@ function cash_sheet_config_for_site(array $config, string $site): array
 {
     $locations = $config['cash_sheet_sync']['locations'] ?? [];
     $item = is_array($locations) ? ($locations[$site] ?? null) : null;
+    if (is_array($item) && empty($item['sheet']) && !empty($item['sheet_name'])) $item['sheet'] = $item['sheet_name'];
     if (!is_array($item) || trim((string) ($item['spreadsheet_id'] ?? '')) === '' || trim((string) ($item['sheet'] ?? '')) === '') {
         throw new RuntimeException('La planilla de ' . $site . ' no está configurada aún en el servidor.');
     }
     return $item;
+}
+
+function cash_sheet_apps_script_sync(array $config, array $payload): array
+{
+    if (!cash_sheet_apps_script_is_configured($config)) {
+        throw new RuntimeException('Apps Script todavía no está configurado. Falta la URL de implementación o la clave compartida en el servidor.');
+    }
+    $sync = $config['cash_sheet_sync'];
+    $body = [
+        'version' => 1,
+        'closeId' => $payload['closeId'],
+        'site' => $payload['site'],
+        'businessDate' => $payload['businessDate'],
+        'payments' => $payload['payments'],
+        'metrics' => $payload['metrics'],
+    ];
+    $canonical = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($canonical === false) throw new RuntimeException('No se pudo preparar el cierre para Apps Script.');
+    $body['signature'] = hash_hmac('sha256', $canonical, (string) $sync['apps_script_secret']);
+    $response = cash_sheet_http((string) $sync['apps_script_url'], [
+        'method' => 'POST',
+        'headers' => ['Content-Type: application/json'],
+        'json' => $body,
+    ]);
+    if ($response['status'] < 200 || $response['status'] >= 300 || empty($response['json']['ok'])) {
+        $detail = trim((string) ($response['json']['error'] ?? 'Apps Script no confirmó la actualización.'));
+        throw new RuntimeException(substr($detail, 0, 1000));
+    }
+    return $response['json'];
 }
 
 function cash_sheet_fetch_values(string $token, string $spreadsheetId, string $range, string $render = 'FORMATTED_VALUE'): array
@@ -268,6 +312,23 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
         $location = cash_sheet_config_for_site($config, $site);
         $spreadsheetId = trim((string) $location['spreadsheet_id']);
         $sheet = trim((string) $location['sheet']);
+        if (cash_sheet_provider($config) === 'apps_script') {
+            $result = cash_sheet_apps_script_sync($config, [
+                'closeId' => $closeId,
+                'site' => $site,
+                'businessDate' => $businessDate,
+                'payments' => $safePayments,
+                'metrics' => $safeMetrics,
+            ]);
+            $rowNumber = (int) ($result['row'] ?? 0);
+            $scriptSheet = trim((string) ($result['sheet'] ?? $sheet));
+            $writtenFields = is_array($result['fields'] ?? null) ? $result['fields'] : [];
+            $fieldsJson = json_encode($writtenFields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $pdo->prepare("UPDATE cash_sheet_sync_runs SET status='verified', spreadsheet_id=?, sheet_name=?, target_row=?, written_fields_json=?, finished_at=NOW() WHERE close_id=?")
+                ->execute([$spreadsheetId, $scriptSheet, $rowNumber ?: null, $fieldsJson, $closeId]);
+            audit($pdo, (int) $user['id'], 'cash_close_synced_to_apps_script', $site . ' · fila ' . ($rowNumber ?: 'verificada'));
+            return ['alreadySynced' => !empty($result['alreadySynced']), 'row' => $rowNumber, 'sheet' => $scriptSheet, 'fields' => $writtenFields];
+        }
         $headerRow = max(1, (int) ($location['header_row'] ?? 5));
         $firstDataRow = $headerRow + 1;
         $token = cash_sheet_access_token($pdo, $config);
