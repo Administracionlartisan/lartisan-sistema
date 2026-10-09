@@ -1167,6 +1167,7 @@ export default function Home() {
     stockCountComments,
     sales,
     payments,
+    customers,
     stockRequests,
     savedOrders,
     cashAdjustments,
