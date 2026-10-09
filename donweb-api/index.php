@@ -781,14 +781,29 @@ if (str_starts_with($route, 'chat')) {
     if ($method === 'GET' && $route === 'chat/bootstrap') {
         $settings = $pdo->prepare('SELECT sound_enabled,desktop_enabled FROM internal_chat_settings WHERE user_id=?');
         $settings->execute([(int) $chatUser['id']]); $row = $settings->fetch() ?: ['sound_enabled' => 1, 'desktop_enabled' => 0];
-        $candidates = $pdo->query('SELECT id,full_name,role,assigned_location FROM users WHERE active=1 ORDER BY full_name ASC')->fetchAll();
+        // chat_can_contact también comprueba el estado activo: incluirlo evita
+        // que los contactos válidos queden descartados por un campo ausente.
+        $candidates = $pdo->query('SELECT id,full_name,role,assigned_location,active FROM users WHERE active=1 ORDER BY full_name ASC')->fetchAll();
         $contacts = array_values(array_map(static fn ($item) => ['id' => (string) $item['id'], 'name' => $item['full_name'], 'role' => $item['role'], 'site' => $item['assigned_location']], array_filter($candidates, static fn ($item) => chat_can_contact($chatUser, $item))));
         json_response(['ok' => true, 'settings' => ['sound' => (bool) $row['sound_enabled'], 'desktop' => (bool) $row['desktop_enabled']], 'contacts' => $contacts]);
     }
     if ($method === 'GET' && $route === 'chat/threads') {
         $statement = $pdo->prepare('SELECT t.id FROM internal_chat_threads t JOIN internal_chat_participants p ON p.thread_id=t.id WHERE p.user_id=? ORDER BY t.site_name IS NULL, t.title');
         $statement->execute([(int) $chatUser['id']]);
-        $threads = array_map(static fn ($id) => chat_serialized_thread($pdo, (string) $id, (int) $chatUser['id']), $statement->fetchAll(PDO::FETCH_COLUMN));
+        // Versiones iniciales podían crear más de un grupo lógico durante una
+        // importación. Sólo se expone el grupo canónico por tipo/local; las
+        // filas antiguas se preservan para auditoría y nunca se eliminan.
+        $seenGroups = [];
+        $threads = [];
+        foreach ($statement->fetchAll(PDO::FETCH_COLUMN) as $id) {
+            $thread = chat_serialized_thread($pdo, (string) $id, (int) $chatUser['id']);
+            $groupKey = in_array($thread['kind'], ['local', 'operativo'], true)
+                ? $thread['kind'] . ':' . (string) ($thread['site'] ?? '')
+                : $thread['id'];
+            if (isset($seenGroups[$groupKey])) continue;
+            $seenGroups[$groupKey] = true;
+            $threads[] = $thread;
+        }
         json_response(['ok' => true, 'threads' => $threads]);
     }
     if ($method === 'GET' && $route === 'chat/messages') {
