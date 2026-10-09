@@ -3254,6 +3254,40 @@ export default function Home() {
     }
   };
 
+  const retryLastCashCloseSync = () => {
+    const lastShift = shiftLog
+      .filter((shift) => shift.site === site && Boolean(shift.closedAtISO || shift.closedAt))
+      .sort((a, b) => Date.parse(b.closedAtISO || b.closedAt || "") - Date.parse(a.closedAtISO || a.closedAt || ""))[0];
+    if (!lastShift) {
+      setSyncStatus("No hay un cierre anterior para reintentar en este local.");
+      return;
+    }
+    const closeAt = lastShift.closedAtISO ? new Date(lastShift.closedAtISO) : new Date();
+    const closePayments = methods.map((method) => ({
+      method,
+      amount: payments
+        .filter((payment) => payment.site === site && payment.shiftId === lastShift.id && payment.method === method)
+        .reduce((sum, payment) => sum + payment.amount, 0),
+    }));
+    const closeSales = sales.filter((sale) =>
+      sale.site === site && sale.status === "activa" &&
+      (!lastShift.openedAtISO || Date.parse(sale.createdAtISO) >= Date.parse(lastShift.openedAtISO)) &&
+      (!lastShift.closedAtISO || Date.parse(sale.createdAtISO) <= Date.parse(lastShift.closedAtISO)),
+    );
+    void synchronizeCashClose(lastShift.id, {
+      businessDate: dateKey(closeAt),
+      payments: closePayments,
+      metrics: {
+        total: closePayments.reduce((sum, payment) => sum + payment.amount, 0),
+        tickets: closeSales.length,
+        discounts: closeSales.reduce((sum, sale) => sum + sale.discount, 0),
+        counted: lastShift.countedCash ?? 0,
+        envelope: lastShift.envelopeAmount ?? 0,
+        difference: lastShift.differenceAmount ?? 0,
+      },
+    });
+  };
+
   const authorizeCashSheets = async () => {
     if (user?.role !== "administracion") return;
     setSyncStatus("Esta integración se configura con Apps Script desde la cuenta propietaria de las planillas.");
@@ -4540,10 +4574,15 @@ export default function Home() {
                       : "Confirmar cierre"}
                   </button>
                   {closed && (
-                    <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
-                      Cierre guardado en el sistema. El estado de la planilla
-                      se muestra abajo.
-                    </p>
+                    <div className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
+                      <p>Cierre guardado en el sistema. El estado de la planilla se muestra abajo.</p>
+                      <button
+                        onClick={retryLastCashCloseSync}
+                        className="mt-2 rounded border border-[#183a67] px-3 py-2 text-xs font-bold text-[#183a67]"
+                      >
+                        Reintentar sincronización con Drive
+                      </button>
+                    </div>
                   )}
                   <div className="mt-4 rounded border border-[#d9d4c9] bg-[#fffdf8] p-3 text-xs">
                     <b>Integración de planilla diaria</b>
