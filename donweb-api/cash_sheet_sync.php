@@ -307,6 +307,7 @@ function cash_sheet_sync_adjustment(PDO $pdo, array $config, array $user, array 
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $businessDate) || $paymentMethod === '' || $reason === '' || $auditReference === '') {
         throw new InvalidArgumentException('Datos de ajuste incompletos.');
     }
+    require_authorized_business_date($pdo, $site, $businessDate);
     $amount = round((float) ($input['amount'] ?? 0), 2);
     if (!is_finite($amount) || $amount <= 0) throw new InvalidArgumentException('Importe de ajuste inválido.');
     // Solo hay ajuste si el cierre original ya quedó verificado y pertenece al
@@ -385,6 +386,7 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
     }
     $date = DateTimeImmutable::createFromFormat('!Y-m-d', $businessDate);
     if (!$date || $date->format('Y-m-d') !== $businessDate) throw new InvalidArgumentException('Fecha de cierre inválida.');
+    require_authorized_business_date($pdo, $site, $businessDate);
     $payments = is_array($input['payments'] ?? null) ? $input['payments'] : [];
     $safePayments = [];
     foreach ($payments as $payment) {

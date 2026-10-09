@@ -132,6 +132,8 @@ export default function Home() {
     [paymentCorrectionMethod, setPaymentCorrectionMethod] = useState("Efectivo"),
     [audit, setAudit] = useState<AuditEvent[]>([]),
     [syncStatus, setSyncStatus] = useState("Sin cierre enviado"),
+    [testOperatingDate, setTestOperatingDate] = useState<{ active: boolean; site?: string; businessDate?: string; label?: string; enabledAt?: string }>({ active: false }),
+    [testOperatingDateBusy, setTestOperatingDateBusy] = useState(false),
     [schedules, setSchedules] = useState<EmployeeSchedule[]>(INITIAL_SCHEDULES),
     [guideUpdates, setGuideUpdates] = useState(GUIDE_UPDATES),
     [reportSite, setReportSite] = useState("Todos los locales"),
@@ -176,6 +178,14 @@ export default function Home() {
     ),
     [clock, setClock] = useState(""),
     [drive, setDrive] = useState("");
+  // La fecha simulada nunca se toma de un campo libre ni del reloj del equipo.
+  // Sólo se activa si la API la habilitó para Maure y conserva la hora real.
+  const operationalNow = () => {
+    if (!(testOperatingDate.active && testOperatingDate.site === "Maure" && testOperatingDate.businessDate === "2026-10-15" && site === "Maure")) return new Date();
+    const current = new Date();
+    return new Date(2026, 9, 15, current.getHours(), current.getMinutes(), current.getSeconds(), current.getMilliseconds());
+  };
+  const isValidationTest = testOperatingDate.active && testOperatingDate.site === "Maure" && testOperatingDate.businessDate === "2026-10-15" && site === "Maure";
   const catalog = useCatalog(user?.id);
   const products = catalog.document.products;
   const priceChanges = catalog.document.priceChanges;
@@ -518,6 +528,20 @@ export default function Home() {
   // La restauración se reinicia solo cuando cambia el portal; la función usa el estado del montaje actual.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portal]);
+  useEffect(() => {
+    if (!user?.id) return;
+    let active = true;
+    const loadTestOperatingDate = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/operations/test-operating-date`, { credentials: "include", cache: "no-store" });
+        const data = await response.json() as { testOperatingDate?: { active?: boolean; site?: string; businessDate?: string; label?: string; enabledAt?: string } };
+        if (response.ok && active) setTestOperatingDate({ active: Boolean(data.testOperatingDate?.active), ...data.testOperatingDate });
+      } catch { /* La operación normal continúa sin una fecha especial. */ }
+    };
+    void loadTestOperatingDate();
+    const timer = window.setInterval(loadTestOperatingDate, 20_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [user?.id]);
   useEffect(() => {
     if (!user || (tab !== "Reportes" && !(tab === "Administración" && adminReport))) return;
     void fetch(`${API_BASE}/activity/module-opened`, {
@@ -1144,8 +1168,15 @@ export default function Home() {
         state: snapshot,
         baseState: JSON.parse(baseJson) as OperationalSnapshot,
         baseRevision: serverRevision.current[local] || 0,
-        event: { ...event, recordedAt: new Date().toISOString() },
-        queuedAt: new Date().toISOString(),
+        event: {
+          ...event,
+          recordedAt: operationalNow().toISOString(),
+          ...(testOperatingDate.active && local === testOperatingDate.site ? {
+            testOperatingDate: testOperatingDate.businessDate,
+            testLabel: "PRUEBA DE VALIDACIÓN",
+          } : {}),
+        },
+        queuedAt: operationalNow().toISOString(),
       };
       queuedBaseSnapshot.current[local] = serialized;
       void getOutbox()?.then(async (outbox) => {
@@ -1188,6 +1219,9 @@ export default function Home() {
     attendanceRecords,
     incidents,
     stockAdjustments,
+    testOperatingDate.active,
+    testOperatingDate.site,
+    testOperatingDate.businessDate,
     audit,
     cashFieldsBySite,
     cashOpenBySite,
@@ -1488,12 +1522,13 @@ export default function Home() {
   const appendCashLedgerEntry = (
     entry: Omit<CashLedgerEntry, "id" | "site" | "at" | "createdBy">,
   ) => {
+    const now = operationalNow();
     const ledgerEntry: CashLedgerEntry = {
       id: crypto.randomUUID(),
       site,
       shiftId: entry.shiftId ?? activeShift?.id,
-      at: new Date().toLocaleString("es-AR"),
-      atISO: new Date().toISOString(),
+      at: now.toLocaleString("es-AR"),
+      atISO: now.toISOString(),
       createdBy: user?.name || "Sistema",
       ...entry,
     };
@@ -1503,11 +1538,12 @@ export default function Home() {
   const recordStockMovement = (
     movement: Omit<StockMovement, "id" | "site" | "at" | "atISO" | "createdBy"> & { site?: string },
   ) => {
+    const now = operationalNow();
     const entry: StockMovement = {
       id: crypto.randomUUID(),
       site: movement.site || site,
-      at: new Date().toLocaleString("es-AR"),
-      atISO: new Date().toISOString(),
+      at: now.toLocaleString("es-AR"),
+      atISO: now.toISOString(),
       createdBy: user?.name || "Sistema",
       ...movement,
     };
@@ -2304,14 +2340,15 @@ export default function Home() {
     );
   };
   const recordAudit = (action: string, detail: string) => {
-    operationalEventRef.current = { action, detail };
+    const auditDetail = isValidationTest ? `PRUEBA DE VALIDACIÓN · fecha operativa 15/10/2026 · ${detail}` : detail;
+    operationalEventRef.current = { action, detail: auditDetail };
     setAudit((events) => [
       {
         id: crypto.randomUUID(),
         at: new Date().toLocaleString("es-AR"),
         site,
         action,
-        detail,
+        detail: auditDetail,
       },
       ...events,
     ]);
@@ -2935,18 +2972,19 @@ export default function Home() {
       const product = products.find((item) => item.id === Number(unavailable[0]));
       return setMessage(`No hay stock suficiente de ${product?.name || "ese producto"}. Actualizá la venta.`);
     }
+    const saleNow = operationalNow();
     const sale: Sale = {
       id: crypto.randomUUID(),
       site,
-      createdAt: new Date().toLocaleString("es-AR"),
-      createdAtISO: new Date().toISOString(),
+      createdAt: saleNow.toLocaleString("es-AR"),
+      createdAtISO: saleNow.toISOString(),
       items: [...cart],
       gross: total,
       discount: total - net,
       net,
       method: splitPayment ? "Múltiple" : payment,
       invoiceType,
-      customer,
+      customer: isValidationTest ? `PRUEBA DE VALIDACIÓN · ${customer}` : customer,
       customerId: selectedCustomerId || undefined,
       customerDocumentType,
       customerDocumentNumber: customerDocumentNumber.replace(/\D/g, ""),
@@ -3062,7 +3100,7 @@ export default function Home() {
     }
   };
   useEffect(() => {
-    if (!user || !operationalReady) return;
+    if (!user?.id || !operationalReady) return;
     const pending = postCloseAdjustments.filter((item) => item.status === "pending");
     if (!pending.length) return;
     let disposed = false;
@@ -3404,6 +3442,36 @@ export default function Home() {
     setSyncStatus("Esta integración se configura con Apps Script desde la cuenta propietaria de las planillas.");
     setSyncStatus("Apps Script debe ser publicado una vez por el dueño de las planillas. Luego Administración carga su URL /exec y la clave compartida en el servidor; no hace falta Google Cloud.");
   };
+  const enableValidationOperatingDate = async () => {
+    if (user?.role !== "administracion") return;
+    setTestOperatingDateBusy(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/test-operating-date/enable`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ site: "Maure", businessDate: "2026-10-15", label: "PRUEBA DE VALIDACIÓN", purpose: "Validación final auditada: venta, cierre, anulación posterior y ajuste compensatorio." }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; testOperatingDate?: { active?: boolean; site?: string; businessDate?: string; label?: string; enabledAt?: string } };
+      if (!response.ok || !data.ok || !data.testOperatingDate?.active) throw new Error(data.error || "No se pudo habilitar la fecha de prueba.");
+      setTestOperatingDate({ active: true, ...data.testOperatingDate });
+      recordAudit("Fecha operativa de prueba habilitada", "Maure · 15/10/2026 · PRUEBA DE VALIDACIÓN");
+      setMessage("Fecha de prueba habilitada exclusivamente para Maure. El reloj del equipo no fue modificado.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No se pudo habilitar la fecha de prueba.");
+    } finally { setTestOperatingDateBusy(false); }
+  };
+  const disableValidationOperatingDate = async () => {
+    if (user?.role !== "administracion") return;
+    setTestOperatingDateBusy(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/test-operating-date/disable`, { method: "POST", credentials: "include" });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo deshabilitar la fecha de prueba.");
+      setTestOperatingDate({ active: false });
+      setMessage("Modo de fecha de prueba deshabilitado. Las operaciones vuelven a usar la fecha real.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No se pudo deshabilitar la fecha de prueba.");
+    } finally { setTestOperatingDateBusy(false); }
+  };
 
   const confirmClose = () => {
     if (!user) return;
@@ -3424,7 +3492,7 @@ export default function Home() {
         `La diferencia de ${money.format(cashVariance)} supera el máximo autorizado de ${money.format(siteLimits.maxCashDifference)}. Indicá el motivo para cerrar; quedará como alerta para Administración.`,
       );
     const closeId = activeShift?.id || crypto.randomUUID();
-    const closeMoment = new Date();
+    const closeMoment = operationalNow();
     const shiftSales = sales.filter((sale) =>
       sale.site === site && sale.status === "activa" &&
       (!activeShift?.openedAtISO || Date.parse(sale.createdAtISO) >= Date.parse(activeShift.openedAtISO)),
@@ -3450,7 +3518,7 @@ export default function Home() {
           site,
           type: "Diferencia de caja",
           detail: `${money.format(cashVariance)} (esperado ${money.format(expected)}, contado ${money.format(counted)}) · ${differenceReason}`,
-          createdAt: new Date().toLocaleString("es-AR"),
+          createdAt: operationalNow().toLocaleString("es-AR"),
           createdBy: user.name,
           status: "Abierta",
         },
@@ -3484,7 +3552,7 @@ export default function Home() {
           site,
           amount: envelope,
           status: "En Caja Mayor",
-          at: new Date().toLocaleString("es-AR"),
+          at: operationalNow().toLocaleString("es-AR"),
           withdrawnAmount: 0,
         },
         ...items,
@@ -3535,7 +3603,7 @@ export default function Home() {
     if (!user) return;
     if (cashIsOpen && activeShift)
       return setMessage("La caja y el turno ya se encuentran abiertos.");
-    const now = new Date();
+    const now = operationalNow();
     const shift: CashShift = {
       id: crypto.randomUUID(),
       site,
@@ -5964,6 +6032,18 @@ export default function Home() {
                 h="Protección de datos y respaldos"
                 p="Política de auditoría, retención y respaldo para proteger la operación de todos los locales."
               />
+              <section className={`mb-5 max-w-5xl rounded-2xl border p-5 ${testOperatingDate.active ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-white"}`}>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <h2 className="font-bold">Fecha operativa de prueba restringida</h2>
+                    <p className="mt-1 text-sm text-slate-600">Únicamente Maure · 15/10/2026 · <b>PRUEBA DE VALIDACIÓN</b>. No modifica el reloj ni permite elegir otra fecha o local.</p>
+                    {testOperatingDate.active && <p className="mt-2 text-sm font-semibold text-amber-900">Activa: las operaciones nuevas de Maure quedan auditadas con fecha operativa 15/10/2026. Deshabilitala al finalizar la validación.</p>}
+                  </div>
+                  <button type="button" disabled={testOperatingDateBusy} onClick={() => void (testOperatingDate.active ? disableValidationOperatingDate() : enableValidationOperatingDate())} className={`rounded px-4 py-2 font-bold text-white disabled:opacity-50 ${testOperatingDate.active ? "bg-[#8a4b08]" : "bg-[#183a67]"}`}>
+                    {testOperatingDateBusy ? "Procesando…" : testOperatingDate.active ? "Deshabilitar modo de prueba" : "Habilitar validación Maure"}
+                  </button>
+                </div>
+              </section>
               <div className="grid gap-5 lg:grid-cols-2">
                 <div className="rounded-2xl border bg-white p-5">
                   <b>Auditoría inalterable</b>

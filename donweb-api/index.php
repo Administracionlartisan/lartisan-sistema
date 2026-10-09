@@ -5,6 +5,7 @@ declare(strict_types=1);
 require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/pnl_sync.php';
 require __DIR__ . '/cash_sheet_sync.php';
+require __DIR__ . '/test_operating_date.php';
 require __DIR__ . '/mrp_sync.php';
 require __DIR__ . '/assistant.php';
 require __DIR__ . '/arca_wsfe.php';
@@ -42,6 +43,7 @@ foreach ([
     'operations' => static fn () => ensure_operations_schema($pdo),
     'mrp' => static fn () => ensure_mrp_schema($pdo),
     'arca_wsfe' => static fn () => ensure_arca_wsfe_schema($pdo),
+    'test_operating_date' => static fn () => ensure_test_operating_date_schema($pdo),
 ] as $schema => $ensure) {
     try {
         $ensure();
@@ -336,6 +338,51 @@ if ($method === 'GET' && $route === 'admin/cash-sheets/authorization-url') {
     } catch (RuntimeException $error) {
         json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     }
+}
+
+// Fecha operativa de prueba: sólo Administración puede habilitarla y su
+// alcance no es configurable desde el navegador. La lectura está autenticada
+// para que Ventas pueda representar la misma fecha que validará la API.
+if ($method === 'GET' && $route === 'operations/test-operating-date') {
+    require_user($pdo);
+    json_response(['ok' => true, 'testOperatingDate' => test_operating_date_public_payload($pdo)]);
+}
+
+if ($method === 'POST' && $route === 'admin/test-operating-date/enable') {
+    $admin = require_user($pdo, ['administracion']);
+    $input = request_body();
+    $site = trim((string) ($input['site'] ?? ''));
+    $businessDate = trim((string) ($input['businessDate'] ?? ''));
+    $label = trim((string) ($input['label'] ?? ''));
+    $purpose = trim((string) ($input['purpose'] ?? ''));
+    validate_test_operating_date_scope($site, $businessDate, $label);
+    if ($purpose === '' || mb_strlen($purpose) > 500) {
+        json_response(['ok' => false, 'error' => 'Indicá el motivo auditado de la prueba.'], 422);
+    }
+    ensure_test_operating_date_schema($pdo);
+    $active = active_test_operating_date($pdo);
+    if ($active !== null) {
+        if ((string) $active['site'] !== $site || (string) $active['business_date'] !== $businessDate) {
+            json_response(['ok' => false, 'error' => 'Ya existe una ventana de prueba activa; cerrala antes de habilitar otra.'], 409);
+        }
+        json_response(['ok' => true, 'testOperatingDate' => test_operating_date_public_payload($pdo)]);
+    }
+    $pdo->prepare("INSERT INTO test_operating_date_runs (site,business_date,label,purpose,status,enabled_by) VALUES (?,?,?,?,'active',?)")
+        ->execute([$site, $businessDate, $label, $purpose, (int) $admin['id']]);
+    audit($pdo, (int) $admin['id'], 'test_operating_date_enabled', $site . ' · ' . $businessDate . ' · ' . $label . ' · ' . mb_substr($purpose, 0, 300));
+    json_response(['ok' => true, 'testOperatingDate' => test_operating_date_public_payload($pdo)]);
+}
+
+if ($method === 'POST' && $route === 'admin/test-operating-date/disable') {
+    $admin = require_user($pdo, ['administracion']);
+    ensure_test_operating_date_schema($pdo);
+    $active = active_test_operating_date($pdo);
+    if ($active !== null) {
+        $pdo->prepare("UPDATE test_operating_date_runs SET status='disabled',disabled_by=?,disabled_at=NOW() WHERE id=? AND status='active'")
+            ->execute([(int) $admin['id'], (int) $active['id']]);
+        audit($pdo, (int) $admin['id'], 'test_operating_date_disabled', (string) $active['site'] . ' · ' . (string) $active['business_date'] . ' · ' . (string) $active['label']);
+    }
+    json_response(['ok' => true, 'testOperatingDate' => ['active' => false]]);
 }
 
 if ($method === 'POST' && $route === 'cash-sheets/close') {
@@ -1134,6 +1181,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
     $requestId = trim((string) ($body['requestId'] ?? ''));
     $baseState = $body['baseState'] ?? null;
     $state = $body['state'] ?? null;
+    $clientEvent = is_array($body['event'] ?? null) ? $body['event'] : [];
     if (!is_array($state) || !preg_match('/^[a-f0-9-]{36}$/i', $requestId)) {
         json_response(['ok' => false, 'error' => 'Datos operativos inválidos'], 422);
     }
@@ -1175,6 +1223,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         } else {
             $state = $authorizedIncoming;
         }
+        validate_test_operating_snapshot($pdo, $site, $previousState, $state, $clientEvent);
         // El historial completo vive en las tablas normalizadas y en
         // operation_archive; el estado del local conserva solo lo reciente y lo
         // abierto para que cada envío no crezca sin límite.
@@ -1213,7 +1262,6 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             return ($previousState[$key] ?? null) !== ($state[$key] ?? null);
         }));
         $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $clientEvent = is_array($body['event'] ?? null) ? $body['event'] : [];
         $eventJson = json_encode([
             'changedKeys' => $changedKeys,
             'recordedAt' => gmdate('c'),
@@ -1222,6 +1270,8 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             'event' => [
                 'action' => substr((string) ($clientEvent['action'] ?? 'Actualización operativa'), 0, 160),
                 'detail' => substr((string) ($clientEvent['detail'] ?? ''), 0, 800),
+                'testOperatingDate' => substr((string) ($clientEvent['testOperatingDate'] ?? ''), 0, 10),
+                'testLabel' => substr((string) ($clientEvent['testLabel'] ?? ''), 0, 120),
             ],
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($stateJson === false || $eventJson === false || strlen($stateJson) > 4_000_000) {

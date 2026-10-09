@@ -6,7 +6,7 @@ export type PendingOperationalWrite = {
   state: OperationalSnapshot;
   baseState: OperationalSnapshot;
   baseRevision: number;
-  event: { action: string; detail: string; recordedAt: string };
+  event: { action: string; detail: string; recordedAt: string; testOperatingDate?: string; testLabel?: string };
   queuedAt: string;
   /** Operaciones de la interfaz acumuladas en este envío. */
   operations?: number;
