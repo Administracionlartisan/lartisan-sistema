@@ -62,7 +62,15 @@ if ($method === 'GET' && $route === 'attendance/presence-settings') {
     $site = trim((string) ($_GET['site'] ?? ''));
     if (!user_can_access_site($user, $site)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
     $settings = presence_settings($pdo, $site);
-    json_response(['ok' => true, 'configured' => $settings !== null, 'settings' => $settings]);
+    // Las coordenadas exactas solo las puede consultar Administración. El cliente
+    // conoce las tolerancias necesarias para informar el consentimiento, pero la
+    // geocerca de referencia y su validación permanecen en el servidor.
+    json_response(['ok' => true, 'configured' => $settings !== null, 'settings' => $settings === null ? null : [
+        'site' => $settings['site'],
+        'radiusMeters' => (int) $settings['radius_meters'],
+        'maxAccuracyMeters' => (int) $settings['max_accuracy_meters'],
+        'updatedAt' => $settings['updated_at'],
+    ]]);
 }
 
 if ($method === 'GET' && $route === 'admin/attendance/presence-settings') {

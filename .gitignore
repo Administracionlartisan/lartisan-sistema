@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/node_modules.build-only
 /.pnp
 .pnp.*
 .yarn/*
@@ -46,6 +47,7 @@ next-env.d.ts
 /*.tgz
 /.sites-runtime/
 /site-package-*/
+/artifacts/
 /tsconfig.tsbuildinfo
 
 # private keys and certificates (ARCA)
