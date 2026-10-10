@@ -37,7 +37,10 @@ function ensure_training_schema(PDO $pdo): void
         ['chat-interno','Chat Interno','Conversaciones autorizadas, grupos, adjuntos y avisos.',240,'Usá Chat Interno para coordinar con Administración, Supervisión y el grupo de tu local. Verificá destinatario antes de enviar. Solo adjuntá imágenes o PDF permitidos, sin contraseñas, datos bancarios ni documentos personales.'],
         ['cierre-sincronizacion','Cierre de caja y situaciones especiales','Arqueo, sincronización, pendientes, anulaciones y qué no hacer.',480,'Antes del cierre, controlá medios de pago, efectivo físico, sobre y diferencias. Confirmá una sola vez y esperá el estado de sincronización. Si luego se anula una venta, se conserva el cierre histórico y se genera un ajuste auditado; no edites filas de Drive ni históricos.'],
     ];
-    $insert = $pdo->prepare('INSERT INTO training_chapters (id,title,description,role_targets,version_label,duration_seconds,script_text,sort_order,published,mandatory) VALUES (?,?,?,?,?,?,?,?,1,1)');
+    // Los capítulos nacen como borradores. Sólo pueden publicarse tras adjuntar
+    // grabación real y WebVTT, para que una capacitación no prometa contenido
+    // que todavía no fue validado.
+    $insert = $pdo->prepare('INSERT INTO training_chapters (id,title,description,role_targets,version_label,duration_seconds,script_text,sort_order,published,mandatory) VALUES (?,?,?,?,?,?,?,?,0,0)');
     foreach ($chapters as $index => $chapter) {
         $script = "Capacitación L’ARTISAN — {$chapter[1]}. Esta demostración utiliza exclusivamente datos de prueba. {$chapter[4]}";
         $insert->execute([$chapter[0],$chapter[1],$chapter[2],json_encode(['vendedora','supervisora','administracion'],JSON_UNESCAPED_UNICODE),'1.0',$chapter[3],$script,$index + 1]);
@@ -47,6 +50,12 @@ function ensure_training_schema(PDO $pdo): void
 function training_roles(array $raw): array {
     $valid = ['vendedora','supervisora','compras','administracion'];
     return array_values(array_unique(array_filter($raw, static fn($role): bool => is_string($role) && in_array($role,$valid,true))));
+}
+function training_is_ready_for_publication(string $video, string $captions, int $duration): bool {
+    return $duration > 0
+        && filter_var($video, FILTER_VALIDATE_URL)
+        && str_starts_with(strtolower($video), 'https://')
+        && str_starts_with(ltrim($captions), 'WEBVTT');
 }
 function training_chapter_payload(array $row, ?array $progress = null): array {
     return ['id'=>$row['id'],'title'=>$row['title'],'description'=>$row['description'], 'roles'=>json_decode((string)$row['role_targets'],true) ?: [], 'version'=>$row['version_label'], 'durationSeconds'=>(int)$row['duration_seconds'], 'script'=>$row['script_text'], 'videoUrl'=>$row['video_url'], 'captionsVtt'=>$row['captions_vtt'], 'order'=>(int)$row['sort_order'], 'published'=>(bool)$row['published'], 'mandatory'=>(bool)$row['mandatory'], 'updatedAt'=>$row['updated_at'], 'progress'=>$progress ? ['watchedSeconds'=>(int)$progress['watched_seconds'],'completedAt'=>$progress['completed_at']] : null];

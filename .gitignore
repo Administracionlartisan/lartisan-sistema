@@ -48,6 +48,7 @@ next-env.d.ts
 /.sites-runtime/
 /site-package-*/
 /artifacts/
+/.demo-local/
 /tsconfig.tsbuildinfo
 
 # private keys and certificates (ARCA)

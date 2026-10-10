@@ -304,7 +304,10 @@ function set_session_cookie(string $token, array $config, int $expires): void
         'expires' => $expires,
         'path' => '/',
         'domain' => $config['cookie_domain'],
-        'secure' => true,
+        // Producción conserva HTTPS obligatorio. El único caso HTTP admitido es
+        // el entorno audiovisual local, que debe declararlo explícitamente en
+        // su configuración aislada y nunca se publica.
+        'secure' => (bool) ($config['cookie_secure'] ?? true),
         'httponly' => true,
         'samesite' => 'Lax',
     ]);
