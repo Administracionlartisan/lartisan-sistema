@@ -447,7 +447,7 @@ export default function Home() {
       ? rememberedSite
       : allowedSites[0] || next.location || "Recoleta";
     setSite(initialSite);
-    setPayment(METHODS[initialSite][0]);
+    setPayment((METHODS[initialSite] || METHODS.Recoleta || ["Efectivo"])[0]);
     setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : "Ventas");
     setMessage("");
     return true;
@@ -1421,7 +1421,7 @@ export default function Home() {
   useEffect(() => {
     if (user) window.localStorage.setItem(`lartisan:last-site:${user.id}`, site);
   }, [site, user]);
-  const methods = METHODS[site],
+  const methods = METHODS[site] || METHODS.Recoleta || ["Efectivo"],
     cats = ["Todos", ...Array.from(new Set(products.map((p) => p.category)))],
     [cat, setCat] = useState("Todos");
   const visible = products.filter((product) =>
@@ -3987,7 +3987,7 @@ export default function Home() {
                   value={site}
                   onChange={(e) => {
                     setSite(e.target.value);
-                    setPayment(METHODS[e.target.value][0]);
+                    setPayment((METHODS[e.target.value] || METHODS.Recoleta || ["Efectivo"])[0]);
                   }}
                   className="mt-2 w-full rounded border p-2"
                 >
