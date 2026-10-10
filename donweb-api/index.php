@@ -126,11 +126,14 @@ if ($method === 'POST' && $route === 'admin/locations') {
     json_response(['ok' => true]);
 }
 
-if ($method === 'PATCH' && preg_match('#^admin/locations/([^/]+)$#', $route, $matches)) {
+// Las rutas con nombres de local que contienen espacios dependen del rewrite del
+// hosting. Aceptamos además `?site=` para que la actualización no pierda el
+// identificador en esa capa y siga usando el mismo control administrativo.
+if ($method === 'PATCH' && (preg_match('#^admin/locations/([^/]+)$#', $route, $matches) || ($route === 'admin/locations' && isset($_GET['site'])))) {
     $admin = require_user($pdo);
     if (($admin['role'] ?? '') !== 'administracion' && !is_primary_user($admin, $config)) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
     ensure_locations_schema($pdo); ensure_attendance_presence_schema($pdo);
-    $site = rawurldecode($matches[1]); $body = request_body();
+    $site = rawurldecode($matches[1] ?? (string) $_GET['site']); $body = request_body();
     $existingStmt = $pdo->prepare('SELECT * FROM lartisan_locations WHERE site=? FOR UPDATE'); $pdo->beginTransaction();
     try {
         $existingStmt->execute([$site]); $existing = $existingStmt->fetch(); if (!$existing) throw new RuntimeException('Local inexistente.');

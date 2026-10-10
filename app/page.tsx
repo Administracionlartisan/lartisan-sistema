@@ -1094,7 +1094,9 @@ export default function Home() {
     if (!locationDraft.site.trim() || !locationDraft.code.trim() || locationDraft.latitude === null || locationDraft.longitude === null) return setMessage("Completá nombre, código y coordenadas confirmadas antes de habilitar el local.");
     setLocationSaving(true);
     try {
-      const endpoint = editingLocationSite ? `${API_BASE}/admin/locations/${encodeURIComponent(editingLocationSite)}` : `${API_BASE}/admin/locations`;
+      // El identificador de un local puede contener espacios; por compatibilidad
+      // con el rewrite del hosting lo enviamos en query en las actualizaciones.
+      const endpoint = editingLocationSite ? `${API_BASE}/admin/locations?site=${encodeURIComponent(editingLocationSite)}` : `${API_BASE}/admin/locations`;
       const response = await fetch(endpoint, { method: editingLocationSite ? "PATCH" : "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(locationDraft) });
       const data = await response.json() as { error?: string };
       if (!response.ok) return setMessage(data.error || "No se pudo guardar el local.");
