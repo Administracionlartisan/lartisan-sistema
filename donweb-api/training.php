@@ -57,6 +57,13 @@ function training_is_ready_for_publication(string $video, string $captions, int 
         && str_starts_with(strtolower($video), 'https://')
         && str_starts_with(ltrim($captions), 'WEBVTT');
 }
+function training_video_url_allowed(string $video, array $config): bool {
+    if (filter_var($video, FILTER_VALIDATE_URL) && str_starts_with(strtolower($video), 'https://')) return true;
+    // Sólo el entorno audiovisual local puede enlazar sus MP4 por HTTP. La
+    // bandera no existe en Producción y nunca habilita dominios remotos.
+    return !empty($config['allow_local_training_media'])
+        && (bool) preg_match('#^http://(127\.0\.0\.1|\[::1\]|localhost):\d+/#i', $video);
+}
 function training_chapter_payload(array $row, ?array $progress = null): array {
     return ['id'=>$row['id'],'title'=>$row['title'],'description'=>$row['description'], 'roles'=>json_decode((string)$row['role_targets'],true) ?: [], 'version'=>$row['version_label'], 'durationSeconds'=>(int)$row['duration_seconds'], 'script'=>$row['script_text'], 'videoUrl'=>$row['video_url'], 'captionsVtt'=>$row['captions_vtt'], 'order'=>(int)$row['sort_order'], 'published'=>(bool)$row['published'], 'mandatory'=>(bool)$row['mandatory'], 'updatedAt'=>$row['updated_at'], 'progress'=>$progress ? ['watchedSeconds'=>(int)$progress['watched_seconds'],'completedAt'=>$progress['completed_at']] : null];
 }
