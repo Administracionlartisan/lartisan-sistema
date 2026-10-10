@@ -10,6 +10,7 @@ require __DIR__ . '/mrp_sync.php';
 require __DIR__ . '/assistant.php';
 require __DIR__ . '/arca_wsfe.php';
 require __DIR__ . '/internal_chat.php';
+require __DIR__ . '/training.php';
 require __DIR__ . '/attendance_presence.php';
 
 configure_cors($config);
@@ -48,6 +49,7 @@ foreach ([
     'arca_wsfe' => static fn () => ensure_arca_wsfe_schema($pdo),
     'test_operating_date' => static fn () => ensure_test_operating_date_schema($pdo),
     'internal_chat' => static fn () => ensure_internal_chat_schema($pdo),
+    'training' => static fn () => ensure_training_schema($pdo),
     'attendance_presence' => static fn () => ensure_attendance_presence_schema($pdo),
 ] as $schema => $ensure) {
     try {
@@ -55,6 +57,47 @@ foreach ([
     } catch (Throwable $error) {
         error_log('LARTISAN deferred ' . $schema . ' schema update: ' . $error->getMessage());
     }
+}
+
+// Capacitación de ventas: catálogo publicado, avance por usuario y gestión
+// exclusiva de Administración. Los vídeos se alojan como URLs administrables;
+// el API nunca expone archivos de operación, sesiones ni credenciales.
+if ($method === 'GET' && $route === 'training/chapters') {
+    $trainingUser = require_user($pdo); ensure_training_schema($pdo);
+    $stmt = $pdo->prepare('SELECT c.*,p.watched_seconds,p.completed_at FROM training_chapters c LEFT JOIN training_progress p ON p.chapter_id=c.id AND p.user_id=? WHERE c.published=1 ORDER BY c.sort_order,c.title');
+    $stmt->execute([(int)$trainingUser['id']]);
+    $chapters = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $roles = training_roles(json_decode((string)$row['role_targets'], true) ?: []);
+        if (!in_array((string)$trainingUser['role'], $roles, true)) continue;
+        $chapters[] = training_chapter_payload($row, $row);
+    }
+    json_response(['ok'=>true,'chapters'=>$chapters]);
+}
+if ($method === 'POST' && $route === 'training/progress') {
+    $trainingUser = require_user($pdo); ensure_training_schema($pdo); $body=request_body();
+    $id = trim((string)($body['chapterId'] ?? '')); $watched=max(0,min(86400,(int)($body['watchedSeconds'] ?? 0))); $complete=!empty($body['complete']);
+    $chapter=$pdo->prepare('SELECT role_targets,published FROM training_chapters WHERE id=?'); $chapter->execute([$id]); $row=$chapter->fetch();
+    if (!$row || !(bool)$row['published'] || !in_array((string)$trainingUser['role'],training_roles(json_decode((string)$row['role_targets'],true) ?: []),true)) json_response(['ok'=>false,'error'=>'Capítulo no disponible.'],404);
+    $pdo->prepare('INSERT INTO training_progress (user_id,chapter_id,watched_seconds,completed_at,last_viewed_at) VALUES (?,?,?,IF(?,NOW(),NULL),NOW()) ON DUPLICATE KEY UPDATE watched_seconds=GREATEST(watched_seconds,VALUES(watched_seconds)),completed_at=IF(completed_at IS NOT NULL OR VALUES(completed_at) IS NULL,completed_at,NOW()),last_viewed_at=NOW()')->execute([(int)$trainingUser['id'],$id,$watched,$complete?1:0]);
+    training_audit($pdo,(int)$trainingUser['id'],$complete?'chapter_completed':'chapter_viewed',$id); json_response(['ok'=>true]);
+}
+if ($method === 'GET' && $route === 'admin/training/chapters') {
+    require_user($pdo,['administracion']); ensure_training_schema($pdo); $rows=$pdo->query('SELECT * FROM training_chapters ORDER BY sort_order,title')->fetchAll(); json_response(['ok'=>true,'chapters'=>array_map(static fn($row)=>training_chapter_payload($row),$rows)]);
+}
+if ($method === 'POST' && $route === 'admin/training/chapters') {
+    $trainingAdmin=require_user($pdo,['administracion']); ensure_training_schema($pdo); $body=request_body(); $id=trim((string)($body['id']??''));
+    if (!preg_match('/^[a-z0-9-]{3,64}$/',$id)) json_response(['ok'=>false,'error'=>'Identificador de capítulo inválido.'],422);
+    $title=trim((string)($body['title']??'')); $description=trim((string)($body['description']??'')); $script=trim((string)($body['script']??'')); $roles=training_roles(is_array($body['roles']??null)?$body['roles']:[]); $video=trim((string)($body['videoUrl']??''));
+    if ($title===''||mb_strlen($title)>160||$description===''||$script===''||!$roles||($video!==''&&(!filter_var($video,FILTER_VALIDATE_URL)||!str_starts_with(strtolower($video),'https://')))) json_response(['ok'=>false,'error'=>'Revisá título, descripción, guion, roles y URL HTTPS de video.'],422);
+    $existing=$pdo->prepare('SELECT * FROM training_chapters WHERE id=?'); $existing->execute([$id]); $old=$existing->fetch();
+    if ($old) $pdo->prepare('INSERT INTO training_chapter_versions (chapter_id,version_label,snapshot_json,changed_by,change_kind) VALUES (?,?,?,?,?)')->execute([$id,$old['version_label'],json_encode($old,JSON_UNESCAPED_UNICODE),(int)$trainingAdmin['id'],'updated']);
+    $version=trim((string)($body['version']??($old['version_label']??'1.0'))); $duration=max(0,min(7200,(int)($body['durationSeconds']??0))); $order=max(1,(int)($body['order']??999));
+    $pdo->prepare('INSERT INTO training_chapters (id,title,description,role_targets,version_label,duration_seconds,script_text,video_url,captions_vtt,sort_order,published,mandatory,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE title=VALUES(title),description=VALUES(description),role_targets=VALUES(role_targets),version_label=VALUES(version_label),duration_seconds=VALUES(duration_seconds),script_text=VALUES(script_text),video_url=VALUES(video_url),captions_vtt=VALUES(captions_vtt),sort_order=VALUES(sort_order),mandatory=VALUES(mandatory),updated_by=VALUES(updated_by)')->execute([$id,$title,$description,json_encode($roles,JSON_UNESCAPED_UNICODE),$version,$duration,$script,$video?:null,trim((string)($body['captionsVtt']??''))?:null,$order,!empty($body['published'])?1:0,!empty($body['mandatory'])?1:0,(int)$trainingAdmin['id'],(int)$trainingAdmin['id']]);
+    training_audit($pdo,(int)$trainingAdmin['id'],$old?'chapter_updated':'chapter_created',$id); json_response(['ok'=>true]);
+}
+if ($method === 'POST' && preg_match('#^admin/training/chapters/([a-z0-9-]{3,64})/(publish|unpublish)$#',$route,$matches)) {
+    $trainingAdmin=require_user($pdo,['administracion']); ensure_training_schema($pdo); $published=$matches[2]==='publish'?1:0; $stmt=$pdo->prepare('UPDATE training_chapters SET published=?,updated_by=? WHERE id=?'); $stmt->execute([$published,(int)$trainingAdmin['id'],$matches[1]]); if(!$stmt->rowCount()) json_response(['ok'=>false,'error'=>'Capítulo inexistente.'],404); training_audit($pdo,(int)$trainingAdmin['id'],$published?'chapter_published':'chapter_unpublished',$matches[1]); json_response(['ok'=>true]);
 }
 
 // Catálogo administrable de sucursales y franquicias. La API, no el navegador,

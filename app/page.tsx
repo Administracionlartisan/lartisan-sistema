@@ -22,6 +22,7 @@ import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
 import CustomerPanel from "./modules/clientes/CustomerPanel";
 import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
+import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
@@ -106,6 +107,7 @@ export default function Home() {
     [tab, setTab] = useState("Ventas"),
     [navOpen, setNavOpen] = useState(false),
     [chatOpen, setChatOpen] = useState(false),
+    [trainingWelcomeOpen, setTrainingWelcomeOpen] = useState(false),
     [productSearch, setProductSearch] = useState(""),
     [stockSearch, setStockSearch] = useState(""),
     [stockGroup, setStockGroup] = useState("Todos los grupos"),
@@ -3879,6 +3881,11 @@ export default function Home() {
     const timer = window.setTimeout(() => setAttendanceReminder("Entrada"), 0);
     return () => window.clearTimeout(timer);
   }, [attendanceRecords, operationalReady, site, user]);
+  useEffect(() => {
+    if (!user || user.role !== "vendedora") return;
+    const key = `lartisan:training-welcome:${user.id}`;
+    if (!window.sessionStorage.getItem(key)) { window.sessionStorage.setItem(key, "shown"); setTrainingWelcomeOpen(true); }
+  }, [user]);
   if (authLoading && !user) return <SecureLoading />;
   if (!user) return <AccessScreen {...{ portal, login, setLogin, password, setPassword, showPassword, setShowPassword, authLoading, recoverySending, recoveryStage, recoveryCode, setRecoveryCode, recoveryPassword, setRecoveryPassword, recoveryPasswordConfirm, setRecoveryPasswordConfirm, setRecoveryStage, message, setMessage, enter, requestPasswordReset, confirmEmailRecovery }} />;
   if (user.mustChangePassword) return <ForcePasswordChangeScreen {...{ currentPassword, setCurrentPassword, newPassword, setNewPassword, confirmNewPassword, setConfirmNewPassword, message, changeOwnPassword, logout }} />;
@@ -3897,6 +3904,7 @@ export default function Home() {
           "Protección de datos",
           "Actualizaciones",
           "Integraciones",
+          "Capacitación",
         ]
       : user.role === "compras"
         ? ["MRP", ...(can("comprasProduccion") ? ["Compras de producción"] : [])]
@@ -3912,6 +3920,7 @@ export default function Home() {
           "Fichaje",
           "Clientes",
           "Guía",
+          "Capacitación",
           ...(can("mrp") ? ["MRP"] : []),
           ...(can("comprasProduccion") ? ["Compras de producción"] : []),
         ];
@@ -4029,12 +4038,15 @@ export default function Home() {
           </nav>
         </aside>
         <section className="p-4 sm:p-5 md:p-8">
+          {trainingWelcomeOpen && user.role === "vendedora" && <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="Bienvenida a capacitación"><div className="mx-auto max-w-6xl rounded-3xl bg-[#f7f3eb] p-5 shadow-2xl"><SalesTrainingPanel role={user.role} onClose={() => setTrainingWelcomeOpen(false)} /></div></div>}
           {(!catalog.ready || catalog.error) && <div role="status" className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
             {catalog.error ? `Catálogo: ${catalog.error}` : "Cargando catálogo central…"}
             {catalog.error && <button onClick={() => void catalog.reload()} className="ml-3 font-bold underline">Reintentar</button>}
           </div>}
           {message && <div role="status" aria-live="polite" className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm font-semibold shadow-sm"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="shrink-0 underline">Cerrar</button></div>}
-          {tab === "Reportes" && canViewSupervisorReports ? (
+          {tab === "Capacitación" ? (
+            <SalesTrainingPanel role={user.role} admin={user.role === "administracion"} />
+          ) : tab === "Reportes" && canViewSupervisorReports ? (
             <>
               <Heading
                 k="SUPERVISIÓN · TODOS LOS LOCALES"
