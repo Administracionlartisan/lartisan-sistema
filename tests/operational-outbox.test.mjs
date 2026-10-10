@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendToQueue, acknowledgeInQueue, pendingOperations, latestQueuedState } from "../app/modules/shared/operationalOutbox.ts";
+import { appendToQueue, acknowledgeInQueue, pendingOperations, latestQueuedState, isOpeningAlreadyClosedOnServer } from "../app/modules/shared/operationalOutbox.ts";
 
 const write = (id, state, baseState, baseRevision = 5) => ({
   requestId: id, site: "Recoleta", state, baseState, baseRevision,
@@ -62,4 +62,26 @@ test("solo se confirma el primer envío de la cola", () => {
   const queue = { writes: [write("a", s(1), s(0)), write("b", s(2), s(1))] };
   assert.equal(acknowledgeInQueue(queue, "b").writes.length, 2);
   assert.deepEqual(acknowledgeInQueue(queue, "a").writes.map((w) => w.requestId), ["b"]);
+});
+
+test("solo recupera una apertura cuyo mismo turno y asiento ya quedaron cerrados en servidor", () => {
+  const opening = {
+    ...write("open", {
+      cashOpen: true,
+      activeShift: { id: "turno-1" },
+      shiftLog: [{ id: "turno-1" }],
+      cashLedger: [{ id: "asiento-1" }],
+      sales: [], payments: [], returnsLog: [], stockMovements: [],
+    }, {
+      cashOpen: false, activeShift: null, shiftLog: [], cashLedger: [], sales: [], payments: [], returnsLog: [], stockMovements: [],
+    }),
+  };
+  const closedOnServer = {
+    cashOpen: false, activeShift: null,
+    shiftLog: [{ id: "turno-1", closedAtISO: "2026-10-09T15:00:00Z" }],
+    cashLedger: [{ id: "asiento-1" }], sales: [], payments: [], returnsLog: [], stockMovements: [],
+  };
+  assert.equal(isOpeningAlreadyClosedOnServer(opening, closedOnServer), true);
+  assert.equal(isOpeningAlreadyClosedOnServer({ ...opening, state: { ...opening.state, sales: [{ id: "venta-1" }] } }, closedOnServer), false, "nunca descarta una venta");
+  assert.equal(isOpeningAlreadyClosedOnServer(opening, { ...closedOnServer, cashOpen: true }), false, "no toca una caja aún abierta");
 });

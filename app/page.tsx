@@ -10,7 +10,7 @@ import {
   INITIAL_MANAGED_USERS, money, SITES,
 } from "./modules/shared/constants";
 import { downloadCsv } from "./modules/shared/downloadCsv";
-import { OperationalOutbox, latestQueuedState, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
+import { OperationalOutbox, isOpeningAlreadyClosedOnServer, latestQueuedState, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
 import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import ComingSoonPanel, { type ComingSoonSection } from "./modules/administracion/ComingSoonPanel";
@@ -822,6 +822,26 @@ export default function Home() {
     // encolado: el servidor todavía no las tiene y la próxima operación debe
     // continuar desde ellas, no desde una versión que las omite.
     const outbox = await getOutbox();
+    // Una apertura puede haber quedado en la cola local si se cortó justo antes
+    // de que el servidor confirmara el mismo turno. Si el servidor ya tiene
+    // esas mismas identidades y además el turno fue cerrado, reenviarla
+    // restauraría una caja ya cerrada. Se confirma localmente sólo bajo esa
+    // evidencia estricta; ventas, cobros, devoluciones y stock nunca entran en
+    // esta recuperación.
+    let recoveredStaleOpening = false;
+    if (outbox) {
+      for (const [local, entry] of Object.entries(data.states || {})) {
+        const queue = outbox.get(local);
+        if (queue.writes.length === 1 && isOpeningAlreadyClosedOnServer(queue.writes[0], entry.state)) {
+          await outbox.acknowledge(local, queue.writes[0].requestId);
+          recoveredStaleOpening = true;
+        }
+      }
+      if (recoveredStaleOpening) {
+        setPendingSync(outbox.count());
+        setMessage("Se confirmó la apertura antigua ya cerrada en el servidor. No se creó ni modificó ningún cobro.");
+      }
+    }
     const pendingSites = outbox?.sites() ?? [];
     const entries = [
       ...Object.entries(data.states || {}).filter(([local]) => !pendingSites.includes(local)),

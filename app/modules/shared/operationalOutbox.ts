@@ -69,6 +69,37 @@ export const pendingOperations = (queue: SiteQueue | undefined) =>
 /** Último estado encolado del local (desde donde parte la próxima operación). */
 export const latestQueuedState = (queue: SiteQueue | undefined) => queue?.writes[queue.writes.length - 1]?.state;
 
+/**
+ * Reconoce exclusivamente una apertura antigua que ya quedó incluida en un
+ * turno cerrado del servidor. Es una recuperación de cola, no una anulación:
+ * exige las mismas identidades de turno y de asiento de caja, no admite ventas
+ * ni movimientos de stock nuevos y nunca toca una operación que el servidor
+ * todavía no haya confirmado.
+ */
+export function isOpeningAlreadyClosedOnServer(
+  write: PendingOperationalWrite | undefined,
+  server: OperationalSnapshot | undefined,
+): boolean {
+  if (!write || !server || server.cashOpen || server.activeShift) return false;
+  const idsAdded = (key: "sales" | "payments" | "returnsLog" | "stockMovements" | "shiftLog" | "cashLedger") => {
+    const before = new Set((write.baseState[key] ?? []).map((item) => item?.id).filter(Boolean));
+    return (write.state[key] ?? []).filter((item) => item?.id && !before.has(item.id));
+  };
+  // No se descarta una venta, devolución, pago ni movimiento de inventario.
+  if (idsAdded("sales").length || idsAdded("payments").length || idsAdded("returnsLog").length || idsAdded("stockMovements").length) return false;
+  const shifts = idsAdded("shiftLog");
+  const ledger = idsAdded("cashLedger");
+  if (shifts.length !== 1 || ledger.length !== 1) return false;
+  const shiftId = shifts[0].id;
+  const ledgerId = ledger[0].id;
+  return Boolean(
+    shiftId && ledgerId &&
+    write.state.cashOpen && write.state.activeShift?.id === shiftId &&
+    (server.shiftLog ?? []).some((item) => item?.id === shiftId && (item.closedAtISO || item.closedAt)) &&
+    (server.cashLedger ?? []).some((item) => item?.id === ledgerId),
+  );
+}
+
 const DB_NAME = "lartisan-outbox";
 const STORE = "queues";
 const legacyPrefix = (userId: string) => `lartisan:operations-outbox:${userId}:`;
