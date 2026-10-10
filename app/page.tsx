@@ -1033,7 +1033,7 @@ export default function Home() {
     if (!item || item.latitude === null || item.longitude === null) return setMessage("Ingresá las coordenadas del local antes de guardar.");
     setPresenceSaving(local);
     try {
-      const response = await fetch(`${API_BASE}/admin/attendance/presence-settings/${encodeURIComponent(local)}`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) });
+      const response = await fetch(`${API_BASE}/admin/attendance/presence-settings?site=${encodeURIComponent(local)}`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) });
       const data = await response.json() as { error?: string; settings: { site: string; latitude: number; longitude: number; radiusMeters: number; maxAccuracyMeters: number } };
       if (!response.ok) return setMessage(data.error || "No se pudo guardar la geocerca.");
       setPresenceSettings((items) => ({ ...items, [local]: data.settings })); setMessage(`Geocerca de ${local} guardada y auditada.`);
