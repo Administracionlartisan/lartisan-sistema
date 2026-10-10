@@ -200,7 +200,7 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
   );
   useEffect(() => {
     let active = true;
-    void Promise.all([request("chat/bootstrap"), loadThreads()])
+    const timer = window.setTimeout(() => { void Promise.all([request("chat/bootstrap"), loadThreads()])
       .then(([bootstrap]) => {
         if (!active) return;
         const data = bootstrap as {
@@ -219,9 +219,9 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
               : "No se pudo cargar el chat.",
           ),
       )
-      .finally(() => active && setLoading(false));
+      .finally(() => active && setLoading(false)); }, 0);
     return () => {
-      active = false;
+      active = false; window.clearTimeout(timer);
     };
   }, [loadThreads, request]);
   useEffect(() => {
@@ -230,14 +230,13 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
     });
   }, [userId]);
   useEffect(() => {
-    if (selected)
+    if (!selected) return;
+    const timer = window.setTimeout(() => {
       void loadMessages(selected, search).catch((error) =>
-        setNotice(
-          error instanceof Error
-            ? error.message
-            : "No se pudo cargar la conversación.",
-        ),
+        setNotice(error instanceof Error ? error.message : "No se pudo cargar la conversación."),
       );
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [loadMessages, search, selected]);
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -562,6 +561,8 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
                       {file.mime} · {fileSize(file.size)}
                     </span>
                     {file.mime.startsWith("image/") && (
+                      // El adjunto es un recurso autenticado de la API, no un activo estático optimizable.
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={`${API_BASE}/chat/attachments/${file.id}`}
                         alt={`Vista previa segura de ${file.name}`}

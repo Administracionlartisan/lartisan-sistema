@@ -145,6 +145,9 @@ export default function Home() {
     [newGuideTitle, setNewGuideTitle] = useState(""),
     [newGuideDetail, setNewGuideDetail] = useState(""),
     [attendanceReminder, setAttendanceReminder] = useState<"Entrada" | "Salida" | null>(null),
+    [presenceSettings, setPresenceSettings] = useState<Record<string, { site: string; latitude: number | null; longitude: number | null; radiusMeters: number; maxAccuracyMeters: number }>>({}),
+    [attendanceExceptions, setAttendanceExceptions] = useState<{ id: string; site: string; kind: string; status: string; reason: string; full_name: string; requested_at: string }[]>([]),
+    [presenceSaving, setPresenceSaving] = useState<string | null>(null),
     [adminReport, setAdminReport] = useState("Resumen"),
     [pnlConnection, setPnlConnection] = useState<{ connected: boolean; rows: string[][]; updatedAt: string | null }>({ connected: false, rows: [], updatedAt: null }),
     [pnlSyncing, setPnlSyncing] = useState(false),
@@ -357,8 +360,11 @@ export default function Home() {
     // Conserva una transición limpia para quienes tenían abierto el chat de la
     // versión anterior: se vuelve al módulo de origen y se abre el flotante.
     if (!user || tab !== "Chat interno") return;
-    setTab(user.role === "administracion" ? "Administración" : user.role === "compras" ? "MRP" : "Ventas");
-    setChatOpen(true);
+    const timer = window.setTimeout(() => {
+      setTab(user.role === "administracion" ? "Administración" : user.role === "compras" ? "MRP" : "Ventas");
+      setChatOpen(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [tab, user]);
   useEffect(() => {
     if (!operationalReady) return;
@@ -1009,6 +1015,39 @@ export default function Home() {
     }
     return () => { active = false; };
   }, [user?.id, user?.role, tab, adminReport, reportFrom, reportTo, reportSite, auditUserFilter, auditActionFilter, operationalVersion]);
+
+  useEffect(() => {
+    if (user?.role !== "administracion" || tab !== "Administración" || adminReport !== "Personal") return;
+    void Promise.all([
+      fetch(`${API_BASE}/admin/attendance/presence-settings`, { credentials: "include", cache: "no-store" }),
+      fetch(`${API_BASE}/admin/attendance/exceptions`, { credentials: "include", cache: "no-store" }),
+    ]).then(async ([settingsResponse, exceptionsResponse]) => {
+      const settingsData = await settingsResponse.json() as { settings?: { site: string; latitude: number | null; longitude: number | null; radiusMeters: number; maxAccuracyMeters: number }[] }; const exceptionsData = await exceptionsResponse.json() as { exceptions?: { id: string; site: string; kind: string; status: string; reason: string; full_name: string; requested_at: string }[] };
+      if (settingsResponse.ok) setPresenceSettings(Object.fromEntries((settingsData.settings || []).map((item) => [item.site, item])));
+      if (exceptionsResponse.ok) setAttendanceExceptions(exceptionsData.exceptions || []);
+    }).catch(() => undefined);
+  }, [user?.role, tab, adminReport, operationalVersion]);
+
+  const savePresenceSettings = async (local: string) => {
+    const item = presenceSettings[local];
+    if (!item || item.latitude === null || item.longitude === null) return setMessage("Ingresá las coordenadas del local antes de guardar.");
+    setPresenceSaving(local);
+    try {
+      const response = await fetch(`${API_BASE}/admin/attendance/presence-settings/${encodeURIComponent(local)}`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) });
+      const data = await response.json() as { error?: string; settings: { site: string; latitude: number; longitude: number; radiusMeters: number; maxAccuracyMeters: number } };
+      if (!response.ok) return setMessage(data.error || "No se pudo guardar la geocerca.");
+      setPresenceSettings((items) => ({ ...items, [local]: data.settings })); setMessage(`Geocerca de ${local} guardada y auditada.`);
+    } catch { setMessage("No se pudo guardar la geocerca."); } finally { setPresenceSaving(null); }
+  };
+
+  const resolveAttendanceException = async (id: string, action: "approve" | "reject") => {
+    const note = window.prompt(action === "approve" ? "Motivo de autorización:" : "Motivo de rechazo:") || "Resuelto por Administración";
+    const response = await fetch(`${API_BASE}/admin/attendance/exceptions/${id}/${action}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }) });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setMessage(data.error || "No se pudo resolver la excepción.");
+    setAttendanceExceptions((items) => items.map((item) => item.id === id ? { ...item, status: action === "approve" ? "Aprobada" : "Rechazada" } : item));
+    await loadOperationalData(); setMessage(`Excepción ${action === "approve" ? "aprobada" : "rechazada"} y auditada.`);
+  };
   const operationalSnapshot = (local: string): OperationalSnapshot => {
     const localSales = sales.filter((item) => item.site === local);
     const saleIds = new Set(localSales.map((item) => item.id));
@@ -3683,41 +3722,27 @@ export default function Home() {
     recordAudit("Caja abierta", `Fondo inicial ${money.format(fund)}`);
     setMessage(`Caja abierta para ${site}. Ya se pueden registrar cobros.`);
   };
-  const closeShift = () => {
+  const markAttendance = async (kind: AttendanceRecord["kind"]) => {
     if (!user) return;
-    if (!cashIsOpen || !activeShift)
-      return setMessage("Primero debe existir una caja y turno abiertos.");
-    const closedShift = {
-      ...activeShift,
-      closedAt: new Date().toLocaleString("es-AR"),
-      closedBy: user.name,
-    };
-    setShiftLog((items) =>
-      items.map((shift) => (shift.id === closedShift.id ? closedShift : shift)),
-    );
-    setActiveShiftBySite((items) => ({ ...items, [site]: undefined }));
-    recordAudit(
-      "Turno cerrado",
-      `${site} · ${activeShift.openedBy} a ${user.name} · caja continúa abierta`,
-    );
-    setMessage("Turno cerrado y auditado. La caja permanece abierta para el siguiente turno.");
-  };
-  const markAttendance = (kind: AttendanceRecord["kind"]) => {
-    if (!user) return;
-    const today = new Date().toLocaleDateString("en-CA");
-    const todayRecords = attendanceRecords.filter((item) => item.userName === user.name && item.site === site && item.atISO.slice(0, 10) === today);
-    const last = todayRecords[0];
-    if (kind === "Entrada" && last?.kind === "Entrada") return setMessage("Ya tenés una entrada abierta. Registrá la salida antes de volver a fichar.");
-    if (kind === "Salida" && last?.kind !== "Entrada") return setMessage("Primero debe registrarse una entrada.");
-    const now = new Date();
-    const schedule = schedules.find((item) => item.employee.toLowerCase() === user.name.toLowerCase() && item.site === site);
-    const expectedMinutes = schedule ? Number(schedule.startsAt.slice(0, 2)) * 60 + Number(schedule.startsAt.slice(3, 5)) + schedule.toleranceMinutes : 0;
-    const actualMinutes = now.getHours() * 60 + now.getMinutes();
-    const record: AttendanceRecord = { id: crypto.randomUUID(), userName: user.name, site, kind, at: now.toLocaleString("es-AR"), atISO: now.toISOString(), lateMinutes: kind === "Entrada" && schedule ? Math.max(0, actualMinutes - expectedMinutes) : undefined };
-    setAttendanceRecords((items) => [record, ...items]);
-    recordAudit(`Fichaje de ${kind.toLowerCase()}`, `${user.name} · ${site}${record.lateMinutes ? ` · tardanza ${record.lateMinutes} min` : ""}`);
-    setClock(`${kind} registrada a las ${now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
-    setAttendanceReminder(null);
+    setClock("Solicitando ubicación para validar presencia…");
+    const position = window.isSecureContext && navigator.geolocation
+      ? await new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })).catch(() => null)
+      : null;
+    const geolocation = position ? { latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy, capturedAt: new Date(position.timestamp).toISOString() } : { capturedAt: new Date().toISOString() };
+    try {
+      const response = await fetch(`${API_BASE}/attendance/clock`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, kind, geolocation }) });
+      const data = await response.json() as { ok?: boolean; record?: AttendanceRecord; exception?: boolean; reason?: string; message?: string; error?: string };
+      if (!response.ok || !data.ok) {
+        setClock("");
+        setMessage(data.exception ? `${data.message} Motivo: ${data.reason}.` : (data.error || "No se pudo registrar el fichaje."));
+        return;
+      }
+      if (data.record) setAttendanceRecords((items) => [data.record!, ...items.filter((item) => item.id !== data.record!.id)]);
+      setClock(`${kind} validada por geocerca a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
+      setAttendanceReminder(null);
+    } catch {
+      setClock(""); setMessage("No se pudo validar la ubicación. No se registró el fichaje; solicitá una excepción a Administración.");
+    }
   };
   const createCashTransfer = () => {
     if (!user) return;
@@ -4640,24 +4665,11 @@ export default function Home() {
                       Abrir caja
                     </button>
                   )}
-                  {cashIsOpen && !activeShift && (
-                    <button
-                      onClick={openCash}
-                      className="mt-3 w-full rounded bg-[#183a67] py-3 font-bold text-white"
-                    >
-                      Abrir nuevo turno
-                    </button>
-                  )}
                   {cashIsOpen && activeShift && (
                     <div className="mt-3 rounded border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm">
                       <b>Turno abierto</b>
                       <p className="mt-1">Responsable: {activeShift.openedBy} · Fondo declarado: {money.format(activeShift.initialFund)}</p>
-                      <button
-                        onClick={closeShift}
-                        className="mt-3 rounded border border-[#183a67] px-3 py-2 text-xs font-bold"
-                      >
-                        Cerrar turno y pasar caja
-                      </button>
+                      <p className="mt-2 text-xs text-slate-600">Para el relevo es obligatorio realizar el cierre completo, incluido el arqueo. La siguiente responsable podrá abrir una nueva caja una vez confirmado el cierre.</p>
                     </div>
                   )}
                   <label className="mt-3 block text-sm font-bold">Otros gastos en efectivo (no cargados en Egresos)</label>
@@ -5151,14 +5163,14 @@ export default function Home() {
             </>
           ) : tab === "Fichaje" ? (
             <>
-              <Heading
+                <Heading
                 k={`PERSONAL · ${site.toUpperCase()}`}
                 h="Fichaje"
-                p="Registro personal de entrada y salida con credencial individual."
+                p="Registro personal de entrada y salida con credencial individual y validación de presencia."
               />
               <div className="grid max-w-3xl gap-5 md:grid-cols-2">
                 <div className="rounded-2xl border bg-white p-6">
-                  <p className="rounded bg-[#eef2f6] p-3 text-sm">Fichás con tu sesión personal: <b>{user.name}</b>. El registro queda asociado al local seleccionado.</p>
+                  <p className="rounded bg-[#eef2f6] p-3 text-sm">Fichás con tu sesión personal: <b>{user.name}</b>. Al marcar se solicitará tu ubicación exclusivamente para validar que estás dentro de la geocerca del local; Administración accede solo a la evidencia mínima de fichaje.</p>
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     <button
                       onClick={() => markAttendance("Entrada")}
@@ -8394,6 +8406,20 @@ export default function Home() {
                         <tbody>{attendanceRecords.length ? attendanceRecords.filter((record) => reportSite === "Todos los locales" || record.site === reportSite).slice(0, 30).map((record) => <tr key={record.id} className="border-t"><td className="p-3 font-bold">{record.userName}</td><td className="p-3">{record.site}</td><td className="p-3">{record.kind}</td><td className="p-3">{record.at}</td><td className="p-3 text-right">{record.lateMinutes ? `${record.lateMinutes} min` : "—"}</td></tr>) : <tr><td colSpan={5} className="p-4 text-slate-500">Todavía no hay fichajes registrados.</td></tr>}</tbody>
                       </table>
                     </div>
+                    <section className="mt-6 rounded-xl border bg-white p-5">
+                      <h3 className="text-lg font-bold text-[#183a67]">Geocercas de fichaje</h3>
+                      <p className="mt-1 text-sm text-slate-600">Se solicita ubicación solo al marcar entrada o salida. El radio permitido es de 75 a 150 metros; la validación y la auditoría se realizan en el servidor.</p>
+                      <div className="mt-4 space-y-3">{SITES.map((local) => {
+                        const setting = presenceSettings[local] || { site: local, latitude: null, longitude: null, radiusMeters: 100, maxAccuracyMeters: 75 };
+                        const update = (patch: Partial<typeof setting>) => setPresenceSettings((items) => ({ ...items, [local]: { ...setting, ...patch } }));
+                        return <div key={local} className="grid gap-2 rounded border p-3 md:grid-cols-5"><b className="self-center">{local}</b><input aria-label={`Latitud ${local}`} type="number" step="0.0000001" placeholder="Latitud" value={setting.latitude ?? ""} onChange={(event) => update({ latitude: event.target.value === "" ? null : Number(event.target.value) })} className="rounded border p-2"/><input aria-label={`Longitud ${local}`} type="number" step="0.0000001" placeholder="Longitud" value={setting.longitude ?? ""} onChange={(event) => update({ longitude: event.target.value === "" ? null : Number(event.target.value) })} className="rounded border p-2"/><label className="text-xs">Radio (75–150 m)<input type="number" min="75" max="150" value={setting.radiusMeters} onChange={(event) => update({ radiusMeters: Number(event.target.value) })} className="mt-1 w-full rounded border p-2 text-sm"/></label><button type="button" disabled={presenceSaving === local} onClick={() => void savePresenceSettings(local)} className="self-end rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white">{presenceSaving === local ? "Guardando…" : "Guardar"}</button></div>;
+                      })}</div>
+                    </section>
+                    <section className="mt-6 rounded-xl border bg-white p-5">
+                      <h3 className="text-lg font-bold text-[#183a67]">Excepciones de presencia</h3>
+                      <p className="mt-1 text-sm text-slate-600">Los casos con permiso denegado, GPS no disponible, baja precisión o fuera de zona no fichan automáticamente.</p>
+                      <div className="mt-3 overflow-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Persona</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Tipo</th><th className="p-2 text-left">Motivo</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Resolución</th></tr></thead><tbody>{attendanceExceptions.length ? attendanceExceptions.map((item) => <tr key={item.id} className="border-t"><td className="p-2">{item.full_name}</td><td className="p-2">{item.site}</td><td className="p-2">{item.kind}</td><td className="p-2">{item.reason}</td><td className="p-2">{item.status}</td><td className="p-2 text-right">{item.status === "Pendiente" && <><button onClick={() => void resolveAttendanceException(item.id, "approve")} className="mr-2 rounded border border-green-700 px-2 py-1 text-green-800">Aprobar</button><button onClick={() => void resolveAttendanceException(item.id, "reject")} className="rounded border border-red-700 px-2 py-1 text-red-800">Rechazar</button></>}</td></tr>) : <tr><td colSpan={6} className="p-3 text-slate-500">No hay excepciones pendientes.</td></tr>}</tbody></table></div>
+                    </section>
                     </div>
                   )}
                   {adminReport === "Clientes" && (

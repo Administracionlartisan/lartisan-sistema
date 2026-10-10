@@ -82,8 +82,8 @@ export function isOpeningAlreadyClosedOnServer(
 ): boolean {
   if (!write || !server || server.cashOpen || server.activeShift) return false;
   const idsAdded = (key: "sales" | "payments" | "returnsLog" | "stockMovements" | "shiftLog" | "cashLedger") => {
-    const before = new Set((write.baseState[key] ?? []).map((item) => item?.id).filter(Boolean));
-    return (write.state[key] ?? []).filter((item) => item?.id && !before.has(item.id));
+    const before = new Set(((write.baseState[key] ?? []) as unknown as { id?: string }[]).map((item) => item?.id).filter(Boolean));
+    return ((write.state[key] ?? []) as unknown as { id?: string }[]).filter((item) => item?.id && !before.has(item.id));
   };
   // No se descarta una venta, devolución, pago ni movimiento de inventario.
   if (idsAdded("sales").length || idsAdded("payments").length || idsAdded("returnsLog").length || idsAdded("stockMovements").length) return false;
@@ -225,8 +225,8 @@ export class OperationalOutbox {
     const before = write.baseState;
     const after = write.state;
     const newItems = (key: "sales" | "payments" | "returnsLog" | "stockMovements" | "shiftLog" | "cashLedger") => {
-      const known = new Set((before[key] ?? []).filter((item): item is { id: string } => Boolean(item && typeof item === "object" && "id" in item && typeof item.id === "string")).map((item) => item.id));
-      return (after[key] ?? []).filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && "id" in item && typeof item.id === "string" && !known.has(item.id)));
+    const known = new Set(((before[key] ?? []) as unknown as { id?: string }[]).map((item) => item?.id).filter((id): id is string => typeof id === "string"));
+      return ((after[key] ?? []) as unknown as Record<string, unknown>[]).filter((item) => Boolean(item && typeof item.id === "string" && !known.has(item.id)));
     };
     // Una apertura no puede traer ventas, pagos, devoluciones ni movimientos de
     // stock. Esta guarda evita que el arreglo de compatibilidad amplíe el

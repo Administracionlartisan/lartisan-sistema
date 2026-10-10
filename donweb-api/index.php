@@ -10,6 +10,7 @@ require __DIR__ . '/mrp_sync.php';
 require __DIR__ . '/assistant.php';
 require __DIR__ . '/arca_wsfe.php';
 require __DIR__ . '/internal_chat.php';
+require __DIR__ . '/attendance_presence.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -46,12 +47,83 @@ foreach ([
     'arca_wsfe' => static fn () => ensure_arca_wsfe_schema($pdo),
     'test_operating_date' => static fn () => ensure_test_operating_date_schema($pdo),
     'internal_chat' => static fn () => ensure_internal_chat_schema($pdo),
+    'attendance_presence' => static fn () => ensure_attendance_presence_schema($pdo),
 ] as $schema => $ensure) {
     try {
         $ensure();
     } catch (Throwable $error) {
         error_log('LARTISAN deferred ' . $schema . ' schema update: ' . $error->getMessage());
     }
+}
+
+if ($method === 'GET' && $route === 'attendance/presence-settings') {
+    $user = require_user($pdo);
+    ensure_attendance_presence_schema($pdo);
+    $site = trim((string) ($_GET['site'] ?? ''));
+    if (!user_can_access_site($user, $site)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+    $settings = presence_settings($pdo, $site);
+    json_response(['ok' => true, 'configured' => $settings !== null, 'settings' => $settings]);
+}
+
+if ($method === 'GET' && $route === 'admin/attendance/presence-settings') {
+    require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
+    $rows = $pdo->query('SELECT site, latitude, longitude, radius_meters, max_accuracy_meters, updated_at FROM lartisan_site_presence_settings ORDER BY site')->fetchAll();
+    json_response(['ok' => true, 'settings' => array_map(static fn ($row) => ['site' => $row['site'], 'latitude' => $row['latitude'] === null ? null : (float) $row['latitude'], 'longitude' => $row['longitude'] === null ? null : (float) $row['longitude'], 'radiusMeters' => (int) $row['radius_meters'], 'maxAccuracyMeters' => (int) $row['max_accuracy_meters'], 'updatedAt' => $row['updated_at']], $rows)]);
+}
+
+if ($method === 'PUT' && preg_match('#^admin/attendance/presence-settings/([^/]+)$#', $route, $matches)) {
+    $user = require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
+    $site = rawurldecode($matches[1]); if (!in_array($site, operational_sites(), true)) json_response(['ok' => false, 'error' => 'Local inválido.'], 422);
+    $body = request_body(); $lat = filter_var($body['latitude'] ?? null, FILTER_VALIDATE_FLOAT); $lon = filter_var($body['longitude'] ?? null, FILTER_VALIDATE_FLOAT);
+    $radius = filter_var($body['radiusMeters'] ?? null, FILTER_VALIDATE_INT); $accuracy = filter_var($body['maxAccuracyMeters'] ?? null, FILTER_VALIDATE_INT);
+    if ($lat === false || $lon === false || $lat < -90 || $lat > 90 || $lon < -180 || $lon > 180 || $radius === false || $radius < 75 || $radius > 150 || $accuracy === false || $accuracy < 10 || $accuracy > 150) json_response(['ok' => false, 'error' => 'Coordenadas o límites inválidos. Radio permitido: 75 a 150 m.'], 422);
+    $pdo->prepare('INSERT INTO lartisan_site_presence_settings (site, latitude, longitude, radius_meters, max_accuracy_meters, updated_by) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE latitude=VALUES(latitude), longitude=VALUES(longitude), radius_meters=VALUES(radius_meters), max_accuracy_meters=VALUES(max_accuracy_meters), updated_by=VALUES(updated_by)')->execute([$site, $lat, $lon, $radius, $accuracy, $user['id']]);
+    audit($pdo, (int) $user['id'], 'presence_geofence_configured', $site . ' · radio ' . $radius . ' m');
+    json_response(['ok' => true, 'settings' => presence_settings($pdo, $site)]);
+}
+
+if ($method === 'POST' && $route === 'attendance/clock') {
+    $user = require_user($pdo); ensure_operations_schema($pdo); ensure_attendance_presence_schema($pdo);
+    $body = request_body(); $site = trim((string) ($body['site'] ?? '')); $kind = (string) ($body['kind'] ?? '');
+    if (!user_can_access_site($user, $site) || !in_array($kind, ['Entrada', 'Salida'], true)) json_response(['ok' => false, 'error' => 'Fichaje inválido o local no autorizado.'], 422);
+    $geo = is_array($body['geolocation'] ?? null) ? $body['geolocation'] : [];
+    $evaluation = presence_evaluate($pdo, $site, $geo);
+    $evidence = ['reason' => $evaluation['reason'], 'distanceMeters' => isset($evaluation['distance']) ? round((float) $evaluation['distance'], 1) : null, 'accuracyMeters' => isset($evaluation['accuracy']) ? round((float) $evaluation['accuracy'], 1) : null, 'capturedAt' => $geo['capturedAt'] ?? null];
+    $pdo->beginTransaction();
+    try {
+        if (!$evaluation['ok']) {
+            $id = presence_uuid();
+            $pdo->prepare('INSERT INTO lartisan_attendance_exceptions (id, user_id, site, kind, reason, evidence_json) VALUES (?, ?, ?, ?, ?, ?)')->execute([$id, $user['id'], $site, $kind, $evaluation['reason'], json_encode($evidence, JSON_UNESCAPED_UNICODE)]);
+            audit($pdo, (int) $user['id'], 'attendance_exception_requested', $site . ' · ' . $kind . ' · ' . $evaluation['reason']);
+            $pdo->commit(); json_response(['ok' => false, 'exception' => true, 'exceptionId' => $id, 'reason' => $evaluation['reason'], 'message' => 'El fichaje requiere autorización de Administración.']);
+        }
+        $record = attendance_append_to_locked_state($pdo, $site, $user, $kind, ['presenceStatus' => 'Dentro de zona', 'distanceMeters' => $evidence['distanceMeters'], 'accuracyMeters' => $evidence['accuracyMeters'], 'locationCapturedAt' => $evidence['capturedAt']]);
+        audit($pdo, (int) $user['id'], 'attendance_clocked_with_geofence', $site . ' · ' . $kind);
+        $pdo->commit(); json_response(['ok' => true, 'record' => $record]);
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+}
+
+if ($method === 'GET' && $route === 'admin/attendance/exceptions') {
+    require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
+    $rows = $pdo->query("SELECT e.*, u.full_name FROM lartisan_attendance_exceptions e JOIN users u ON u.id=e.user_id ORDER BY e.requested_at DESC LIMIT 200")->fetchAll();
+    json_response(['ok' => true, 'exceptions' => $rows]);
+}
+
+if ($method === 'POST' && preg_match('#^admin/attendance/exceptions/([a-f0-9-]{36})/(approve|reject)$#i', $route, $matches)) {
+    $admin = require_user($pdo, ['administracion']); ensure_operations_schema($pdo); ensure_attendance_presence_schema($pdo); $action = strtolower($matches[2]); $body = request_body(); $note = trim((string) ($body['note'] ?? ''));
+    $pdo->beginTransaction();
+    try {
+        $lookup = $pdo->prepare('SELECT e.*, u.full_name FROM lartisan_attendance_exceptions e JOIN users u ON u.id=e.user_id WHERE e.id=? FOR UPDATE'); $lookup->execute([$matches[1]]); $exception = $lookup->fetch();
+        if (!$exception) throw new RuntimeException('Excepción inexistente.');
+        if ($exception['status'] !== 'Pendiente') { $pdo->commit(); json_response(['ok' => true, 'alreadyResolved' => true]); }
+        if ($action === 'approve') {
+            $recordUser = ['id' => (int) $exception['user_id'], 'full_name' => (string) $exception['full_name']];
+            attendance_append_to_locked_state($pdo, (string) $exception['site'], $recordUser, (string) $exception['kind'], ['presenceStatus' => 'Excepción aprobada', 'attendanceExceptionId' => (string) $exception['id']]);
+        }
+        $pdo->prepare('UPDATE lartisan_attendance_exceptions SET status=?, resolved_at=NOW(), resolved_by=?, resolution_note=? WHERE id=?')->execute([$action === 'approve' ? 'Aprobada' : 'Rechazada', $admin['id'], $note ?: null, $exception['id']]);
+        audit($pdo, (int) $admin['id'], $action === 'approve' ? 'attendance_exception_approved' : 'attendance_exception_rejected', $exception['site'] . ' · ' . $exception['kind']);
+        $pdo->commit(); json_response(['ok' => true]);
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
 }
 
 // Con una contraseña temporal solo se puede cambiarla (o salir). Antes esto se
@@ -1316,6 +1388,10 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $state = $authorizedIncoming;
         }
         validate_test_operating_snapshot($pdo, $site, $previousState, $state, $clientEvent);
+        // El registro del local está bloqueado con FOR UPDATE. Esta validación
+        // convierte la política de una única caja/responsable en una garantía
+        // del servidor y no en una mera condición de la pantalla.
+        enforce_strict_cash_snapshot($previousState, $state, $user, $site);
         // El historial completo vive en las tablas normalizadas y en
         // operation_archive; el estado del local conserva solo lo reciente y lo
         // abierto para que cada envío no crezca sin límite.

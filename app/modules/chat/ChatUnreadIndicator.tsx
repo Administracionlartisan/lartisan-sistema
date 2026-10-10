@@ -26,7 +26,7 @@ export default function ChatUnreadIndicator({ onOpen, open = false }: { onOpen: 
         }
       } catch { /* La aplicación mantiene sus módulos operativos sin conexión. */ }
     };
-    void fetch(`${API_BASE}/chat/bootstrap`, { credentials: "include" }).then(async response => response.ok ? response.json() : null).then((data: { settings?: { sound?: boolean; desktop?: boolean } } | null) => { if (data?.settings) preferences.current = { sound: data.settings.sound !== false, desktop: data.settings.desktop === true }; }).catch(() => undefined);
+    void fetch(`${API_BASE}/chat/bootstrap`, { credentials: "include" }).then(async response => response.ok ? response.json() : null).then((value: unknown) => { const data = value as { settings?: { sound?: boolean; desktop?: boolean } } | null; if (data?.settings) preferences.current = { sound: data.settings.sound !== false, desktop: data.settings.desktop === true }; }).catch(() => undefined);
     void refresh();
     const timer = window.setInterval(() => void refresh(), 15000);
     return () => { enabled = false; window.clearInterval(timer); };
