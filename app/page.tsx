@@ -582,8 +582,11 @@ export default function Home() {
   }, [user?.id, user?.role]);
   useEffect(() => {
     if (!user || !activeSites.length) return;
-    const allowed = user.accessAllLocations ? activeSites : user.locations.filter((item) => activeSites.includes(item));
-    if (allowed.length && !allowed.includes(site)) setSite(allowed[0]);
+    const allowed = user.accessAllLocations ? activeSites : (user.locations ?? []).filter((item) => activeSites.includes(item));
+    if (allowed.length && !allowed.includes(site)) {
+      const timer = window.setTimeout(() => setSite(allowed[0]), 0);
+      return () => window.clearTimeout(timer);
+    }
   }, [activeSites, site, user]);
   useEffect(() => {
     if (!user?.id) return;
