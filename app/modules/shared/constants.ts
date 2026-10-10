@@ -2,8 +2,18 @@ import type { CashFields, ManagedUser, Role } from "./types";
 
 // Producción usa la API de DonWeb. Un entorno de pruebas puede apuntar a otra
 // API definiendo VITE_LARTISAN_API_BASE al compilar o levantar el servidor.
+// Como resguardo, una interfaz abierta desde IPv4 local conserva ese mismo
+// host para la API: evita mezclar localhost/IPv6 con 127.0.0.1 y perder la
+// sesión de demostración por una cookie de otro origen.
+const localApiBase =
+  typeof window !== "undefined" &&
+  ["127.0.0.1", "localhost"].includes(window.location.hostname)
+    ? `http://${window.location.hostname}:8081/sistema-api`
+    : undefined;
+
 export const API_BASE =
   (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_LARTISAN_API_BASE ||
+  localApiBase ||
   "https://www.lartisantaller.com/sistema-api";
 
 export const EMPTY_CASH_FIELDS: CashFields = {
