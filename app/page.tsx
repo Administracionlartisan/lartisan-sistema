@@ -3884,7 +3884,10 @@ export default function Home() {
   useEffect(() => {
     if (!user || user.role !== "vendedora") return;
     const key = `lartisan:training-welcome:${user.id}`;
-    if (!window.sessionStorage.getItem(key)) { window.sessionStorage.setItem(key, "shown"); setTrainingWelcomeOpen(true); }
+    if (window.sessionStorage.getItem(key)) return;
+    window.sessionStorage.setItem(key, "shown");
+    const timer = window.setTimeout(() => setTrainingWelcomeOpen(true), 0);
+    return () => window.clearTimeout(timer);
   }, [user]);
   if (authLoading && !user) return <SecureLoading />;
   if (!user) return <AccessScreen {...{ portal, login, setLogin, password, setPassword, showPassword, setShowPassword, authLoading, recoverySending, recoveryStage, recoveryCode, setRecoveryCode, recoveryPassword, setRecoveryPassword, recoveryPasswordConfirm, setRecoveryPasswordConfirm, setRecoveryStage, message, setMessage, enter, requestPasswordReset, confirmEmailRecovery }} />;
