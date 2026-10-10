@@ -445,13 +445,13 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
           {notice}
         </p>
       )}
-      <div className="grid min-h-[620px] overflow-hidden rounded-2xl border bg-white lg:grid-cols-[320px_1fr]">
-        <aside className="border-b p-3 lg:border-b-0 lg:border-r">
+      <div className="grid min-h-[620px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_45px_-28px_rgba(15,41,77,0.55)] lg:grid-cols-[320px_1fr]">
+        <aside className="border-b bg-gradient-to-b from-slate-50 to-white p-3 lg:border-b-0 lg:border-r lg:border-slate-200">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Buscar conversación o local"
-            className="w-full rounded border p-2"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm shadow-sm outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:ring-4 focus:ring-[#183a67]/10"
           />
           <div className="mt-3 max-h-72 space-y-1 overflow-auto">
             {visibleThreads.map((thread) => (
@@ -459,17 +459,21 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
                 key={thread.id}
                 type="button"
                 onClick={() => setSelected(thread.id)}
-                className={`w-full rounded p-3 text-left ${selected === thread.id ? "bg-[#183a67] text-white" : "hover:bg-slate-50"}`}
+                className={`group w-full rounded-2xl border p-3 text-left transition-all duration-200 ${
+                  selected === thread.id
+                    ? "border-[#183a67] bg-[#183a67] text-white shadow-lg shadow-[#183a67]/20"
+                    : "border-transparent bg-white/70 hover:-translate-y-px hover:border-slate-200 hover:bg-white hover:shadow-md"
+                }`}
               >
                 <div className="flex justify-between gap-2">
                   <b>{thread.title}</b>
                   {thread.unread > 0 && (
-                    <span className="rounded-full bg-[#ec3a35] px-2 text-xs text-white">
+                  <span className="rounded-full bg-[#ec3a35] px-2 py-0.5 text-xs font-bold text-white shadow-sm">
                       {thread.unread}
                     </span>
                   )}
                 </div>
-                <small className="block opacity-75">
+                <small className={`mt-1 block ${selected === thread.id ? "text-blue-100" : "text-slate-500"}`}>
                   {threadContext(thread)} · {readable(thread.lastAt)}
                 </small>
               </button>
@@ -485,7 +489,7 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
                   key={contact.id}
                   type="button"
                   onClick={() => void startDirect(contact)}
-                  className="block w-full rounded border p-2 text-left text-sm"
+                  className="block w-full rounded-xl border border-slate-200 bg-white p-2.5 text-left text-sm transition hover:border-[#183a67]/30 hover:shadow-sm"
                 >
                   <b>{contact.name}</b>
                   <span className="ml-1 text-slate-500">
@@ -498,9 +502,9 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
           </details>
         </aside>
         <div className="flex min-h-0 flex-col">
-          <header className="border-b p-4">
-            <b>{selectedThread?.title || "Elegí una conversación"}</b>
-            <p className="text-xs text-slate-500">
+          <header className="border-b border-slate-200 bg-white p-4">
+            <b className="text-base text-[#183a67]">{selectedThread?.title || "Elegí una conversación"}</b>
+            <p className="mt-0.5 text-xs text-slate-500">
               {selectedThread?.site
                 ? `Local asociado: ${selectedThread.site}`
                 : selectedThread?.kind.startsWith("direct:")
@@ -511,16 +515,20 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Buscar dentro de esta conversación"
-              className="mt-2 w-full rounded border p-2 text-sm"
+              className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:bg-white focus:ring-4 focus:ring-[#183a67]/10"
             />
           </header>
-          <div className="flex-1 space-y-3 overflow-auto bg-slate-50 p-4">
+          <div className="flex-1 space-y-3 overflow-auto bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef3f8)] p-4 md:p-5">
             {messages.map((message) => (
               <article
                 key={message.id}
-                className={`max-w-[88%] rounded-xl p-3 text-sm ${message.own ? "ml-auto bg-[#183a67] text-white" : "bg-white shadow-sm"}`}
+                className={`relative max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-md transition-shadow hover:shadow-lg ${
+                  message.own
+                    ? "ml-auto rounded-br-md bg-gradient-to-br from-[#244f86] to-[#183a67] text-white shadow-[#183a67]/20"
+                    : "rounded-bl-md border border-slate-100 bg-white text-slate-800 shadow-slate-300/40"
+                }`}
               >
-                <div className="mb-1 flex gap-2 text-xs opacity-80">
+                <div className={`mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs ${message.own ? "text-blue-100" : "text-slate-500"}`}>
                   <b>{message.own ? "Vos" : message.sender.name}</b>
                   <span>{message.sender.role}</span>
                   <span>{readable(message.createdAt)}</span>
@@ -535,11 +543,11 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
                     </span>
                   )}
                 </div>
-                <p className="whitespace-pre-wrap">{message.body}</p>
+                <p className="whitespace-pre-wrap break-words">{message.body}</p>
                 {message.attachments.map((file) => (
                   <div
                     key={file.id}
-                    className="mt-2 rounded border border-current/20 p-2"
+                    className={`mt-3 rounded-xl border p-2.5 ${message.own ? "border-white/20 bg-black/10" : "border-slate-200 bg-slate-50"}`}
                   >
                     <a
                       href={`${API_BASE}/chat/attachments/${file.id}`}
@@ -562,17 +570,17 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
                   </div>
                 ))}
                 {message.own && !message.deletedAt && (
-                  <div className="mt-2 flex gap-2 text-xs">
+                  <div className="mt-3 flex gap-2 text-xs font-semibold">
                     <button
                       type="button"
-                      className="underline"
+                      className="rounded-lg px-1.5 py-1 underline decoration-white/50 underline-offset-2 transition hover:bg-white/15"
                       onClick={() => void modifyMessage(message, "edit")}
                     >
                       Editar
                     </button>
                     <button
                       type="button"
-                      className="underline"
+                      className="rounded-lg px-1.5 py-1 underline decoration-white/50 underline-offset-2 transition hover:bg-white/15"
                       onClick={() => void modifyMessage(message, "delete")}
                     >
                       Eliminar
@@ -587,17 +595,17 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
               </p>
             )}
           </div>
-          <form onSubmit={send} className="border-t p-3">
+          <form onSubmit={send} className="border-t border-slate-200 bg-white p-3 md:p-4">
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               maxLength={4000}
               placeholder="Escribí un mensaje operativo…"
               disabled={!selected || sending}
-              className="min-h-20 w-full rounded border p-3"
+              className="min-h-20 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm shadow-inner outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:bg-white focus:ring-4 focus:ring-[#183a67]/10"
             />
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <label className="cursor-pointer rounded border px-3 py-2 text-sm font-bold">
+              <label className="cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold shadow-sm transition hover:border-[#183a67]/30 hover:shadow">
                 Adjuntar foto o archivo permitido
                 <input
                   type="file"
@@ -615,7 +623,7 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
               </span>
               <button
                 disabled={!selected || sending}
-                className="rounded bg-[#183a67] px-4 py-2 font-bold text-white disabled:opacity-50"
+                className="rounded-xl bg-[#183a67] px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-[#183a67]/20 transition hover:-translate-y-px hover:bg-[#102f57] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {sending ? "Enviando…" : "Enviar"}
               </button>
