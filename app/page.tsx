@@ -61,6 +61,17 @@ const completeStockMap = (saved: Record<number, unknown> | undefined, products: 
     ...Object.entries(saved ?? {}).map(([id, value]) => [id, safeStockQuantity(value)]),
     ...products.map((product) => [product.id, safeStockQuantity(saved?.[product.id])]),
   ]) as Record<number, number>;
+type LocationConfig = {
+  site: string; code: string; kind: "Local propio" | "Franquicia";
+  address: string; city: string; province: string;
+  contactName?: string | null; contactPhone?: string | null; active: boolean;
+  latitude: number | null; longitude: number | null;
+  radiusMeters: number; maxAccuracyMeters: number;
+};
+const blankLocation = (): LocationConfig => ({
+  site: "", code: "", kind: "Local propio", address: "", city: "CABA", province: "Ciudad Autónoma de Buenos Aires",
+  contactName: "", contactPhone: "", active: true, latitude: null, longitude: null, radiusMeters: 100, maxAccuracyMeters: 75,
+});
 export default function Home() {
   // En producción el portal se determina por el subdominio. El parámetro
   // ?portal=admin o ?portal=ventas permite revisar ambos accesos localmente.
@@ -148,6 +159,12 @@ export default function Home() {
     [presenceSettings, setPresenceSettings] = useState<Record<string, { site: string; latitude: number | null; longitude: number | null; radiusMeters: number; maxAccuracyMeters: number }>>({}),
     [attendanceExceptions, setAttendanceExceptions] = useState<{ id: string; site: string; kind: string; status: string; reason: string; full_name: string; requested_at: string }[]>([]),
     [presenceSaving, setPresenceSaving] = useState<string | null>(null),
+    [locations, setLocations] = useState<LocationConfig[]>([]),
+    [locationDraft, setLocationDraft] = useState<LocationConfig>(() => blankLocation()),
+    [locationSaving, setLocationSaving] = useState(false),
+    [editingLocationSite, setEditingLocationSite] = useState<string | null>(null),
+    [locationGeocoding, setLocationGeocoding] = useState(false),
+    [locationCandidates, setLocationCandidates] = useState<{ label: string; latitude: number; longitude: number }[]>([]),
     [adminReport, setAdminReport] = useState("Resumen"),
     [pnlConnection, setPnlConnection] = useState<{ connected: boolean; rows: string[][]; updatedAt: string | null }>({ connected: false, rows: [], updatedAt: null }),
     [pnlSyncing, setPnlSyncing] = useState(false),
@@ -184,6 +201,8 @@ export default function Home() {
     ),
     [clock, setClock] = useState(""),
     [drive, setDrive] = useState("");
+  const activeSites = useMemo(() => locations.filter((location) => location.active).map((location) => location.site), [locations]);
+  const configuredSites = activeSites.length ? activeSites : SITES;
   // La fecha simulada nunca se toma de un campo libre ni del reloj del equipo.
   // Sólo se activa si la API la habilitó para Maure y conserva la hora real.
   const operationalNow = () => {
@@ -370,14 +389,14 @@ export default function Home() {
     if (!operationalReady) return;
     // Ampliar los mapas sin tocar cantidades existentes ni identificadores históricos.
     const timer = window.setTimeout(() => {
-      setStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
-      setMinimumStock((items) => Object.fromEntries(SITES.map((local) => [local, completeStockMap(items[local], products)])));
+      setStock((items) => Object.fromEntries(configuredSites.map((local) => [local, completeStockMap(items[local], products)])));
+      setMinimumStock((items) => Object.fromEntries(configuredSites.map((local) => [local, completeStockMap(items[local], products)])));
       const blanks = Object.fromEntries(products.map((p) => [p.id, ""]));
-      setRealStock((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
-      setStockCountComments((items) => Object.fromEntries(SITES.map((local) => [local, { ...blanks, ...items[local] }])));
+      setRealStock((items) => Object.fromEntries(configuredSites.map((local) => [local, { ...blanks, ...items[local] }])));
+      setStockCountComments((items) => Object.fromEntries(configuredSites.map((local) => [local, { ...blanks, ...items[local] }])));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [products, operationalReady]);
+  }, [products, operationalReady, configuredSites]);
   useEffect(() => {
     // Primera migración: guarda la lista vigente completa, sin modificar stock.
     if (user?.role === "administracion" && catalog.ready && catalog.document.revision === 0) {
@@ -423,7 +442,7 @@ export default function Home() {
     setOperationalReady(false);
     setUser(next);
     const rememberedSite = window.localStorage.getItem(`lartisan:last-site:${next.id}`);
-    const allowedSites = next.accessAllLocations ? SITES : next.locations || [];
+    const allowedSites = next.accessAllLocations ? configuredSites : next.locations || [];
     const initialSite = rememberedSite && allowedSites.includes(rememberedSite)
       ? rememberedSite
       : allowedSites[0] || next.location || "Recoleta";
@@ -544,6 +563,26 @@ export default function Home() {
   // La restauración se reinicia solo cuando cambia el portal; la función usa el estado del montaje actual.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portal]);
+  useEffect(() => {
+    if (!user?.id) return;
+    let active = true;
+    const loadLocations = async () => {
+      try {
+        const endpoint = user.role === "administracion" ? "admin/locations" : "locations";
+        const response = await fetch(`${API_BASE}/${endpoint}`, { credentials: "include", cache: "no-store" });
+        const data = await response.json() as { locations?: LocationConfig[] };
+        if (!response.ok || !active || !data.locations?.length) return;
+        setLocations(data.locations);
+      } catch { /* Se conserva el catálogo local conocido si no hay conexión. */ }
+    };
+    void loadLocations();
+    return () => { active = false; };
+  }, [user?.id, user?.role]);
+  useEffect(() => {
+    if (!user || !activeSites.length) return;
+    const allowed = user.accessAllLocations ? activeSites : user.locations.filter((item) => activeSites.includes(item));
+    if (allowed.length && !allowed.includes(site)) setSite(allowed[0]);
+  }, [activeSites, site, user]);
   useEffect(() => {
     if (!user?.id) return;
     let active = true;
@@ -1040,6 +1079,42 @@ export default function Home() {
       setPresenceSettings((items) => ({ ...items, [local]: data.settings })); setMessage(`Geocerca de ${local} guardada y auditada.`);
     } catch { setMessage("No se pudo guardar la geocerca."); } finally { setPresenceSaving(null); }
   };
+  const geocodeLocation = async () => {
+    if (!locationDraft.address.trim() || !locationDraft.city.trim() || !locationDraft.province.trim()) return setMessage("Completá dirección, ciudad y provincia antes de buscar coordenadas.");
+    setLocationGeocoding(true); setLocationCandidates([]);
+    try {
+      const response = await fetch(`${API_BASE}/admin/locations/geocode`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ address: locationDraft.address, city: locationDraft.city, province: locationDraft.province }) });
+      const data = await response.json() as { error?: string; candidates?: { label: string; latitude: number; longitude: number }[] };
+      if (!response.ok) return setMessage(data.error || "No se pudieron buscar coordenadas.");
+      setLocationCandidates(data.candidates || []);
+      if (!(data.candidates || []).length) setMessage("No encontramos una coincidencia. Ingresá las coordenadas manualmente.");
+    } catch { setMessage("No se pudo conectar con el geocodificador."); } finally { setLocationGeocoding(false); }
+  };
+  const saveNewLocation = async () => {
+    if (!locationDraft.site.trim() || !locationDraft.code.trim() || locationDraft.latitude === null || locationDraft.longitude === null) return setMessage("Completá nombre, código y coordenadas confirmadas antes de habilitar el local.");
+    setLocationSaving(true);
+    try {
+      const endpoint = editingLocationSite ? `${API_BASE}/admin/locations/${encodeURIComponent(editingLocationSite)}` : `${API_BASE}/admin/locations`;
+      const response = await fetch(endpoint, { method: editingLocationSite ? "PATCH" : "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(locationDraft) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) return setMessage(data.error || "No se pudo guardar el local.");
+      const saved = { ...locationDraft, site: locationDraft.site.trim(), code: locationDraft.code.trim().toLowerCase(), active: editingLocationSite ? locationDraft.active : true };
+      setLocations((items) => editingLocationSite ? items.map((item) => item.site === editingLocationSite ? saved : item) : [...items, saved].sort((a, b) => a.site.localeCompare(b.site)));
+      setPresenceSettings((items) => ({ ...items, [locationDraft.site.trim()]: { site: locationDraft.site.trim(), latitude: locationDraft.latitude, longitude: locationDraft.longitude, radiusMeters: locationDraft.radiusMeters, maxAccuracyMeters: locationDraft.maxAccuracyMeters } }));
+      setLocationDraft(blankLocation()); setEditingLocationSite(null); setLocationCandidates([]); setMessage(editingLocationSite ? "Local y geocerca actualizados y auditados." : "Local habilitado, geocerca guardada y auditoría registrada. Asigná ahora las personas desde Usuarios.");
+    } catch { setMessage("No se pudo guardar el local."); } finally { setLocationSaving(false); }
+  };
+  const updateLocation = async (location: LocationConfig, patch: Partial<LocationConfig>) => {
+    const next = { ...location, ...patch };
+    try {
+      const response = await fetch(`${API_BASE}/admin/locations/${encodeURIComponent(location.site)}`, { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) return setMessage(data.error || "No se pudo actualizar el local.");
+      setLocations((items) => items.map((item) => item.site === location.site ? next : item));
+      setPresenceSettings((items) => ({ ...items, [location.site]: { site: location.site, latitude: next.latitude, longitude: next.longitude, radiusMeters: next.radiusMeters, maxAccuracyMeters: next.maxAccuracyMeters } }));
+      setMessage(`${location.site} actualizado y auditado.`);
+    } catch { setMessage("No se pudo actualizar el local."); }
+  };
 
   const resolveAttendanceException = async (id: string, action: "approve" | "reject") => {
     const note = window.prompt(action === "approve" ? "Motivo de autorización:" : "Motivo de rechazo:") || "Resuelto por Administración";
@@ -1243,7 +1318,7 @@ export default function Home() {
       detail: "Cambios registrados en el sistema.",
     };
     const persistenceSites = user.accessAllLocations
-      ? SITES
+      ? configuredSites
       : [...new Set([...(user.locations || [site]), ...centralOnlySites.current])];
     persistenceSites.forEach((local) => {
       const snapshot = operationalSnapshot(local);
@@ -1692,7 +1767,7 @@ export default function Home() {
     (total, transaction) => total + transaction.amount,
     0,
   );
-  const lowStockAlerts = SITES.flatMap((local) =>
+  const lowStockAlerts = configuredSites.flatMap((local) =>
     products.filter((product) => {
       const minimum = minimumStock[local][product.id] || 0;
       return minimum > 0 && (stock[local][product.id] || 0) <= minimum;
@@ -1739,7 +1814,7 @@ export default function Home() {
   const selectedRequest = stockRequests.find(
     (request) => request.id === selectedRequestId,
   );
-  const reportSites = SITES.filter(
+  const reportSites = configuredSites.filter(
     (local) => reportSite === "Todos los locales" || local === reportSite,
   );
   const reportSourceSales = persistedReportSales ?? sales;
@@ -1955,7 +2030,7 @@ export default function Home() {
     };
   });
   const operationalAlerts = [
-    ...SITES.filter((local) => cashOpenBySite[local]).map((local) => ({
+    ...configuredSites.filter((local) => cashOpenBySite[local]).map((local) => ({
       label: `Caja abierta en ${local}`,
       detail: "Revisar cierre de caja.",
       tone: "bg-[#fff5d8]",
@@ -2168,7 +2243,7 @@ export default function Home() {
         fullName: cleanName,
         role: newUserRole,
         assignedLocation: newUserAllLocations ? null : newUserSites[0] || "Recoleta",
-        assignedLocations: newUserAllLocations ? SITES : newUserSites,
+        assignedLocations: newUserAllLocations ? configuredSites : newUserSites,
         accessAllLocations: newUserAllLocations,
         temporaryPassword: newUserPassword,
         mfaRequired: newUserMfaRequired,
@@ -3916,7 +3991,7 @@ export default function Home() {
                   }}
                   className="mt-2 w-full rounded border p-2"
                 >
-                  {(user.accessAllLocations ? SITES : user.locations?.length ? user.locations : SITES).map((s) => (
+                  {(user.accessAllLocations ? configuredSites : user.locations?.length ? user.locations : configuredSites).map((s) => (
                     <option key={s}>{s}</option>
                   ))}
                 </select>
@@ -3979,7 +4054,7 @@ export default function Home() {
                 </div>
                 <div className="rounded-2xl border bg-white p-5">
                   <p className="text-sm">Cajas abiertas</p>
-                  <b className="mt-2 block text-2xl">{SITES.filter((local) => cashOpenBySite[local]).length}</b>
+                  <b className="mt-2 block text-2xl">{configuredSites.filter((local) => cashOpenBySite[local]).length}</b>
                 </div>
               </div>
               <div className="mt-5 overflow-auto rounded-2xl border bg-white">
@@ -3994,7 +4069,7 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody>
-                    {SITES.map((local) => {
+                    {configuredSites.map((local) => {
                       const localSales = sales.filter((sale) => sale.site === local && sale.status === "activa");
                       const localLowStock = lowStockAlerts.filter((alert) => alert.site === local).length;
                       const localOrders = stockRequests.filter((request) => request.site === local && request.status !== "Entregado").length;
@@ -4627,7 +4702,7 @@ export default function Home() {
                     <div className="mt-3 grid gap-2 sm:grid-cols-3">
                       <select value={transferDestination} onChange={(event) => setTransferDestination(event.target.value)} className="rounded border p-2 text-sm">
                         <option>Caja Mayor</option>
-                        {SITES.filter((local) => local !== site).map((local) => <option key={local}>{local}</option>)}
+                        {configuredSites.filter((local) => local !== site).map((local) => <option key={local}>{local}</option>)}
                       </select>
                       <input type="number" min="0" value={transferAmount || ""} onChange={(event) => setTransferAmount(Number(event.target.value))} placeholder="Importe" className="rounded border p-2 text-sm" />
                       <button onClick={createCashTransfer} disabled={!cashIsOpen || !can("transferirCaja")} className="rounded border border-[#183a67] px-3 py-2 text-sm font-bold disabled:opacity-40">Enviar efectivo</button>
@@ -6386,7 +6461,7 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody>
-                    {SITES.map((local) => (
+                    {configuredSites.map((local) => (
                       <tr key={local} className="border-t">
                         <td className="p-3 font-bold">{local}</td>
                         <td className="p-3 text-center">
@@ -6742,7 +6817,7 @@ export default function Home() {
                     </label>
                     {!newUserAllLocations && (
                       <div className="mt-2 grid grid-cols-2 gap-1 rounded border p-2 text-xs font-normal">
-                        {SITES.map((local) => (
+                        {configuredSites.map((local) => (
                           <label key={local} className="flex items-center gap-1">
                             <input
                               type="checkbox"
@@ -6942,7 +7017,7 @@ export default function Home() {
                               onChange={(e) =>
                                 updateManagedUser(profile.id, {
                                   accessAllLocations: e.target.checked,
-                                  locations: e.target.checked ? SITES : profile.locations?.length ? profile.locations : [profile.location || "Recoleta"],
+                                  locations: e.target.checked ? configuredSites : profile.locations?.length ? profile.locations : [profile.location || "Recoleta"],
                                 })
                               }
                             />
@@ -6961,7 +7036,7 @@ export default function Home() {
                               className="min-w-36 rounded border p-2 text-sm"
                               title="Mantené presionada Ctrl (o Cmd) para seleccionar varios locales."
                             >
-                              {SITES.map((local) => <option key={local}>{local}</option>)}
+                              {configuredSites.map((local) => <option key={local}>{local}</option>)}
                             </select>
                           )}
                         </td>
@@ -7351,7 +7426,7 @@ export default function Home() {
                       className="mt-1 block w-full rounded border p-2 font-normal"
                     >
                       <option>Todos los locales</option>
-                      {SITES.map((local) => (
+                      {configuredSites.map((local) => (
                         <option key={local}>{local}</option>
                       ))}
                     </select>
@@ -8126,7 +8201,7 @@ export default function Home() {
                         <p className="mt-4 text-2xl font-bold">
                           {
                             products.filter((product) =>
-                              SITES.some(
+                              configuredSites.some(
                                 (local) => stock[local][product.id] <= 8,
                               ),
                             ).length
@@ -8146,13 +8221,13 @@ export default function Home() {
                           </thead>
                           <tbody>
                             {products.filter((product) =>
-                              SITES.some(
+                              configuredSites.some(
                                 (local) => stock[local][product.id] <= 8,
                               ),
                             )
                               .slice(0, 8)
                               .map((product) => {
-                                const lowestSite = SITES.reduce(
+                                const lowestSite = configuredSites.reduce(
                                   (lowest, local) =>
                                     stock[local][product.id] <
                                     stock[lowest][product.id]
@@ -8407,10 +8482,27 @@ export default function Home() {
                         <tbody>{attendanceRecords.length ? attendanceRecords.filter((record) => reportSite === "Todos los locales" || record.site === reportSite).slice(0, 30).map((record) => <tr key={record.id} className="border-t"><td className="p-3 font-bold">{record.userName}</td><td className="p-3">{record.site}</td><td className="p-3">{record.kind}</td><td className="p-3">{record.at}</td><td className="p-3 text-right">{record.lateMinutes ? `${record.lateMinutes} min` : "—"}</td></tr>) : <tr><td colSpan={5} className="p-4 text-slate-500">Todavía no hay fichajes registrados.</td></tr>}</tbody>
                       </table>
                     </div>
+                    <section className="mt-6 rounded-xl border-2 border-[#183a67] bg-white p-5">
+                      <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-bold text-[#183a67]">Locales y franquicias</h3><p className="mt-1 text-sm text-slate-600">Administración puede habilitar una nueva sede sin soporte técnico: datos operativos, dirección, geocerca y estado. El buscador propone coordenadas; confirmalas antes de guardar.</p></div><span className="rounded-full bg-[#eef2f6] px-3 py-1 text-xs font-bold">{configuredSites.length} locales activos</span></div>
+                      <div className="mt-4 grid gap-3 rounded-xl bg-[#f7f3eb] p-4 md:grid-cols-2 xl:grid-cols-4">
+                        <label className="text-sm font-bold">Nombre visible<input value={locationDraft.site} onChange={(event) => { const site = event.target.value; setLocationDraft((item) => ({ ...item, site, code: item.code || site.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") })); }} placeholder="Ej. Belgrano" className="mt-1 w-full rounded border p-2 font-normal"/></label>
+                        <label className="text-sm font-bold">Código único<input value={locationDraft.code} onChange={(event) => setLocationDraft((item) => ({ ...item, code: event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") }))} placeholder="belgrano" className="mt-1 w-full rounded border p-2 font-normal"/></label>
+                        <label className="text-sm font-bold">Tipo<select value={locationDraft.kind} onChange={(event) => setLocationDraft((item) => ({ ...item, kind: event.target.value as LocationConfig["kind"] }))} className="mt-1 w-full rounded border p-2 font-normal"><option>Local propio</option><option>Franquicia</option></select></label>
+                        <label className="text-sm font-bold">Dirección<input value={locationDraft.address} onChange={(event) => setLocationDraft((item) => ({ ...item, address: event.target.value }))} placeholder="Calle 123" className="mt-1 w-full rounded border p-2 font-normal"/></label>
+                        <label className="text-sm font-bold">Ciudad<input value={locationDraft.city} onChange={(event) => setLocationDraft((item) => ({ ...item, city: event.target.value }))} className="mt-1 w-full rounded border p-2 font-normal"/></label>
+                        <label className="text-sm font-bold">Provincia<input value={locationDraft.province} onChange={(event) => setLocationDraft((item) => ({ ...item, province: event.target.value }))} className="mt-1 w-full rounded border p-2 font-normal"/></label>
+                        <label className="text-sm font-bold">Responsable / contacto<input value={locationDraft.contactName || ""} onChange={(event) => setLocationDraft((item) => ({ ...item, contactName: event.target.value }))} className="mt-1 w-full rounded border p-2 font-normal"/></label>
+                        <label className="text-sm font-bold">Teléfono operativo<input value={locationDraft.contactPhone || ""} onChange={(event) => setLocationDraft((item) => ({ ...item, contactPhone: event.target.value }))} className="mt-1 w-full rounded border p-2 font-normal"/></label>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-3"><button type="button" onClick={() => void geocodeLocation()} disabled={locationGeocoding} className="rounded border border-[#183a67] px-3 py-2 text-sm font-bold">{locationGeocoding ? "Buscando…" : "Buscar coordenadas por dirección"}</button>{locationCandidates.map((candidate) => <button key={`${candidate.latitude}-${candidate.longitude}`} type="button" onClick={() => { setLocationDraft((item) => ({ ...item, latitude: candidate.latitude, longitude: candidate.longitude })); setLocationCandidates([]); }} className="max-w-full rounded border bg-white px-3 py-2 text-left text-xs"><b>Usar sugerencia</b><span className="block truncate">{candidate.label}</span></button>)}</div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-4"><label className="text-sm font-bold">Latitud<input type="number" step="0.0000001" value={locationDraft.latitude ?? ""} onChange={(event) => setLocationDraft((item) => ({ ...item, latitude: event.target.value === "" ? null : Number(event.target.value) }))} className="mt-1 w-full rounded border p-2 font-normal"/></label><label className="text-sm font-bold">Longitud<input type="number" step="0.0000001" value={locationDraft.longitude ?? ""} onChange={(event) => setLocationDraft((item) => ({ ...item, longitude: event.target.value === "" ? null : Number(event.target.value) }))} className="mt-1 w-full rounded border p-2 font-normal"/></label><label className="text-sm font-bold">Radio (75–150 m)<input type="number" min="75" max="150" value={locationDraft.radiusMeters} onChange={(event) => setLocationDraft((item) => ({ ...item, radiusMeters: Number(event.target.value) }))} className="mt-1 w-full rounded border p-2 font-normal"/></label><button type="button" disabled={locationSaving} onClick={() => void saveNewLocation()} className="self-end rounded bg-[#183a67] px-4 py-2 font-bold text-white">{locationSaving ? "Guardando…" : editingLocationSite ? "Guardar cambios" : "Habilitar local"}</button></div>
+                      <p className="mt-3 text-xs text-slate-500">Al habilitarlo se crea la geocerca y queda en auditoría. Los usuarios con “Todos los locales” lo verán automáticamente; para los demás, asignalo desde Usuarios. La conexión a una hoja de Drive se configura de forma independiente antes del primer cierre.</p>
+                      <div className="mt-5 overflow-auto"><table className="w-full min-w-[800px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-2 text-left">Local</th><th className="p-2 text-left">Dirección</th><th className="p-2 text-left">Tipo</th><th className="p-2 text-left">Geocerca</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Acción</th></tr></thead><tbody>{locations.map((location) => <tr key={location.site} className="border-t"><td className="p-2 font-bold">{location.site}<span className="block text-xs font-normal text-slate-500">{location.code}</span></td><td className="p-2">{location.address ? `${location.address}, ${location.city}` : "Pendiente"}</td><td className="p-2">{location.kind}</td><td className="p-2">{location.latitude === null ? "Pendiente" : `${location.radiusMeters} m`}</td><td className="p-2">{location.active ? "Activo" : "Inactivo"}</td><td className="p-2 text-right"><button type="button" onClick={() => { setLocationDraft(location); setEditingLocationSite(location.site); setLocationCandidates([]); }} className="mr-2 rounded border px-2 py-1 text-xs">Editar</button><button type="button" onClick={() => void updateLocation(location, { active: !location.active })} className="rounded border px-2 py-1 text-xs">{location.active ? "Desactivar" : "Reactivar"}</button></td></tr>)}</tbody></table></div>
+                    </section>
                     <section className="mt-6 rounded-xl border bg-white p-5">
                       <h3 className="text-lg font-bold text-[#183a67]">Geocercas de fichaje</h3>
                       <p className="mt-1 text-sm text-slate-600">Se solicita ubicación solo al marcar entrada o salida. El radio permitido es de 75 a 150 metros; la validación y la auditoría se realizan en el servidor.</p>
-                      <div className="mt-4 space-y-3">{SITES.map((local) => {
+                      <div className="mt-4 space-y-3">{configuredSites.map((local) => {
                         const setting = presenceSettings[local] || { site: local, latitude: null, longitude: null, radiusMeters: 100, maxAccuracyMeters: 75 };
                         const update = (patch: Partial<typeof setting>) => setPresenceSettings((items) => ({ ...items, [local]: { ...setting, ...patch } }));
                         return <div key={local} className="grid gap-2 rounded border p-3 md:grid-cols-5"><b className="self-center">{local}</b><input aria-label={`Latitud ${local}`} type="number" step="0.0000001" placeholder="Latitud" value={setting.latitude ?? ""} onChange={(event) => update({ latitude: event.target.value === "" ? null : Number(event.target.value) })} className="rounded border p-2"/><input aria-label={`Longitud ${local}`} type="number" step="0.0000001" placeholder="Longitud" value={setting.longitude ?? ""} onChange={(event) => update({ longitude: event.target.value === "" ? null : Number(event.target.value) })} className="rounded border p-2"/><label className="text-xs">Radio (75–150 m)<input type="number" min="75" max="150" value={setting.radiusMeters} onChange={(event) => update({ radiusMeters: Number(event.target.value) })} className="mt-1 w-full rounded border p-2 text-sm"/></label><button type="button" disabled={presenceSaving === local} onClick={() => void savePresenceSettings(local)} className="self-end rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white">{presenceSaving === local ? "Guardando…" : "Guardar"}</button></div>;

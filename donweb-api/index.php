@@ -42,6 +42,7 @@ if ($method === 'GET' && ($route === '' || $route === 'health')) {
 // error específico sin dejar fuera al resto de la operación.
 foreach ([
     'users' => static fn () => ensure_user_locations_schema($pdo),
+    'locations' => static fn () => ensure_locations_schema($pdo),
     'operations' => static fn () => ensure_operations_schema($pdo),
     'mrp' => static fn () => ensure_mrp_schema($pdo),
     'arca_wsfe' => static fn () => ensure_arca_wsfe_schema($pdo),
@@ -54,6 +55,95 @@ foreach ([
     } catch (Throwable $error) {
         error_log('LARTISAN deferred ' . $schema . ' schema update: ' . $error->getMessage());
     }
+}
+
+// Catálogo administrable de sucursales y franquicias. La API, no el navegador,
+// decide qué locales son operativos; así una nueva sucursal entra de forma
+// coherente en fichaje, caja, permisos, reportes y grupos de chat.
+if ($method === 'GET' && $route === 'locations') {
+    $user = require_user($pdo); ensure_locations_schema($pdo);
+    $rows = $pdo->query('SELECT site, site_code, kind, address, city, province, active FROM lartisan_locations WHERE active = 1 ORDER BY site')->fetchAll();
+    if (($user['role'] ?? '') !== 'administracion' && !is_primary_user($user, $config)) {
+        $rows = array_values(array_filter($rows, static fn (array $row): bool => user_can_access_site($user, (string) $row['site'])));
+    }
+    json_response(['ok' => true, 'locations' => $rows]);
+}
+
+if ($method === 'GET' && $route === 'admin/locations') {
+    $admin = require_user($pdo);
+    if (($admin['role'] ?? '') !== 'administracion' && !is_primary_user($admin, $config)) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
+    ensure_locations_schema($pdo); ensure_attendance_presence_schema($pdo);
+    $rows = $pdo->query('SELECT l.site, l.site_code, l.kind, l.address, l.city, l.province, l.contact_name, l.contact_phone, l.active, l.created_at, l.updated_at, p.latitude, p.longitude, p.radius_meters, p.max_accuracy_meters FROM lartisan_locations l LEFT JOIN lartisan_site_presence_settings p ON p.site=l.site ORDER BY l.active DESC, l.site')->fetchAll();
+    json_response(['ok' => true, 'locations' => array_map(static fn (array $row): array => [
+        'site' => $row['site'], 'code' => $row['site_code'], 'kind' => $row['kind'], 'address' => $row['address'], 'city' => $row['city'], 'province' => $row['province'], 'contactName' => $row['contact_name'], 'contactPhone' => $row['contact_phone'], 'active' => (bool) $row['active'], 'latitude' => $row['latitude'] === null ? null : (float) $row['latitude'], 'longitude' => $row['longitude'] === null ? null : (float) $row['longitude'], 'radiusMeters' => $row['radius_meters'] === null ? 100 : (int) $row['radius_meters'], 'maxAccuracyMeters' => $row['max_accuracy_meters'] === null ? 75 : (int) $row['max_accuracy_meters'], 'createdAt' => $row['created_at'], 'updatedAt' => $row['updated_at'],
+    ], $rows)]);
+}
+
+if ($method === 'POST' && $route === 'admin/locations/geocode') {
+    $admin = require_user($pdo);
+    if (($admin['role'] ?? '') !== 'administracion' && !is_primary_user($admin, $config)) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
+    $body = request_body();
+    $parts = [trim((string) ($body['address'] ?? '')), trim((string) ($body['city'] ?? '')), trim((string) ($body['province'] ?? '')), 'Argentina'];
+    $query = implode(', ', array_filter($parts, static fn (string $item): bool => $item !== ''));
+    if (mb_strlen($query, 'UTF-8') < 8 || mb_strlen($query, 'UTF-8') > 300) json_response(['ok' => false, 'error' => 'Ingresá una dirección completa para buscar coordenadas.'], 422);
+    // Nominatim is only a coordinate suggestion. Administración must review it
+    // before saving the geofence, so an ambiguous address cannot silently move
+    // the attendance perimeter.
+    $url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&countrycodes=ar&q=' . rawurlencode($query);
+    $context = stream_context_create(['http' => ['method' => 'GET', 'timeout' => 8, 'header' => "User-Agent: LArtisan-Operations/1.0 (location setup)\\r\\nAccept: application/json\\r\\n"], 'https' => ['method' => 'GET', 'timeout' => 8, 'header' => "User-Agent: LArtisan-Operations/1.0 (location setup)\\r\\nAccept: application/json\\r\\n"]]);
+    $raw = @file_get_contents($url, false, $context); $results = is_string($raw) ? json_decode($raw, true) : null;
+    if (!is_array($results)) json_response(['ok' => false, 'error' => 'No se pudo consultar el geocodificador. Podés cargar las coordenadas manualmente.'], 502);
+    $candidates = [];
+    foreach ($results as $result) {
+        $lat = filter_var($result['lat'] ?? null, FILTER_VALIDATE_FLOAT); $lon = filter_var($result['lon'] ?? null, FILTER_VALIDATE_FLOAT);
+        if ($lat === false || $lon === false) continue;
+        $candidates[] = ['label' => (string) ($result['display_name'] ?? 'Ubicación sugerida'), 'latitude' => (float) $lat, 'longitude' => (float) $lon];
+    }
+    audit($pdo, (int) $admin['id'], 'location_geocode_requested', mb_substr($query, 0, 180, 'UTF-8'));
+    json_response(['ok' => true, 'candidates' => $candidates]);
+}
+
+if ($method === 'POST' && $route === 'admin/locations') {
+    $admin = require_user($pdo);
+    if (($admin['role'] ?? '') !== 'administracion' && !is_primary_user($admin, $config)) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
+    ensure_locations_schema($pdo); ensure_attendance_presence_schema($pdo);
+    $body = request_body();
+    $site = trim((string) ($body['site'] ?? '')); $code = strtolower(trim((string) ($body['code'] ?? '')));
+    $kind = (string) ($body['kind'] ?? 'Local propio'); $address = trim((string) ($body['address'] ?? ''));
+    $city = trim((string) ($body['city'] ?? '')); $province = trim((string) ($body['province'] ?? ''));
+    $contactName = trim((string) ($body['contactName'] ?? '')); $contactPhone = trim((string) ($body['contactPhone'] ?? ''));
+    $lat = filter_var($body['latitude'] ?? null, FILTER_VALIDATE_FLOAT); $lon = filter_var($body['longitude'] ?? null, FILTER_VALIDATE_FLOAT);
+    $radius = filter_var($body['radiusMeters'] ?? 100, FILTER_VALIDATE_INT); $accuracy = filter_var($body['maxAccuracyMeters'] ?? 75, FILTER_VALIDATE_INT);
+    if (!preg_match('/^[\\p{L}0-9][\\p{L}0-9 .\\-]{1,78}$/u', $site) || !preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/', $code) || strlen($code) > 48 || !in_array($kind, ['Local propio', 'Franquicia'], true) || $address === '' || $city === '' || $province === '') json_response(['ok' => false, 'error' => 'Completá nombre, código, tipo y dirección del local.'], 422);
+    if ($lat === false || $lon === false || $lat < -90 || $lat > 90 || $lon < -180 || $lon > 180 || $radius === false || $radius < 75 || $radius > 150 || $accuracy === false || $accuracy < 10 || $accuracy > 150) json_response(['ok' => false, 'error' => 'Confirmá coordenadas, radio (75–150 m) y precisión máxima.'], 422);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('INSERT INTO lartisan_locations (site, site_code, kind, address, city, province, contact_name, contact_phone, active, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)')->execute([$site, $code, $kind, $address, $city, $province, $contactName ?: null, $contactPhone ?: null, $admin['id'], $admin['id']]);
+        $pdo->prepare('INSERT INTO lartisan_site_presence_settings (site, latitude, longitude, radius_meters, max_accuracy_meters, updated_by) VALUES (?, ?, ?, ?, ?, ?)')->execute([$site, $lat, $lon, $radius, $accuracy, $admin['id']]);
+        audit($pdo, (int) $admin['id'], 'location_created', $site . ' · ' . $kind . ' · geocerca ' . $radius . ' m');
+        $pdo->commit();
+    } catch (PDOException $error) { if ($pdo->inTransaction()) $pdo->rollBack(); json_response(['ok' => false, 'error' => 'El nombre o código del local ya existe.'], 409); }
+    json_response(['ok' => true]);
+}
+
+if ($method === 'PATCH' && preg_match('#^admin/locations/([^/]+)$#', $route, $matches)) {
+    $admin = require_user($pdo);
+    if (($admin['role'] ?? '') !== 'administracion' && !is_primary_user($admin, $config)) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
+    ensure_locations_schema($pdo); ensure_attendance_presence_schema($pdo);
+    $site = rawurldecode($matches[1]); $body = request_body();
+    $existingStmt = $pdo->prepare('SELECT * FROM lartisan_locations WHERE site=? FOR UPDATE'); $pdo->beginTransaction();
+    try {
+        $existingStmt->execute([$site]); $existing = $existingStmt->fetch(); if (!$existing) throw new RuntimeException('Local inexistente.');
+        $kind = (string) ($body['kind'] ?? $existing['kind']); $address = trim((string) ($body['address'] ?? $existing['address'])); $city = trim((string) ($body['city'] ?? $existing['city'])); $province = trim((string) ($body['province'] ?? $existing['province']));
+        $contactName = trim((string) ($body['contactName'] ?? $existing['contact_name'])); $contactPhone = trim((string) ($body['contactPhone'] ?? $existing['contact_phone'])); $active = array_key_exists('active', $body) ? (!empty($body['active']) ? 1 : 0) : (int) $existing['active'];
+        $lat = filter_var($body['latitude'] ?? null, FILTER_VALIDATE_FLOAT); $lon = filter_var($body['longitude'] ?? null, FILTER_VALIDATE_FLOAT); $radius = filter_var($body['radiusMeters'] ?? 100, FILTER_VALIDATE_INT); $accuracy = filter_var($body['maxAccuracyMeters'] ?? 75, FILTER_VALIDATE_INT);
+        if (!in_array($kind, ['Local propio', 'Franquicia'], true) || $address === '' || $city === '' || $province === '' || $lat === false || $lon === false || $radius === false || $radius < 75 || $radius > 150 || $accuracy === false || $accuracy < 10 || $accuracy > 150) throw new RuntimeException('Configuración de local o geocerca inválida.');
+        if (!$active) { $state = $pdo->prepare('SELECT state_json FROM operation_site_states WHERE site=? FOR UPDATE'); $state->execute([$site]); $row = $state->fetch(); $snapshot = $row ? json_decode((string) $row['state_json'], true) : []; if (!empty($snapshot['cashOpen'])) throw new RuntimeException('No se puede desactivar un local con caja abierta.'); }
+        $pdo->prepare('UPDATE lartisan_locations SET kind=?,address=?,city=?,province=?,contact_name=?,contact_phone=?,active=?,updated_by=? WHERE site=?')->execute([$kind, $address, $city, $province, $contactName ?: null, $contactPhone ?: null, $active, $admin['id'], $site]);
+        $pdo->prepare('INSERT INTO lartisan_site_presence_settings (site,latitude,longitude,radius_meters,max_accuracy_meters,updated_by) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE latitude=VALUES(latitude),longitude=VALUES(longitude),radius_meters=VALUES(radius_meters),max_accuracy_meters=VALUES(max_accuracy_meters),updated_by=VALUES(updated_by)')->execute([$site, $lat, $lon, $radius, $accuracy, $admin['id']]);
+        audit($pdo, (int) $admin['id'], $active ? 'location_updated' : 'location_deactivated', $site . ' · geocerca ' . $radius . ' m'); $pdo->commit();
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
+    json_response(['ok' => true]);
 }
 
 if ($method === 'GET' && $route === 'attendance/presence-settings') {
@@ -74,14 +164,26 @@ if ($method === 'GET' && $route === 'attendance/presence-settings') {
 }
 
 if ($method === 'GET' && $route === 'admin/attendance/presence-settings') {
-    require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
+    $settingsUser = require_user($pdo);
+    if (($settingsUser['role'] ?? '') !== 'administracion' && !is_primary_user($settingsUser, $config)) json_response(['ok' => false, 'error' => 'Acceso no autorizado'], 403);
+    ensure_attendance_presence_schema($pdo);
     $rows = $pdo->query('SELECT site, latitude, longitude, radius_meters, max_accuracy_meters, updated_at FROM lartisan_site_presence_settings ORDER BY site')->fetchAll();
     json_response(['ok' => true, 'settings' => array_map(static fn ($row) => ['site' => $row['site'], 'latitude' => $row['latitude'] === null ? null : (float) $row['latitude'], 'longitude' => $row['longitude'] === null ? null : (float) $row['longitude'], 'radiusMeters' => (int) $row['radius_meters'], 'maxAccuracyMeters' => (int) $row['max_accuracy_meters'], 'updatedAt' => $row['updated_at']], $rows)]);
 }
 
-if ($method === 'PUT' && preg_match('#^admin/attendance/presence-settings/([^/]+)$#', $route, $matches)) {
-    $user = require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
-    $site = rawurldecode($matches[1]); if (!in_array($site, operational_sites(), true)) json_response(['ok' => false, 'error' => 'Local inválido.'], 422);
+// El nombre del local puede contener espacios. La ruta histórica se conserva para
+// compatibilidad, y la variante con ?site= evita que proxies reescriban ese tramo.
+if ($method === 'PUT' && (
+    preg_match('#^admin/attendance/presence-settings/([^/]+)$#', $route, $matches)
+    || ($route === 'admin/attendance/presence-settings' && isset($_GET['site']))
+)) {
+    $user = require_user($pdo);
+    // La cuenta administradora principal conserva acceso de recuperación a la
+    // configuración de presencia aunque su fila de rol se haya desincronizado.
+    if (($user['role'] ?? '') !== 'administracion' && !is_primary_user($user, $config)) json_response(['ok' => false, 'error' => 'Acceso no autorizado'], 403);
+    ensure_attendance_presence_schema($pdo);
+    $site = isset($matches[1]) ? rawurldecode($matches[1]) : trim((string) $_GET['site']);
+    if (!in_array($site, operational_sites(), true)) json_response(['ok' => false, 'error' => 'Local inválido.'], 422);
     $body = request_body(); $lat = filter_var($body['latitude'] ?? null, FILTER_VALIDATE_FLOAT); $lon = filter_var($body['longitude'] ?? null, FILTER_VALIDATE_FLOAT);
     $radius = filter_var($body['radiusMeters'] ?? null, FILTER_VALIDATE_INT); $accuracy = filter_var($body['maxAccuracyMeters'] ?? null, FILTER_VALIDATE_INT);
     if ($lat === false || $lon === false || $lat < -90 || $lat > 90 || $lon < -180 || $lon > 180 || $radius === false || $radius < 75 || $radius > 150 || $accuracy === false || $accuracy < 10 || $accuracy > 150) json_response(['ok' => false, 'error' => 'Coordenadas o límites inválidos. Radio permitido: 75 a 150 m.'], 422);

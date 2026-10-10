@@ -350,9 +350,60 @@ function valid_username(string $username): bool
     return str_ends_with(mb_strtolower($username, 'UTF-8'), '@lartisantaller.com');
 }
 
-function operational_sites(): array
+function default_operational_sites(): array
 {
     return ['Recoleta', 'Villa Mitre', 'Congreso', 'Maure', 'Novo Pacheco'];
+}
+
+/**
+ * The location catalogue is data, not a front-end constant.  Keeping the
+ * legacy fallback means that a partially upgraded installation remains
+ * available while the schema migration runs for the first time.
+ */
+function ensure_locations_schema(PDO $pdo): void
+{
+    $pdo->exec("CREATE TABLE IF NOT EXISTS lartisan_locations (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        site VARCHAR(80) NOT NULL,
+        site_code VARCHAR(48) NOT NULL,
+        kind ENUM('Local propio','Franquicia') NOT NULL DEFAULT 'Local propio',
+        address VARCHAR(220) NOT NULL DEFAULT '',
+        city VARCHAR(100) NOT NULL DEFAULT '',
+        province VARCHAR(100) NOT NULL DEFAULT '',
+        contact_name VARCHAR(120) NULL,
+        contact_phone VARCHAR(50) NULL,
+        active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by BIGINT UNSIGNED NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_by BIGINT UNSIGNED NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_lartisan_locations_site (site),
+        UNIQUE KEY uq_lartisan_locations_code (site_code),
+        KEY idx_lartisan_locations_active (active, site)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $insert = $pdo->prepare("INSERT IGNORE INTO lartisan_locations (site, site_code, kind, active) VALUES (?, ?, 'Local propio', 1)");
+    foreach (default_operational_sites() as $site) {
+        $code = strtolower(str_replace(' ', '-', $site));
+        $insert->execute([$site, $code]);
+    }
+}
+
+function operational_sites(bool $includeInactive = false): array
+{
+    global $pdo;
+    static $cache = [];
+    $key = $includeInactive ? 'all' : 'active';
+    if (isset($cache[$key])) return $cache[$key];
+    if (!isset($pdo) || !($pdo instanceof PDO)) return default_operational_sites();
+    try {
+        ensure_locations_schema($pdo);
+        $sql = 'SELECT site FROM lartisan_locations' . ($includeInactive ? '' : ' WHERE active = 1') . ' ORDER BY site';
+        $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_COLUMN);
+        return $cache[$key] = $rows ? array_values(array_map('strval', $rows)) : default_operational_sites();
+    } catch (Throwable $error) {
+        error_log('LARTISAN location catalogue unavailable: ' . $error->getMessage());
+        return $cache[$key] = default_operational_sites();
+    }
 }
 
 function user_can_access_site(array $user, string $site): bool
