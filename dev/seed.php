@@ -5,7 +5,8 @@
 declare(strict_types=1);
 
 if (PHP_SAPI !== 'cli') exit(1);
-$config = require __DIR__ . '/config.dev.php';
+$configPath = getenv('LARTISAN_CONFIG') ?: __DIR__ . '/config.dev.php';
+$config = require $configPath;
 $database = $config['database'];
 if ($database['name'] !== 'lartisan_dev') {
     fwrite(STDERR, "Este script solo puede usarse con la base local lartisan_dev.\n");
