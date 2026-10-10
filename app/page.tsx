@@ -8704,9 +8704,9 @@ export default function Home() {
         onSupportCreated={user.role === "administracion" ? () => void loadAdminSecurityData() : undefined}
       />
       {user.role !== "compras" && (
-        <div className="no-print fixed bottom-5 right-40 z-50">
+        <div className="no-print fixed bottom-5 right-40 z-50 max-sm:bottom-20 max-sm:right-5">
           {chatOpen && (
-            <section role="dialog" aria-modal="false" aria-label="Chat interno de L’ARTISAN" className="absolute bottom-16 right-0 h-[min(680px,calc(100vh-7rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[#183a67]/20 bg-white shadow-2xl">
+            <section role="dialog" aria-modal="false" aria-label="Chat interno de L’ARTISAN" className="absolute bottom-16 right-0 h-[min(680px,calc(100vh-7rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[#183a67]/20 bg-white shadow-2xl max-sm:fixed max-sm:bottom-32 max-sm:left-3 max-sm:right-3 max-sm:h-[min(640px,calc(100vh-9rem))] max-sm:w-auto">
               <InternalChatPanel userId={user.id} floating onClose={() => setChatOpen(false)} />
             </section>
           )}

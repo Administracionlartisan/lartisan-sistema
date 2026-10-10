@@ -446,8 +446,8 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
           {notice}
         </p>
       )}
-      <div className={`${floating ? "min-h-0 flex-1 grid" : "grid min-h-[620px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_45px_-28px_rgba(15,41,77,0.55)]"} overflow-hidden border-slate-200 bg-white ${floating ? "grid-cols-[145px_1fr] sm:grid-cols-[185px_1fr]" : "lg:grid-cols-[320px_1fr]"}`}>
-        <aside className="border-b bg-gradient-to-b from-slate-50 to-white p-3 lg:border-b-0 lg:border-r lg:border-slate-200">
+      <div className={`${floating ? "min-h-0 flex-1 grid" : "grid min-h-[620px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_45px_-28px_rgba(15,41,77,0.55)]"} overflow-hidden border-slate-200 bg-white ${floating ? "grid-cols-[112px_1fr] sm:grid-cols-[185px_1fr]" : "lg:grid-cols-[320px_1fr]"}`}>
+        <aside className="border-b bg-gradient-to-b from-slate-50 to-white p-2.5 sm:p-3 lg:border-b-0 lg:border-r lg:border-slate-200">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -467,14 +467,14 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
                 }`}
               >
                 <div className="flex justify-between gap-2">
-                  <b>{thread.title}</b>
+                  <b className="text-xs sm:text-sm">{thread.title}</b>
                   {thread.unread > 0 && (
                   <span className="rounded-full bg-[#ec3a35] px-2 py-0.5 text-xs font-bold text-white shadow-sm">
                       {thread.unread}
                     </span>
                   )}
                 </div>
-                <small className={`mt-1 block ${selected === thread.id ? "text-blue-100" : "text-slate-500"}`}>
+                <small className={`mt-1 hidden text-[11px] sm:block ${selected === thread.id ? "text-blue-100" : "text-slate-500"}`}>
                   {threadContext(thread)} · {readable(thread.lastAt)}
                 </small>
               </button>
@@ -516,7 +516,7 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Buscar dentro de esta conversación"
-              className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:bg-white focus:ring-4 focus:ring-[#183a67]/10"
+              className="mt-3 hidden w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:bg-white focus:ring-4 focus:ring-[#183a67]/10 sm:block"
             />
           </header>
           <div className="flex-1 space-y-3 overflow-auto bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef3f8)] p-4 md:p-5">
