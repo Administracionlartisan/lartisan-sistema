@@ -42,10 +42,10 @@ export function AccessScreen(props: AccessScreenProps) {
         <p className={styles.eyebrow}>{portal === "admin" ? "ADMINISTRACIÓN CENTRAL" : "VENTAS Y OPERACIÓN DE LOCALES"}</p>
         <h1 className={styles.title}>{portal === "admin" ? "Acceso administrativo" : "Ingresar"}</h1>
         <label className={`${styles.label} ${styles.firstLabel}`}>{portal === "admin" ? "Usuario o correo laboral" : "Usuario"}</label>
-        <input value={login} onChange={(event) => setLogin(event.target.value)} onKeyDown={(event) => event.key === "Enter" && enter()} type="text" autoComplete="off" autoCapitalize="none" spellCheck={false} placeholder={portal === "admin" ? "usuario administrativo" : "nombre.apellido"} className={styles.input} />
+        <input value={login} onChange={(event) => setLogin(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void enter(); } }} type="text" autoComplete="off" autoCapitalize="none" spellCheck={false} placeholder={portal === "admin" ? "usuario administrativo" : "nombre.apellido"} className={styles.input} />
         <label className={styles.label}>Contraseña</label>
         <div className={styles.passwordWrap}>
-          <input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === "Enter" && enter()} type={showPassword ? "text" : "password"} placeholder="Tu contraseña" className={styles.passwordInput} />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void enter(); } }} type={showPassword ? "text" : "password"} placeholder="Tu contraseña" className={styles.passwordInput} />
           <button type="button" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"} aria-pressed={showPassword} className={styles.toggle}>{showPassword ? "Ocultar" : "Mostrar"}</button>
         </div>
         <button onClick={requestPasswordReset} disabled={recoverySending} className={styles.resetButton}>{recoverySending && recoveryStage === "idle" ? "Enviando…" : portal === "admin" ? "Enviar código de recuperación" : "Olvidé mi contraseña"}</button>

@@ -599,8 +599,14 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
               maxLength={4000}
-              placeholder="Escribí un mensaje operativo…"
+              placeholder="Escribí un mensaje operativo… (Enter para enviar · Shift+Enter para nueva línea)"
               disabled={!selected || sending}
               className="min-h-20 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm shadow-inner outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:bg-white focus:ring-4 focus:ring-[#183a67]/10"
             />
