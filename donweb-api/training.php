@@ -55,7 +55,10 @@ function training_is_ready_for_publication(string $video, string $captions, int 
     return $duration > 0
         && filter_var($video, FILTER_VALIDATE_URL)
         && str_starts_with(strtolower($video), 'https://')
-        && str_starts_with(ltrim($captions), 'WEBVTT');
+        // Los subtítulos publicados se sirven como recurso HTTPS separado.
+        // WEBVTT inline se conserva sólo para borradores e importaciones anteriores.
+        && (str_starts_with(ltrim($captions), 'WEBVTT')
+            || (filter_var($captions, FILTER_VALIDATE_URL) && str_starts_with(strtolower($captions), 'https://')));
 }
 function training_video_url_allowed(string $video, array $config): bool {
     if (filter_var($video, FILTER_VALIDATE_URL) && str_starts_with(strtolower($video), 'https://')) return true;
