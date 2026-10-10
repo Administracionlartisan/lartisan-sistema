@@ -27,19 +27,19 @@ function ensure_training_schema(PDO $pdo): void
     $count = (int) $pdo->query('SELECT COUNT(*) FROM training_chapters')->fetchColumn();
     if ($count > 0) return;
     $chapters = [
-        ['introduccion-navegacion','Introducción y navegación','Ingreso seguro, menú, local asignado y secciones principales.',300],
-        ['apertura-caja','Apertura y gestión de caja','Responsable, fondo inicial, turno y restricciones.',360],
-        ['ventas-medios-pago','Ventas, productos y medios de pago','Productos, stock, cliente, cobro, descuentos y comprobantes.',480],
-        ['clientes','Clientes','Búsqueda, alta, edición, asociación e historial.',300],
-        ['stock-pedidos-devoluciones','Stock, pedidos, recepción y devoluciones','Movimientos, pedidos, transferencias, recepción y devoluciones.',420],
-        ['egresos-incidencias','Egresos e incidencias','Registro, permisos, evidencia y trazabilidad.',270],
-        ['fichaje','Fichaje','Entrada, salida, geocerca y solicitudes de excepción.',300],
-        ['chat-interno','Chat Interno','Conversaciones autorizadas, grupos, adjuntos y avisos.',240],
-        ['cierre-sincronizacion','Cierre de caja y situaciones especiales','Arqueo, sincronización, pendientes, anulaciones y qué no hacer.',480],
+        ['introduccion-navegacion','Introducción y navegación','Ingreso seguro, menú, local asignado y secciones principales.',300,'Ingresá con tu usuario personal y nunca compartas la contraseña. Confirmá el local que te corresponde. El menú agrupa Ventas, Caja, Stock, Pedidos, Fichaje, Clientes y Chat. Si no encontrás una función, no pruebes opciones al azar: usá Ayuda o escribí a Supervisión.'],
+        ['apertura-caja','Apertura y gestión de caja','Responsable, fondo inicial, turno y restricciones.',360,'Antes de vender, verificá que no haya otra caja abierta. Declarás el fondo inicial real y quedás como responsable del turno. Una caja abierta no se transfiere: para relevar se realiza arqueo y cierre completo; recién entonces abre la siguiente responsable.'],
+        ['ventas-medios-pago','Ventas, productos y medios de pago','Productos, stock, cliente, cobro, descuentos y comprobantes.',480,'Buscá el producto y verificá presentación, cantidad y stock antes de cobrar. Asociá el cliente cuando corresponda y elegí el medio de pago real. Los descuentos solo se aplican dentro de tu autorización. Revisá el total antes de confirmar y nunca repitas una venta por una duda de conexión.'],
+        ['clientes','Clientes','Búsqueda, alta, edición, asociación e historial.',300,'Primero buscá por documento para evitar duplicados. Si no existe, cargá solo los datos obligatorios y verificá documento, correo y CUIT. Desde el historial podés ver compras y devoluciones; no edites datos para corregir una venta ya realizada.'],
+        ['stock-pedidos-devoluciones','Stock, pedidos, recepción y devoluciones','Movimientos, pedidos, transferencias, recepción y devoluciones.',420,'Consultá stock antes de prometer un producto. Para pedidos, transferencias o recepciones, registrá remito o motivo y confirmá cantidades reales. Una devolución debe vincularse a la venta y especificar si vuelve al stock.'],
+        ['egresos-incidencias','Egresos e incidencias','Registro, permisos, evidencia y trazabilidad.',270,'Un egreso se carga con concepto, importe, medio de pago y comprobante cuando exista. Una incidencia explica un problema y no reemplaza un ajuste de caja. Si requiere autorización, dejala pendiente y avisá por Chat.'],
+        ['fichaje','Fichaje','Entrada, salida, geocerca y solicitudes de excepción.',300,'Al llegar, marcá entrada desde el local y autorizá la ubicación. Si el GPS no está disponible, tiene baja precisión o estás fuera del radio, se crea una solicitud de excepción: no intentes falsear la ubicación. Al terminar el turno, repetí el proceso para salida.'],
+        ['chat-interno','Chat Interno','Conversaciones autorizadas, grupos, adjuntos y avisos.',240,'Usá Chat Interno para coordinar con Administración, Supervisión y el grupo de tu local. Verificá destinatario antes de enviar. Solo adjuntá imágenes o PDF permitidos, sin contraseñas, datos bancarios ni documentos personales.'],
+        ['cierre-sincronizacion','Cierre de caja y situaciones especiales','Arqueo, sincronización, pendientes, anulaciones y qué no hacer.',480,'Antes del cierre, controlá medios de pago, efectivo físico, sobre y diferencias. Confirmá una sola vez y esperá el estado de sincronización. Si luego se anula una venta, se conserva el cierre histórico y se genera un ajuste auditado; no edites filas de Drive ni históricos.'],
     ];
     $insert = $pdo->prepare('INSERT INTO training_chapters (id,title,description,role_targets,version_label,duration_seconds,script_text,sort_order,published,mandatory) VALUES (?,?,?,?,?,?,?,?,1,1)');
     foreach ($chapters as $index => $chapter) {
-        $script = "Capacitación L’ARTISAN — {$chapter[1]}. Esta demostración utiliza exclusivamente datos de prueba. Seguí los pasos indicados en pantalla y, ante una diferencia o error, no repitas la operación: avisá a Supervisión o Administración.";
+        $script = "Capacitación L’ARTISAN — {$chapter[1]}. Esta demostración utiliza exclusivamente datos de prueba. {$chapter[4]}";
         $insert->execute([$chapter[0],$chapter[1],$chapter[2],json_encode(['vendedora','supervisora','administracion'],JSON_UNESCAPED_UNICODE),'1.0',$chapter[3],$script,$index + 1]);
     }
 }
