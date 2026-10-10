@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { API_BASE } from "../shared/constants";
 
 /** Persiste visible en toda la aplicación, incluso fuera de la pestaña Chat. */
-export default function ChatUnreadIndicator({ onOpen }: { onOpen: () => void }) {
+export default function ChatUnreadIndicator({ onOpen, open = false }: { onOpen: () => void; open?: boolean }) {
   const [unread, setUnread] = useState(0);
   const previous = useRef(0);
   const preferences = useRef({ sound: true, desktop: false });
@@ -31,5 +31,5 @@ export default function ChatUnreadIndicator({ onOpen }: { onOpen: () => void }) 
     const timer = window.setInterval(() => void refresh(), 15000);
     return () => { enabled = false; window.clearInterval(timer); };
   }, []);
-  return <button type="button" onClick={onOpen} className="relative rounded border px-2 py-1 font-bold" aria-label={unread ? `Abrir chat, ${unread} mensajes sin leer` : "Abrir chat interno"}>Chat{unread > 0 && <span className="ml-1 rounded-full bg-[#ec3a35] px-1.5 py-0.5 text-xs text-white">{unread > 99 ? "99+" : unread}</span>}</button>;
+  return <button type="button" onClick={onOpen} className="relative inline-flex items-center gap-1.5 rounded-full bg-[#183a67] px-5 py-3 font-bold text-white shadow-lg shadow-[#183a67]/30 transition hover:-translate-y-px hover:bg-[#102f57] hover:shadow-xl" aria-label={open ? "Cerrar chat interno" : unread ? `Abrir chat, ${unread} mensajes sin leer` : "Abrir chat interno"} title={open ? "Cerrar chat" : "Abrir chat interno"}><span aria-hidden="true" className="text-base">◌</span> Chat{unread > 0 && <span className="rounded-full bg-[#ec3a35] px-1.5 py-0.5 text-xs text-white shadow-sm">{unread > 99 ? "99+" : unread}</span>}</button>;
 }

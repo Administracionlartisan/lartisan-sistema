@@ -94,6 +94,7 @@ export default function Home() {
     [site, setSite] = useState("Recoleta"),
     [tab, setTab] = useState("Ventas"),
     [navOpen, setNavOpen] = useState(false),
+    [chatOpen, setChatOpen] = useState(false),
     [productSearch, setProductSearch] = useState(""),
     [stockSearch, setStockSearch] = useState(""),
     [stockGroup, setStockGroup] = useState("Todos los grupos"),
@@ -352,6 +353,13 @@ export default function Home() {
     ),
   );
   const [payments, setPayments] = useState<Payment[]>([]);
+  useEffect(() => {
+    // Conserva una transición limpia para quienes tenían abierto el chat de la
+    // versión anterior: se vuelve al módulo de origen y se abre el flotante.
+    if (!user || tab !== "Chat interno") return;
+    setTab(user.role === "administracion" ? "Administración" : user.role === "compras" ? "MRP" : "Ventas");
+    setChatOpen(true);
+  }, [tab, user]);
   useEffect(() => {
     if (!operationalReady) return;
     // Ampliar los mapas sin tocar cantidades existentes ni identificadores históricos.
@@ -3766,7 +3774,6 @@ export default function Home() {
           "Protección de datos",
           "Actualizaciones",
           "Integraciones",
-          "Chat interno",
         ]
       : user.role === "compras"
         ? ["MRP", ...(can("comprasProduccion") ? ["Compras de producción"] : [])]
@@ -3781,7 +3788,6 @@ export default function Home() {
           "Incidencias",
           "Fichaje",
           "Clientes",
-          "Chat interno",
           "Guía",
           ...(can("mrp") ? ["MRP"] : []),
           ...(can("comprasProduccion") ? ["Compras de producción"] : []),
@@ -3835,7 +3841,6 @@ export default function Home() {
           <span className={`rounded-full px-2 py-1 text-xs font-bold ${connectionMode === "En línea" ? "bg-[#eef5ef] text-green-800" : "bg-[#fff5d8] text-[#9c302a]"}`} title={connectionMode === "En línea" ? "Las operaciones se guardan en el sistema" : "Las operaciones quedan pendientes hasta recuperar conexión"}>
             {connectionMode === "En línea" ? "● En línea" : "● Contingencia"}
           </span>
-          {user.role !== "compras" && <ChatUnreadIndicator onOpen={() => { setTab("Chat interno"); setNavOpen(false); }} />}
           <button onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen} aria-controls="menu-principal" className="rounded border px-3 py-2 font-bold lg:hidden">Menú</button>
           <span>
           {user.name} ·{" "}
@@ -6038,8 +6043,6 @@ export default function Home() {
                 nueva función o un cambio de procedimiento.
               </p>
             </>
-          ) : tab === "Chat interno" ? (
-            <InternalChatPanel userId={user.id} />
           ) : tab === "Clientes" ? (
             <CustomerPanel site={site} customers={customers} sales={sales} returnsLog={returnsLog} canWrite={can("cobrar") || user.role === "administracion"} onSave={(record) => { const now = new Date().toISOString(); setCustomers(items => { const old = items.find(x => x.id === record.id); return old ? items.map(x => x.id === record.id ? { ...record, createdAt: old.createdAt, updatedAt: now, createdBy: old.createdBy, active: true } : x) : [{ ...record, createdAt: now, updatedAt: now, createdBy: user.name, active: true }, ...items]; }); recordAudit("Cliente actualizado", record.documentType + " " + record.documentNumber); }} onDeactivate={(id) => { setCustomers(items => items.map(item => item.id === id ? { ...item, active:false, updatedAt:new Date().toISOString() } : item)); recordAudit("Cliente desactivado", id); }} />
           ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
@@ -8700,7 +8703,17 @@ export default function Home() {
         }}
         onSupportCreated={user.role === "administracion" ? () => void loadAdminSecurityData() : undefined}
       />
-      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-40 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
+      {user.role !== "compras" && (
+        <div className="no-print fixed bottom-5 right-40 z-50">
+          {chatOpen && (
+            <section role="dialog" aria-modal="false" aria-label="Chat interno de L’ARTISAN" className="absolute bottom-16 right-0 h-[min(680px,calc(100vh-7rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[#183a67]/20 bg-white shadow-2xl">
+              <InternalChatPanel userId={user.id} floating onClose={() => setChatOpen(false)} />
+            </section>
+          )}
+          <ChatUnreadIndicator open={chatOpen} onOpen={() => setChatOpen((value) => !value)} />
+        </div>
+      )}
+      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-72 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
     </main>
   );
 }

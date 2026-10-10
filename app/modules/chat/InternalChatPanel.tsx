@@ -68,7 +68,7 @@ const readFile = (file: File) =>
     },
   );
 
-export default function InternalChatPanel({ userId }: { userId: string }) {
+export default function InternalChatPanel({ userId, floating = false, onClose }: { userId: string; floating?: boolean; onClose?: () => void }) {
   const [threads, setThreads] = useState<Thread[]>([]),
     [contacts, setContacts] = useState<Contact[]>([]),
     [selected, setSelected] = useState<string | null>(null),
@@ -391,18 +391,18 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
       </section>
     );
   return (
-    <section className="mx-auto max-w-7xl">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+    <section className={floating ? "flex h-full min-h-0 flex-col bg-[#f7f3eb]" : "mx-auto max-w-7xl"}>
+      <div className={`${floating ? "flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3" : "mb-5 flex flex-wrap items-start justify-between gap-3"}`}>
         <div>
-          <p className="font-bold text-[#ec3a35]">COMUNICACIÓN OPERATIVA</p>
-          <h1 className="text-3xl font-black">Chat interno</h1>
-          <p className="mt-1 text-sm text-slate-600">
+          {!floating && <p className="font-bold text-[#ec3a35]">COMUNICACIÓN OPERATIVA</p>}
+          <h1 className={floating ? "text-lg font-black" : "text-3xl font-black"}>Chat interno</h1>
+          {!floating && <p className="mt-1 text-sm text-slate-600">
             Canal auditado entre locales, Supervisión y Administración. No
             compartas contraseñas, claves ni datos bancarios.
-          </p>
+          </p>}
         </div>
-        <div className="flex gap-2 text-sm">
-          <label className="rounded border bg-white px-3 py-2">
+        <div className="flex items-center gap-2 text-sm">
+          <label className="rounded-lg border bg-white px-2.5 py-1.5" title="Activar o silenciar el sonido de mensajes">
             <input
               type="checkbox"
               checked={preferences.sound}
@@ -416,7 +416,7 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
             Sonido
           </label>
           {preferences.desktop ? (
-            <label className="rounded border bg-white px-3 py-2">
+            <label className="rounded-lg border bg-white px-2.5 py-1.5">
               <input
                 type="checkbox"
                 checked={preferences.desktop}
@@ -433,11 +433,12 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
             <button
               type="button"
               onClick={() => void enableDesktop()}
-              className="rounded border bg-white px-3 py-2 font-bold"
+              className="rounded-lg border bg-white px-2.5 py-1.5 font-bold"
             >
               Activar avisos de escritorio
             </button>
           )}
+          {floating && onClose && <button type="button" onClick={onClose} aria-label="Cerrar chat" className="rounded-lg px-2.5 py-1 text-xl leading-none text-slate-500 transition hover:bg-slate-100 hover:text-[#183a67]">×</button>}
         </div>
       </div>
       {notice && (
@@ -445,7 +446,7 @@ export default function InternalChatPanel({ userId }: { userId: string }) {
           {notice}
         </p>
       )}
-      <div className="grid min-h-[620px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_45px_-28px_rgba(15,41,77,0.55)] lg:grid-cols-[320px_1fr]">
+      <div className={`${floating ? "min-h-0 flex-1 grid" : "grid min-h-[620px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_45px_-28px_rgba(15,41,77,0.55)]"} overflow-hidden border-slate-200 bg-white ${floating ? "grid-cols-[145px_1fr] sm:grid-cols-[185px_1fr]" : "lg:grid-cols-[320px_1fr]"}`}>
         <aside className="border-b bg-gradient-to-b from-slate-50 to-white p-3 lg:border-b-0 lg:border-r lg:border-slate-200">
           <input
             value={query}
