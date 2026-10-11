@@ -136,6 +136,159 @@ button:not(:disabled) {
   }
 }
 
+/* --------------------------------------------------------------------------
+   L'ARTISAN · Sistema visual compartido
+   Estas reglas sólo cambian presentación. Se mantienen intactos los flujos,
+   permisos y estados que ya proveen los componentes de Ventas y Administración.
+   -------------------------------------------------------------------------- */
+:root {
+  --artisan-navy: #133862;
+  --artisan-navy-deep: #0c2849;
+  --artisan-ink: #193a63;
+  --artisan-cream: #f8f4ec;
+  --artisan-paper: #fffdf9;
+  --artisan-line: #d7dfeb;
+  --artisan-red: #df3f3a;
+  --artisan-shadow: 0 14px 34px rgb(20 48 82 / 9%), 0 2px 6px rgb(20 48 82 / 5%);
+  --artisan-shadow-raised: 0 18px 38px rgb(20 48 82 / 15%), 0 5px 12px rgb(20 48 82 / 8%);
+}
+
+html { background: var(--artisan-cream); }
+body {
+  background:
+    radial-gradient(circle at 100% -10%, rgb(224 186 129 / 18%), transparent 30rem),
+    linear-gradient(135deg, #fbf8f2 0%, var(--artisan-cream) 48%, #f0f4f9 100%);
+  color: var(--artisan-ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.01em;
+}
+
+main.min-h-screen { background: transparent !important; }
+main > header {
+  min-height: 70px;
+  border-color: rgb(19 56 98 / 13%) !important;
+  background: rgb(255 253 249 / 92%) !important;
+  box-shadow: 0 4px 20px rgb(14 40 73 / 6%);
+  backdrop-filter: blur(18px);
+}
+main > header > :first-child {
+  letter-spacing: .055em;
+  text-shadow: 0 1px 0 #fff;
+}
+
+#menu-principal {
+  border-color: rgb(19 56 98 / 12%) !important;
+  background: linear-gradient(180deg, #fffdf9 0%, #f5f8fc 100%) !important;
+  box-shadow: 10px 0 28px rgb(14 40 73 / 4%);
+}
+#menu-principal nav { gap: .45rem !important; }
+#menu-principal nav button {
+  position: relative;
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: .72rem !important;
+  padding: .68rem .8rem !important;
+  color: #28496f;
+}
+#menu-principal nav button:hover {
+  border-color: rgb(19 56 98 / 13%);
+  background: #edf3fa !important;
+  color: var(--artisan-navy-deep);
+}
+#menu-principal nav button.bg-\[\#183a67\] {
+  border-color: rgb(255 255 255 / 20%);
+  background: linear-gradient(135deg, #245184, var(--artisan-navy-deep)) !important;
+  box-shadow: 0 8px 16px rgb(12 40 73 / 20%);
+}
+
+button {
+  border-radius: .68rem;
+  font-weight: 700;
+  transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease, filter 180ms ease;
+}
+button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 15px rgb(17 47 80 / 12%);
+}
+button:not(:disabled):active { transform: translateY(1px) scale(.985); box-shadow: none; }
+button:disabled { cursor: not-allowed; filter: grayscale(.1); }
+button.bg-\[\#183a67\],
+button[class*="bg-\\[\\#183a67\\]"] {
+  border: 1px solid rgb(8 32 61 / 32%);
+  background: linear-gradient(145deg, #2c619a, #123861 72%) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 20%), 0 5px 12px rgb(16 52 91 / 21%);
+}
+button.bg-red-500, button.bg-red-600, button[class*="bg-red-"] {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 20%), 0 5px 12px rgb(167 35 32 / 18%);
+}
+
+input, select, textarea {
+  border-color: #cbd6e4 !important;
+  border-radius: .72rem !important;
+  background-color: rgb(255 255 255 / 92%) !important;
+  box-shadow: inset 0 1px 2px rgb(16 50 84 / 4%);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+input:hover, select:hover, textarea:hover { border-color: #9db1ca !important; }
+input:focus, select:focus, textarea:focus {
+  border-color: #3d6e9e !important;
+  box-shadow: 0 0 0 4px rgb(50 105 159 / 13%), inset 0 1px 2px rgb(16 50 84 / 4%) !important;
+}
+
+/* Paneles, indicadores, listados, filtros y tablas. */
+.rounded-xl.border.bg-white,
+.rounded-2xl.border.bg-white,
+.rounded-3xl.border.bg-white,
+.rounded.border.bg-white,
+.report-navigation {
+  border-color: rgb(19 56 98 / 13%) !important;
+  background: rgb(255 255 255 / 88%) !important;
+  box-shadow: var(--artisan-shadow);
+}
+.rounded-xl.border.bg-white:hover,
+.rounded-2xl.border.bg-white:hover,
+.report-option:hover {
+  border-color: rgb(38 88 139 / 30%) !important;
+}
+.report-navigation { overflow: hidden; border-radius: 1.15rem; }
+.report-navigation-heading { background: linear-gradient(125deg, rgb(255 255 255 / 88%), rgb(239 245 252 / 78%)); }
+.report-area-button { border-radius: .7rem; }
+.report-area-button[aria-pressed="true"] {
+  background: linear-gradient(145deg, #265a90, #10375f) !important;
+  box-shadow: 0 6px 14px rgb(17 48 82 / 17%);
+}
+.report-option { border-radius: .85rem; transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease; }
+.report-option:hover { transform: translateY(-2px); box-shadow: 0 8px 17px rgb(17 48 82 / 9%); }
+
+table { border-collapse: separate; border-spacing: 0; }
+thead.bg-\[\#183a67\] { background: linear-gradient(135deg, #234f80, #102f55) !important; }
+tbody tr { transition: background-color 150ms ease; }
+tbody tr:hover { background: rgb(233 241 250 / 62%); }
+tbody tr:nth-child(even) { background-color: rgb(247 250 253 / 72%); }
+
+.fixed.bottom-5.right-40 button,
+.fixed.bottom-5.right-72,
+.fixed.bottom-5.right-40 [role="button"] {
+  box-shadow: 0 12px 24px rgb(17 49 85 / 23%) !important;
+  border: 1px solid rgb(255 255 255 / 36%);
+}
+.fixed.bottom-5.right-72 { background: linear-gradient(145deg, #2a5a91, #123861) !important; }
+
+/* Un poco más de aire para los paneles operativos sin mover sus acciones. */
+@media (min-width: 1024px) {
+  main > div.grid > section { padding: 1.65rem !important; }
+}
+@media (max-width: 640px) {
+  main > header { min-height: 60px; padding-inline: 1rem !important; }
+  #menu-principal { box-shadow: 0 12px 28px rgb(14 40 73 / 12%); }
+  #menu-principal nav button { min-height: 44px; }
+  .rounded-xl.border.bg-white, .rounded-2xl.border.bg-white, .report-navigation { border-radius: .95rem; }
+  .fixed.bottom-5.right-72 { right: 5.25rem !important; padding-inline: .85rem !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+
 @media print {
   @page {
     size: 80mm auto;
