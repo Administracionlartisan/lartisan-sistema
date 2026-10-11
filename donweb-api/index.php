@@ -1778,6 +1778,51 @@ if ($method === 'GET' && $route === 'admin/report-sales') {
     json_response(['ok' => true, 'sales' => $sales, 'payments' => array_values(array_merge(...array_values($paymentsBySale ?: [[]]))), 'truncated' => count($sales) >= 10000]);
 }
 
+// Historial operativo para Ventas. A diferencia del reporte administrativo,
+// esta ruta obliga a consultar únicamente un local habilitado para la sesión.
+// Así una vendedora puede revisar su jornada sin obtener datos de otra sucursal.
+if ($method === 'GET' && $route === 'sales/history') {
+    $viewer = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    ensure_normalized_operations_schema($pdo);
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : date('Y-m-d');
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? '')) ? (string) $_GET['to'] : $from;
+    if ($to < $from) json_response(['ok' => false, 'error' => 'El rango de fechas no es válido.'], 422);
+    $start = new DateTimeImmutable($from);
+    if ($start->diff(new DateTimeImmutable($to))->days > 366) {
+        json_response(['ok' => false, 'error' => 'El rango máximo de consulta es de 366 días.'], 422);
+    }
+    $site = trim((string) ($_GET['site'] ?? ''));
+    if ($site === '') $site = assigned_locations($viewer)[0] ?? '';
+    if ($site === '' || !user_can_access_site($viewer, $site)) {
+        json_response(['ok' => false, 'error' => 'No tenés acceso al historial de ese local.'], 403);
+    }
+    $statement = $pdo->prepare('SELECT * FROM lartisan_sales WHERE site = ? AND occurred_at >= ? AND occurred_at < DATE_ADD(?, INTERVAL 1 DAY) ORDER BY occurred_at DESC LIMIT 1000');
+    $statement->execute([$site, $from, $to]);
+    $saleRows = $statement->fetchAll();
+    $ids = array_column($saleRows, 'id');
+    $itemsBySale = [];
+    if ($ids) {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $itemStatement = $pdo->prepare("SELECT * FROM lartisan_sale_items WHERE sale_id IN ($placeholders) ORDER BY sale_id, line_number");
+        $itemStatement->execute($ids);
+        foreach ($itemStatement->fetchAll() as $item) $itemsBySale[$item['sale_id']][] = $item;
+    }
+    $sales = [];
+    foreach ($saleRows as $row) {
+        $items = [];
+        foreach ($itemsBySale[$row['id']] ?? [] as $item) for ($count = 0; $count < (int) $item['quantity']; $count++) $items[] = [
+            'id' => (int) $item['product_id'], 'name' => $item['product_name'], 'detail' => $item['presentation'] ?? '', 'category' => 'Histórico', 'price' => (float) $item['unit_price'],
+        ];
+        $sales[] = [
+            'id' => $row['id'], 'site' => $row['site'], 'createdAt' => $row['occurred_at'], 'createdAtISO' => str_replace(' ', 'T', (string) $row['occurred_at']),
+            'items' => $items, 'gross' => (float) $row['gross_amount'], 'discount' => (float) $row['discount_amount'], 'net' => (float) $row['net_amount'],
+            'method' => $row['payment_method'] ?: 'Sin informar', 'invoiceType' => $row['invoice_type'] ?: 'Remito interno', 'customer' => $row['customer_name'] ?: 'Consumidor final',
+            'invitation' => (bool) $row['invitation'], 'channel' => $row['channel'] ?: 'Mostrador', 'status' => $row['status'] ?: 'activa',
+        ];
+    }
+    json_response(['ok' => true, 'site' => $site, 'sales' => $sales, 'truncated' => count($sales) >= 1000]);
+}
+
 if ($method === 'POST' && $route === 'admin/history/import') {
     $admin = require_user($pdo, ['administracion']);
     ensure_normalized_operations_schema($pdo);

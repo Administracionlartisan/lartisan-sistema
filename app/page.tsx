@@ -142,6 +142,12 @@ export default function Home() {
     [cashAdjustmentDetail, setCashAdjustmentDetail] = useState(""),
     [cashOpenBySite, setCashOpenBySite] = useState<Record<string, boolean>>({}),
     [sales, setSales] = useState<Sale[]>([]),
+    [salesHistory, setSalesHistory] = useState<Sale[]>([]),
+    [salesHistoryFrom, setSalesHistoryFrom] = useState(() => dateKey(new Date())),
+    [salesHistoryTo, setSalesHistoryTo] = useState(() => dateKey(new Date())),
+    [salesHistorySearch, setSalesHistorySearch] = useState(""),
+    [salesHistoryLoading, setSalesHistoryLoading] = useState(false),
+    [salesHistoryError, setSalesHistoryError] = useState(""),
     [receiptSale, setReceiptSale] = useState<Sale | null>(null),
     [saleSearch, setSaleSearch] = useState(""),
     [paymentCorrectionSaleId, setPaymentCorrectionSaleId] = useState<string | null>(null),
@@ -1039,6 +1045,26 @@ export default function Home() {
       .catch(() => { if (active) setPersistedReportSales(null); });
     return () => { active = false; };
   }, [user?.id, user?.role, tab, reportFrom, reportTo, reportSite, operationalVersion]);
+  useEffect(() => {
+    if (!user || tab !== "Historial de ventas") return;
+    let active = true;
+    setSalesHistoryLoading(true);
+    setSalesHistoryError("");
+    const params = new URLSearchParams({ from: salesHistoryFrom, to: salesHistoryTo, site });
+    fetch(`${API_BASE}/sales/history?${params}`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        const data = (await response.json()) as { sales?: Sale[]; error?: string };
+        if (!response.ok) throw new Error(data.error || "No se pudo cargar el historial de ventas.");
+        if (active) setSalesHistory(data.sales || []);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setSalesHistory([]);
+        setSalesHistoryError(error instanceof Error ? error.message : "No se pudo cargar el historial de ventas.");
+      })
+      .finally(() => { if (active) setSalesHistoryLoading(false); });
+    return () => { active = false; };
+  }, [user?.id, tab, site, salesHistoryFrom, salesHistoryTo, operationalVersion]);
   useEffect(() => {
     if (user?.role !== "administracion" || tab !== "Administración" || !["Auditoria", "Cajas"].includes(adminReport)) return;
     let active = true;
@@ -3916,6 +3942,7 @@ export default function Home() {
         ? ["MRP", ...(can("comprasProduccion") ? ["Compras de producción"] : [])]
         : [
           "Ventas",
+          "Historial de ventas",
           "Tareas",
           "Caja",
           "Stock",
@@ -4054,6 +4081,22 @@ export default function Home() {
           {message && <div role="status" aria-live="polite" className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm font-semibold shadow-sm"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="shrink-0 underline">Cerrar</button></div>}
           {tab === "Capacitación" ? (
             <SalesTrainingPanel role={user.role} admin={user.role === "administracion"} />
+          ) : tab === "Historial de ventas" ? (
+            <>
+              <Heading k={`VENTAS · ${site.toUpperCase()}`} h="Historial de ventas" p="Consultá las ventas de tu local por día o rango de fechas. Las anuladas se muestran para mantener la trazabilidad." />
+              <div className="mb-5 grid gap-3 rounded-2xl border bg-white p-4 shadow-sm md:grid-cols-[1fr_1fr_2fr_auto]">
+                <label className="text-sm font-bold">Desde<input type="date" value={salesHistoryFrom} max={salesHistoryTo} onChange={(event) => setSalesHistoryFrom(event.target.value)} className="mt-1 block w-full rounded-lg border bg-white p-2" /></label>
+                <label className="text-sm font-bold">Hasta<input type="date" value={salesHistoryTo} min={salesHistoryFrom} onChange={(event) => setSalesHistoryTo(event.target.value)} className="mt-1 block w-full rounded-lg border bg-white p-2" /></label>
+                <label className="text-sm font-bold">Buscar<input value={salesHistorySearch} onChange={(event) => setSalesHistorySearch(event.target.value)} placeholder="Cliente, comprobante, medio u operación" className="mt-1 block w-full rounded-lg border bg-white p-2" /></label>
+                <button type="button" onClick={() => { setSalesHistoryFrom(dateKey(new Date())); setSalesHistoryTo(dateKey(new Date())); setSalesHistorySearch(""); }} className="self-end rounded-lg border px-4 py-2 font-bold hover:bg-slate-50">Hoy</button>
+              </div>
+              {salesHistoryError && <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-800">{salesHistoryError}</div>}
+              {salesHistoryLoading ? <div className="rounded-2xl border bg-white p-6 text-sm">Cargando ventas guardadas…</div> : (
+                <div className="overflow-auto rounded-2xl border bg-white shadow-sm">
+                  <table className="w-full min-w-[880px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Fecha y hora</th><th className="p-3 text-left">Comprobante</th><th className="p-3 text-left">Cliente</th><th className="p-3 text-left">Medio</th><th className="p-3 text-right">Total</th><th className="p-3 text-left">Estado</th><th className="p-3 text-right">Detalle</th></tr></thead><tbody>{salesHistory.filter((sale) => `${sale.id} ${sale.invoiceType} ${sale.customer} ${sale.method}`.toLocaleLowerCase("es-AR").includes(salesHistorySearch.trim().toLocaleLowerCase("es-AR"))).map((sale) => <tr key={sale.id} className="border-t"><td className="p-3 whitespace-nowrap">{new Date(sale.createdAtISO).toLocaleString("es-AR")}</td><td className="p-3">{sale.invoiceType}<br /><span className="text-xs text-slate-500">{sale.id.slice(0, 8)}</span></td><td className="p-3">{sale.customer}</td><td className="p-3">{sale.method}</td><td className="p-3 text-right font-bold">{money.format(sale.net)}</td><td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${sale.status === "anulada" ? "bg-red-100 text-red-800" : "bg-emerald-100 text-emerald-800"}`}>{sale.status === "anulada" ? "Anulada" : "Cobrada"}</span></td><td className="p-3 text-right"><button type="button" onClick={() => setReceiptSale(sale)} className="rounded border px-3 py-1.5 font-bold hover:bg-slate-50">Ver</button></td></tr>)}{!salesHistory.filter((sale) => `${sale.id} ${sale.invoiceType} ${sale.customer} ${sale.method}`.toLocaleLowerCase("es-AR").includes(salesHistorySearch.trim().toLocaleLowerCase("es-AR"))).length && <tr><td colSpan={7} className="p-6 text-center text-slate-500">No hay ventas para los filtros elegidos.</td></tr>}</tbody></table>
+                </div>
+              )}
+            </>
           ) : tab === "Reportes" && canViewSupervisorReports ? (
             <>
               <Heading
