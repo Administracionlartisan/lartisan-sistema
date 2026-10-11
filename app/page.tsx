@@ -4020,12 +4020,14 @@ export default function Home() {
               <button
                 key={t}
                 onClick={() => { setTab(t); setNavOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                title={t === "Ventas" ? "Registrar productos, cobros y comandas." : t === "Caja" ? "Abrir, controlar y cerrar la caja." : t === "Stock" ? "Consultar existencias y mínimos." : t === "Tareas" ? "Ver acciones pendientes." : `Abrir ${t}.`}
+                title={t === "Ventas" ? "Registrar productos, cobros y comandas." : t === "Caja" ? "Abrir, controlar y cerrar la caja." : t === "Stock" ? "Consultar existencias y mínimos." : t === "Guía" ? "Consultar respuestas y pasos rápidos durante la operación." : t === "Tareas" ? "Ver acciones pendientes." : `Abrir ${t}.`}
                 className={`rounded p-2 text-left text-sm font-bold transition ${tab === t ? "bg-[#183a67] text-white" : "hover:bg-[#eef2f6]"}`}
               >
                 <span className="flex items-center justify-between gap-2">
                   <span>
-                    {t === "Legajos"
+                    {t === "Guía"
+                      ? "Guía rápida"
+                      : t === "Legajos"
                       ? `${t} (Próximamente)`
                       : t}
                   </span>
@@ -6124,12 +6126,12 @@ export default function Home() {
             <>
               <Heading
                 k="AYUDA PARA EL LOCAL"
-                h="Guía y novedades"
-                p="Consultá aquí cómo usar el sistema y los cambios que se vayan incorporando."
+                h="Guía rápida y novedades"
+                p="Respuestas breves para consultar durante la operación. Para aprender un circuito completo, usá Capacitación."
               />
               <div className="grid max-w-4xl gap-5 md:grid-cols-[1fr_1.15fr]">
                 <div className="rounded-2xl border bg-white p-6">
-                  <h2 className="font-bold">Uso diario</h2>
+                  <h2 className="font-bold">Pasos rápidos de operación</h2>
                   <ol className="mt-4 list-decimal space-y-3 pl-5 text-sm leading-6">
                     <li>Ingresá con tu usuario personal, elegí el local correcto y registrá el fichaje.</li>
                     <li>Abrí Caja, declarando fondo inicial y responsable.</li>
