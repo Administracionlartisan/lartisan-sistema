@@ -291,7 +291,7 @@ if ($method === 'POST' && preg_match('#^admin/attendance/exceptions/([a-f0-9-]{3
 // su vigencia el día previo y el informe puede reconstruir cualquier período.
 if ($method === 'GET' && $route === 'attendance/schedule-users') {
     $scheduleUser = require_user($pdo); ensure_attendance_presence_schema($pdo);
-    if (($scheduleUser['role'] ?? '') !== 'administracion' && !user_can_report($scheduleUser, 'Personal')) json_response(['ok' => false, 'error' => 'No tenés permiso para gestionar horarios.'], 403);
+    if (($scheduleUser['role'] ?? '') !== 'administracion' && (($scheduleUser['role'] ?? '') !== 'supervisora' || !user_can_report($scheduleUser, 'Personal'))) json_response(['ok' => false, 'error' => 'No tenés permiso para gestionar horarios.'], 403);
     $rows = $pdo->query("SELECT id, full_name, role, active, assigned_locations, access_all_locations FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
     $users = [];
     foreach ($rows as $row) {
@@ -307,7 +307,7 @@ if ($method === 'GET' && $route === 'attendance/schedule-users') {
 // Administración ni de Compras.
 if ($method === 'GET' && $route === 'attendance/personnel') {
     $manager = require_user($pdo); ensure_attendance_presence_schema($pdo);
-    if (($manager['role'] ?? '') !== 'administracion' && !user_can_report($manager, 'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para gestionar personal.'],403);
+    if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager, 'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para gestionar personal.'],403);
     $rows = $pdo->query("SELECT id,full_name,username,role,job_title,assigned_locations,assigned_location,active FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
     $out=[]; foreach($rows as $row){ if (($manager['role'] ?? '') !== 'administracion' && !array_intersect(assigned_locations($manager), assigned_locations($row))) continue; $out[]=['id'=>(int)$row['id'],'name'=>$row['full_name'],'username'=>$row['username'],'role'=>$row['role'],'jobTitle'=>$row['job_title'],'sites'=>assigned_locations($row)]; }
     json_response(['ok'=>true,'personnel'=>$out]);
@@ -315,7 +315,7 @@ if ($method === 'GET' && $route === 'attendance/personnel') {
 
 if ($method === 'POST' && $route === 'attendance/personnel') {
     $manager = require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
-    if (($manager['role'] ?? '') !== 'administracion' && !user_can_report($manager, 'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para dar de alta personal.'],403);
+    if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager, 'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para dar de alta personal.'],403);
     $name=trim((string)($body['fullName']??'')); $username=mb_strtolower(trim((string)($body['username']??'')),'UTF-8'); $password=(string)($body['temporaryPassword']??''); $title=(string)($body['jobTitle']??''); $site=trim((string)($body['site']??''));
     $titles=['jefe_area','cocinero','ayudante_cocina'];
     if ($name==='' || !valid_username($username) || !valid_password($password) || !in_array($title,$titles,true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Revisá nombre, usuario, contraseña, cargo y local.'],422);
@@ -326,7 +326,7 @@ if ($method === 'POST' && $route === 'attendance/personnel') {
 
 if ($method === 'GET' && $route === 'attendance/schedules') {
     $scheduleUser = require_user($pdo); ensure_attendance_presence_schema($pdo);
-    if (($scheduleUser['role'] ?? '') !== 'administracion' && !user_can_report($scheduleUser, 'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para consultar horarios.'],403);
+    if (($scheduleUser['role'] ?? '') !== 'administracion' && (($scheduleUser['role'] ?? '') !== 'supervisora' || !user_can_report($scheduleUser, 'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para consultar horarios.'],403);
     $site = trim((string)($_GET['site'] ?? ''));
     if ($site !== '' && !user_can_access_site($scheduleUser, $site)) json_response(['ok'=>false,'error'=>'Local no autorizado.'],403);
     $sql = 'SELECT s.*,u.full_name AS employee_name,c.full_name AS created_by_name FROM lartisan_employee_schedule_versions s JOIN users u ON u.id=s.employee_user_id JOIN users c ON c.id=s.created_by';
@@ -337,7 +337,7 @@ if ($method === 'GET' && $route === 'attendance/schedules') {
 
 if ($method === 'POST' && $route === 'attendance/schedules') {
     $scheduleUser=require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
-    if (($scheduleUser['role'] ?? '') !== 'administracion' && !user_can_report($scheduleUser,'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para modificar horarios.'],403);
+    if (($scheduleUser['role'] ?? '') !== 'administracion' && (($scheduleUser['role'] ?? '') !== 'supervisora' || !user_can_report($scheduleUser,'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para modificar horarios.'],403);
     $employeeId=filter_var($body['employeeUserId']??null,FILTER_VALIDATE_INT); $site=trim((string)($body['site']??'')); $effective=trim((string)($body['effectiveFrom']??'')); $days=is_array($body['days']??null)?$body['days']:[];
     if ($employeeId===false || $employeeId===null || !user_can_access_site($scheduleUser,$site) || !preg_match('/^\d{4}-\d{2}-\d{2}$/',$effective) || count($days)!==7) json_response(['ok'=>false,'error'=>'Revisá empleado, local, fecha de vigencia y los siete días.'],422);
     try { $effectiveDate=new DateTimeImmutable($effective); } catch(Throwable $error) { json_response(['ok'=>false,'error'=>'Fecha de vigencia inválida.'],422); }
@@ -365,7 +365,7 @@ if ($method === 'POST' && $route === 'attendance/schedules') {
 
 if ($method === 'GET' && $route === 'attendance/report') {
     $reportUser=require_user($pdo); ensure_operations_schema($pdo); ensure_attendance_presence_schema($pdo);
-    if (($reportUser['role'] ?? '') !== 'administracion' && !user_can_report($reportUser,'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para consultar asistencia.'],403);
+    if (($reportUser['role'] ?? '') !== 'administracion' && (($reportUser['role'] ?? '') !== 'supervisora' || !user_can_report($reportUser,'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para consultar asistencia.'],403);
     $from=trim((string)($_GET['from']??'')); $to=trim((string)($_GET['to']??'')); $site=trim((string)($_GET['site']??''));
     if(!preg_match('/^\d{4}-\d{2}-\d{2}$/',$from)||!preg_match('/^\d{4}-\d{2}-\d{2}$/',$to)||$from>$to||((strtotime($to)-strtotime($from))/86400)>366) json_response(['ok'=>false,'error'=>'Elegí un intervalo válido de hasta 366 días.'],422);
     if($site!==''&&!user_can_access_site($reportUser,$site))json_response(['ok'=>false,'error'=>'Local no autorizado.'],403);
