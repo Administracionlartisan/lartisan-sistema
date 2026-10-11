@@ -31,6 +31,51 @@ function ensure_attendance_presence_schema(PDO $pdo): void
         INDEX idx_lartisan_attendance_exceptions_site_status (site, status),
         INDEX idx_lartisan_attendance_exceptions_user_status (user_id, status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // Los horarios no viven dentro del snapshot del navegador: cada versión es
+    // una fuente histórica independiente para que un cambio futuro jamás
+    // recalcule injustamente un fichaje ya ocurrido.
+    $pdo->exec("CREATE TABLE IF NOT EXISTS lartisan_employee_schedule_versions (
+        id CHAR(36) NOT NULL PRIMARY KEY,
+        employee_user_id BIGINT UNSIGNED NOT NULL,
+        site VARCHAR(80) NOT NULL,
+        weekday TINYINT UNSIGNED NOT NULL,
+        starts_at TIME NULL,
+        ends_at TIME NULL,
+        tolerance_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 10,
+        effective_from DATE NOT NULL,
+        effective_to DATE NULL,
+        created_by BIGINT UNSIGNED NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_lartisan_schedule_lookup (employee_user_id, site, weekday, effective_from, effective_to),
+        INDEX idx_lartisan_schedule_site_date (site, effective_from, effective_to)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+}
+
+function attendance_local_date(string $value): ?string
+{
+    try { return (new DateTimeImmutable($value))->setTimezone(new DateTimeZone('America/Argentina/Buenos_Aires'))->format('Y-m-d'); }
+    catch (Throwable $error) { return null; }
+}
+
+function attendance_schedule_payload(array $row): array
+{
+    return [
+        'id' => (string) $row['id'], 'employeeUserId' => (int) $row['employee_user_id'],
+        'employeeName' => (string) ($row['employee_name'] ?? ''), 'site' => (string) $row['site'],
+        'weekday' => (int) $row['weekday'], 'startsAt' => $row['starts_at'] === null ? null : substr((string) $row['starts_at'], 0, 5),
+        'endsAt' => $row['ends_at'] === null ? null : substr((string) $row['ends_at'], 0, 5),
+        'toleranceMinutes' => (int) $row['tolerance_minutes'], 'effectiveFrom' => (string) $row['effective_from'],
+        'effectiveTo' => $row['effective_to'] === null ? null : (string) $row['effective_to'],
+        'createdAt' => (string) $row['created_at'], 'createdBy' => (string) ($row['created_by_name'] ?? ''),
+    ];
+}
+
+function attendance_schedule_for(PDO $pdo, int $employeeId, string $site, string $date): ?array
+{
+    $weekday = (int) (new DateTimeImmutable($date))->format('N');
+    $stmt = $pdo->prepare('SELECT * FROM lartisan_employee_schedule_versions WHERE employee_user_id=? AND site=? AND weekday=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY effective_from DESC LIMIT 1');
+    $stmt->execute([$employeeId, $site, $weekday, $date, $date]);
+    return $stmt->fetch() ?: null;
 }
 
 function presence_settings(PDO $pdo, string $site): ?array

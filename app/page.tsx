@@ -23,6 +23,7 @@ import CustomerPanel from "./modules/clientes/CustomerPanel";
 import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
+import { AttendanceReport, ScheduleManager } from "./modules/asistencia/ScheduleManager";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
@@ -1048,10 +1049,14 @@ export default function Home() {
   useEffect(() => {
     if (!user || tab !== "Historial de ventas") return;
     let active = true;
-    setSalesHistoryLoading(true);
-    setSalesHistoryError("");
     const params = new URLSearchParams({ from: salesHistoryFrom, to: salesHistoryTo, site });
-    fetch(`${API_BASE}/sales/history?${params}`, { credentials: "include", cache: "no-store" })
+    // Se programa tras el montaje: así React no fuerza un render cascada dentro
+    // del efecto y el indicador sigue representando el estado real del pedido.
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      setSalesHistoryLoading(true);
+      setSalesHistoryError("");
+      return fetch(`${API_BASE}/sales/history?${params}`, { credentials: "include", cache: "no-store" })
       .then(async (response) => {
         const data = (await response.json()) as { sales?: Sale[]; error?: string };
         if (!response.ok) throw new Error(data.error || "No se pudo cargar el historial de ventas.");
@@ -1063,8 +1068,9 @@ export default function Home() {
         setSalesHistoryError(error instanceof Error ? error.message : "No se pudo cargar el historial de ventas.");
       })
       .finally(() => { if (active) setSalesHistoryLoading(false); });
+    });
     return () => { active = false; };
-  }, [user?.id, tab, site, salesHistoryFrom, salesHistoryTo, operationalVersion]);
+  }, [user, tab, site, salesHistoryFrom, salesHistoryTo, operationalVersion]);
   useEffect(() => {
     if (user?.role !== "administracion" || tab !== "Administración" || !["Auditoria", "Cajas"].includes(adminReport)) return;
     let active = true;
@@ -1700,6 +1706,9 @@ export default function Home() {
     };
     window.addEventListener("keydown", onScannerKey, true);
     return () => window.removeEventListener("keydown", onScannerKey, true);
+  // Las funciones de captura dependen de la venta en curso y se recrean con
+  // ella; el listener se reinstala con los estados operativos anteriores.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, site, cashIsOpen, stock, prices, onlinePrices, products, catalog.ready, saleChannel, receivingRequestId, stockRequests, receivedScanCounts]);
   const siteLimits = limitsBySite[site];
   // La conciliación en pantalla corresponde exclusivamente al turno abierto.
@@ -1755,7 +1764,7 @@ export default function Home() {
   const canApproveStockAdjustments =
     (user?.role === "administracion" || user?.role === "supervisora") && can("stock");
   const canManageSchedules =
-    user?.role === "supervisora" && user.reportPermissions.includes("Personal");
+    user?.role === "administracion" || (user?.role === "supervisora" && user.reportPermissions.includes("Personal"));
   const canViewSupervisorReports =
     user?.role === "supervisora" && user.reportPermissions.length > 0;
   const managesCentralOrders =
@@ -3961,6 +3970,7 @@ export default function Home() {
     ...baseTabs,
     ...(managesCentralOrders ? ["Central de pedidos"] : []),
     ...(canManageSchedules ? ["Horarios"] : []),
+    ...(canManageSchedules ? ["Asistencia"] : []),
     ...(canViewSupervisorReports ? ["Reportes"] : []),
   ];
   const adminTaskAlertCount = user.role === "administracion"
@@ -7357,104 +7367,9 @@ export default function Home() {
               </div>
             </>
           ) : tab === "Horarios" && canManageSchedules ? (
-            <>
-              <Heading
-                k="SUPERVISIÓN · CONFIGURACIÓN DE PERSONAL"
-                h="Horarios de empleados"
-                p="Estos horarios serán la fuente de las alertas de llegada tarde y de los futuros reportes de fichaje."
-              />
-              <div className="overflow-auto rounded-xl border bg-white">
-                <table className="w-full min-w-[720px] text-sm">
-                  <thead className="bg-[#eef2f6]">
-                    <tr>
-                      <th className="p-3 text-left">Empleado</th>
-                      <th className="p-3 text-left">Local</th>
-                      <th className="p-3">Entrada</th>
-                      <th className="p-3">Salida</th>
-                      <th className="p-3">Tolerancia</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {schedules.map((schedule) => (
-                      <tr key={schedule.id} className="border-t">
-                        <td className="p-3 font-bold">{schedule.employee}</td>
-                        <td className="p-3">{schedule.site}</td>
-                        <td className="p-3 text-center">
-                          <input
-                            type="time"
-                            value={schedule.startsAt}
-                            onChange={(e) =>
-                              setSchedules((items) =>
-                                items.map((item) =>
-                                  item.id === schedule.id
-                                    ? { ...item, startsAt: e.target.value }
-                                    : item,
-                                ),
-                              )
-                            }
-                            aria-label={`Horario de entrada de ${schedule.employee} ${schedule.site}`}
-                            className="rounded border p-2"
-                          />
-                        </td>
-                        <td className="p-3 text-center">
-                          <input
-                            type="time"
-                            value={schedule.endsAt}
-                            onChange={(e) =>
-                              setSchedules((items) =>
-                                items.map((item) =>
-                                  item.id === schedule.id
-                                    ? { ...item, endsAt: e.target.value }
-                                    : item,
-                                ),
-                              )
-                            }
-                            aria-label={`Horario de salida de ${schedule.employee} ${schedule.site}`}
-                            className="rounded border p-2"
-                          />
-                        </td>
-                        <td className="p-3 text-center">
-                          <label
-                            className="sr-only"
-                            htmlFor={`${schedule.id}-tolerance`}
-                          >
-                            Tolerancia en minutos
-                          </label>
-                          <input
-                            id={`${schedule.id}-tolerance`}
-                            type="number"
-                            min="0"
-                            max="120"
-                            value={schedule.toleranceMinutes}
-                            onChange={(e) =>
-                              setSchedules((items) =>
-                                items.map((item) =>
-                                  item.id === schedule.id
-                                    ? {
-                                        ...item,
-                                        toleranceMinutes: Number(
-                                          e.target.value,
-                                        ),
-                                      }
-                                    : item,
-                                ),
-                              )
-                            }
-                            className="w-20 rounded border p-2 text-center"
-                          />{" "}
-                          min
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-4 rounded bg-[#eef5ef] p-3 text-sm">
-                En la versión definitiva, cada fila estará asociada a una
-                persona real y el sistema comparará automáticamente el fichaje
-                de entrada con este horario más su tolerancia.
-              </p>
-            </>
+            <ScheduleManager apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} canManage={canManageSchedules} />
+          ) : tab === "Asistencia" && canManageSchedules ? (
+            <AttendanceReport apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} />
           ) : (
             <>
               <Heading

@@ -286,6 +286,75 @@ if ($method === 'POST' && preg_match('#^admin/attendance/exceptions/([a-f0-9-]{3
     } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
 }
 
+// Horarios versionados: Supervisión administra solo sus locales y Administración
+// conserva la visión total. Nunca se reemplaza una versión anterior: se cierra
+// su vigencia el día previo y el informe puede reconstruir cualquier período.
+if ($method === 'GET' && $route === 'attendance/schedule-users') {
+    $scheduleUser = require_user($pdo); ensure_attendance_presence_schema($pdo);
+    if (($scheduleUser['role'] ?? '') !== 'administracion' && !user_can_report($scheduleUser, 'Personal')) json_response(['ok' => false, 'error' => 'No tenés permiso para gestionar horarios.'], 403);
+    $rows = $pdo->query("SELECT id, full_name, role, active, assigned_locations, access_all_locations FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
+    $users = [];
+    foreach ($rows as $row) {
+        $profile = ['id'=>(int)$row['id'], 'full_name'=>(string)$row['full_name'], 'role'=>(string)$row['role'], 'active'=>(bool)$row['active'], 'assigned_locations'=>$row['assigned_locations'] ?? '[]', 'access_all_locations'=>(bool)$row['access_all_locations']];
+        $locations = ($scheduleUser['role'] ?? '') === 'administracion' ? operational_sites() : array_values(array_filter(operational_sites(), static fn(string $site): bool => user_can_access_site($scheduleUser, $site) && user_can_access_site($profile, $site)));
+        if ($locations) $users[] = ['id'=>(int)$row['id'], 'name'=>(string)$row['full_name'], 'role'=>(string)$row['role'], 'sites'=>$locations];
+    }
+    json_response(['ok'=>true,'users'=>$users]);
+}
+
+if ($method === 'GET' && $route === 'attendance/schedules') {
+    $scheduleUser = require_user($pdo); ensure_attendance_presence_schema($pdo);
+    if (($scheduleUser['role'] ?? '') !== 'administracion' && !user_can_report($scheduleUser, 'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para consultar horarios.'],403);
+    $site = trim((string)($_GET['site'] ?? ''));
+    if ($site !== '' && !user_can_access_site($scheduleUser, $site)) json_response(['ok'=>false,'error'=>'Local no autorizado.'],403);
+    $sql = 'SELECT s.*,u.full_name AS employee_name,c.full_name AS created_by_name FROM lartisan_employee_schedule_versions s JOIN users u ON u.id=s.employee_user_id JOIN users c ON c.id=s.created_by';
+    $params=[]; if ($site !== '') { $sql.=' WHERE s.site=?'; $params[]=$site; } elseif (($scheduleUser['role'] ?? '') !== 'administracion') { $allowed=array_values(array_filter(operational_sites(),static fn(string $value): bool=>user_can_access_site($scheduleUser,$value))); if(!$allowed) json_response(['ok'=>true,'schedules'=>[]]); $sql.=' WHERE s.site IN ('.implode(',',array_fill(0,count($allowed),'?')).')'; $params=$allowed; }
+    $sql.=' ORDER BY s.site,u.full_name,s.effective_from DESC,s.weekday'; $stmt=$pdo->prepare($sql); $stmt->execute($params);
+    json_response(['ok'=>true,'schedules'=>array_map('attendance_schedule_payload',$stmt->fetchAll())]);
+}
+
+if ($method === 'POST' && $route === 'attendance/schedules') {
+    $scheduleUser=require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
+    if (($scheduleUser['role'] ?? '') !== 'administracion' && !user_can_report($scheduleUser,'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para modificar horarios.'],403);
+    $employeeId=filter_var($body['employeeUserId']??null,FILTER_VALIDATE_INT); $site=trim((string)($body['site']??'')); $effective=trim((string)($body['effectiveFrom']??'')); $days=is_array($body['days']??null)?$body['days']:[];
+    if ($employeeId===false || $employeeId===null || !user_can_access_site($scheduleUser,$site) || !preg_match('/^\d{4}-\d{2}-\d{2}$/',$effective) || count($days)!==7) json_response(['ok'=>false,'error'=>'Revisá empleado, local, fecha de vigencia y los siete días.'],422);
+    try { $effectiveDate=new DateTimeImmutable($effective); } catch(Throwable $error) { json_response(['ok'=>false,'error'=>'Fecha de vigencia inválida.'],422); }
+    $employee=$pdo->prepare('SELECT id,full_name,active FROM users WHERE id=?'); $employee->execute([$employeeId]); $employeeRow=$employee->fetch(); if(!$employeeRow || !(bool)$employeeRow['active']) json_response(['ok'=>false,'error'=>'La persona seleccionada no está activa.'],422);
+    $normalized=[];
+    foreach($days as $day){ $weekday=filter_var($day['weekday']??null,FILTER_VALIDATE_INT); $start=trim((string)($day['startsAt']??'')); $end=trim((string)($day['endsAt']??'')); $tolerance=filter_var($day['toleranceMinutes']??10,FILTER_VALIDATE_INT); if($weekday===false||$weekday<1||$weekday>7||$tolerance===false||$tolerance<0||$tolerance>120||isset($normalized[$weekday])) json_response(['ok'=>false,'error'=>'Configuración semanal inválida.'],422); if(($start===''&&$end!=='')||($start!==''&&$end==='')||($start!==''&&!preg_match('/^([01]\d|2[0-3]):[0-5]\d$/',$start))||($end!==''&&!preg_match('/^([01]\d|2[0-3]):[0-5]\d$/',$end))||($start!==''&&$end<=$start)) json_response(['ok'=>false,'error'=>'Cada día laborable requiere entrada anterior a salida; para franco dejá ambos vacíos.'],422); $normalized[$weekday]=[$start?:null,$end?:null,$tolerance]; }
+    $pdo->beginTransaction();
+    try {
+        foreach($normalized as $weekday=>[$start,$end,$tolerance]){
+            // Cierra solo la versión vigente anterior. Una versión futura queda
+            // intacta, evitando que editar hoy destruya una planificación ya cargada.
+            $previous=$pdo->prepare('SELECT id FROM lartisan_employee_schedule_versions WHERE employee_user_id=? AND site=? AND weekday=? AND effective_from<? AND (effective_to IS NULL OR effective_to>=?) ORDER BY effective_from DESC LIMIT 1 FOR UPDATE'); $previous->execute([$employeeId,$site,$weekday,$effective,$effective]); $row=$previous->fetch();
+            if($row) $pdo->prepare('UPDATE lartisan_employee_schedule_versions SET effective_to=DATE_SUB(?, INTERVAL 1 DAY) WHERE id=?')->execute([$effective,$row['id']]);
+            $same=$pdo->prepare('SELECT id FROM lartisan_employee_schedule_versions WHERE employee_user_id=? AND site=? AND weekday=? AND effective_from=? FOR UPDATE'); $same->execute([$employeeId,$site,$weekday,$effective]); if($same->fetch()) throw new RuntimeException('Ya existe una versión para esa fecha. Elegí otra fecha de vigencia.');
+            // Si ya existe una modificación futura, esta vigencia se cierra el
+            // día anterior. Así nunca quedan dos reglas activas para un día.
+            $next=$pdo->prepare('SELECT effective_from FROM lartisan_employee_schedule_versions WHERE employee_user_id=? AND site=? AND weekday=? AND effective_from>? ORDER BY effective_from ASC LIMIT 1 FOR UPDATE'); $next->execute([$employeeId,$site,$weekday,$effective]); $future=$next->fetchColumn();
+            $endsOn=$future ? (new DateTimeImmutable((string)$future))->modify('-1 day')->format('Y-m-d') : null;
+            $pdo->prepare('INSERT INTO lartisan_employee_schedule_versions (id,employee_user_id,site,weekday,starts_at,ends_at,tolerance_minutes,effective_from,effective_to,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')->execute([presence_uuid(),$employeeId,$site,$weekday,$start,$end,$tolerance,$effective,$endsOn,$scheduleUser['id']]);
+        }
+        audit($pdo,(int)$scheduleUser['id'],'attendance_schedule_version_created',$employeeRow['full_name'].' · '.$site.' · desde '.$effective); $pdo->commit();
+    } catch(Throwable $error){if($pdo->inTransaction())$pdo->rollBack(); throw $error;}
+    json_response(['ok'=>true]);
+}
+
+if ($method === 'GET' && $route === 'attendance/report') {
+    $reportUser=require_user($pdo); ensure_operations_schema($pdo); ensure_attendance_presence_schema($pdo);
+    if (($reportUser['role'] ?? '') !== 'administracion' && !user_can_report($reportUser,'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para consultar asistencia.'],403);
+    $from=trim((string)($_GET['from']??'')); $to=trim((string)($_GET['to']??'')); $site=trim((string)($_GET['site']??''));
+    if(!preg_match('/^\d{4}-\d{2}-\d{2}$/',$from)||!preg_match('/^\d{4}-\d{2}-\d{2}$/',$to)||$from>$to||((strtotime($to)-strtotime($from))/86400)>366) json_response(['ok'=>false,'error'=>'Elegí un intervalo válido de hasta 366 días.'],422);
+    if($site!==''&&!user_can_access_site($reportUser,$site))json_response(['ok'=>false,'error'=>'Local no autorizado.'],403);
+    $allowed=$site!==''?[$site]:(($reportUser['role']??'')==='administracion'?operational_sites():array_values(array_filter(operational_sites(),static fn(string $value):bool=>user_can_access_site($reportUser,$value))));
+    $marks=[]; if($allowed){$stmt=$pdo->prepare('SELECT site,state_json FROM operation_site_states WHERE site IN ('.implode(',',array_fill(0,count($allowed),'?')).')');$stmt->execute($allowed);foreach($stmt->fetchAll() as $state){$records=json_decode((string)$state['state_json'],true)['attendanceRecords']??[];foreach(is_array($records)?$records:[] as $record){if(!is_array($record)||empty($record['userId']))continue;$date=attendance_local_date((string)($record['atISO']??''));if($date&&$date>=$from&&$date<=$to)$marks[(int)$record['userId'].'|'.$state['site'].'|'.$date][]=$record;}}}
+    $scheduleStmt=$pdo->prepare('SELECT DISTINCT s.employee_user_id,s.site,u.full_name FROM lartisan_employee_schedule_versions s JOIN users u ON u.id=s.employee_user_id WHERE s.site IN ('.implode(',',array_fill(0,count($allowed),'?')).') AND s.effective_from<=? AND (s.effective_to IS NULL OR s.effective_to>=?)');$scheduleStmt->execute(array_merge($allowed,[$to,$from]));
+    $rows=[];$period=new DatePeriod(new DateTimeImmutable($from),new DateInterval('P1D'),(new DateTimeImmutable($to))->modify('+1 day'));
+    foreach($scheduleStmt->fetchAll() as $person)foreach($period as $day){$date=$day->format('Y-m-d');$schedule=attendance_schedule_for($pdo,(int)$person['employee_user_id'],(string)$person['site'],$date);if(!$schedule||$schedule['starts_at']===null)continue;$key=(int)$person['employee_user_id'].'|'.$person['site'].'|'.$date;$entries=$marks[$key]??[];usort($entries,static fn($a,$b)=>strcmp((string)($a['atISO']??''),(string)($b['atISO']??'')));$in=array_values(array_filter($entries,static fn($item)=>($item['kind']??'')==='Entrada'));$out=array_values(array_filter($entries,static fn($item)=>($item['kind']??'')==='Salida'));$late=null;$early=null;$status='Sin fichaje';if($in){$actual=(new DateTimeImmutable((string)$in[0]['atISO']))->setTimezone(new DateTimeZone('America/Argentina/Buenos_Aires'))->format('H:i');$allowedStart=(new DateTimeImmutable($date.' '.$schedule['starts_at']))->modify('+'.(int)$schedule['tolerance_minutes'].' minutes')->format('H:i');$late=max(0,(strtotime($date.' '.$actual)-strtotime($date.' '.$allowedStart))/60);$status=$out?'Completo':'Salida pendiente';if($out){$actualOut=(new DateTimeImmutable((string)end($out)['atISO']))->setTimezone(new DateTimeZone('America/Argentina/Buenos_Aires'))->format('H:i');$early=max(0,(strtotime($date.' '.$schedule['ends_at'])-strtotime($date.' '.$actualOut))/60);}}$rows[]=['employeeUserId'=>(int)$person['employee_user_id'],'employeeName'=>(string)$person['full_name'],'site'=>(string)$person['site'],'date'=>$date,'expectedIn'=>substr((string)$schedule['starts_at'],0,5),'expectedOut'=>substr((string)$schedule['ends_at'],0,5),'toleranceMinutes'=>(int)$schedule['tolerance_minutes'],'actualIn'=>$in?((new DateTimeImmutable((string)$in[0]['atISO']))->setTimezone(new DateTimeZone('America/Argentina/Buenos_Aires'))->format('H:i')):null,'actualOut'=>$out?((new DateTimeImmutable((string)end($out)['atISO']))->setTimezone(new DateTimeZone('America/Argentina/Buenos_Aires'))->format('H:i')):null,'lateMinutes'=>$late===null?null:(int)round($late),'earlyMinutes'=>$early===null?null:(int)round($early),'status'=>$status];}
+    json_response(['ok'=>true,'rows'=>$rows]);
+}
+
 // Con una contraseña temporal solo se puede cambiarla (o salir). Antes esto se
 // controlaba únicamente en dos rutas y el resto de las escrituras lo permitía.
 if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
