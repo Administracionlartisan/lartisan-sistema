@@ -14,7 +14,9 @@ function GuidedDemo({chapter,onProgress}:{chapter:Chapter;onProgress:(complete?:
   const video=useRef<HTMLVideoElement>(null); const [speaking,setSpeaking]=useState(false); const [caption,setCaption]=useState("");
   const narrate=()=>{ if(!("speechSynthesis" in window)) return; window.speechSynthesis.cancel(); const utterance=new SpeechSynthesisUtterance(chapter.script); utterance.lang="es-AR"; utterance.rate=1; utterance.onend=()=>setSpeaking(false); setSpeaking(true); window.speechSynthesis.speak(utterance); };
   useEffect(()=>()=>window.speechSynthesis?.cancel(),[]);
-  const captionsUrl=chapter.captionsVtt?.startsWith("https://") ? chapter.captionsVtt : (chapter.captionsVtt ? `data:text/vtt;charset=utf-8,${encodeURIComponent(chapter.captionsVtt)}` : undefined);
+  // Las pistas externas viven en el host de medios; versionamos la URL para
+  // que un navegador que antes obtuvo una respuesta sin CORS vuelva a pedirla.
+  const captionsUrl=chapter.captionsVtt?.startsWith("https://") ? `${chapter.captionsVtt}${chapter.captionsVtt.includes("?") ? "&" : "?"}training-captions=v2` : (chapter.captionsVtt ? `data:text/vtt;charset=utf-8,${encodeURIComponent(chapter.captionsVtt)}` : undefined);
   if(chapter.videoUrl) return <div className="overflow-hidden rounded-2xl bg-slate-950"><video ref={video} controls playsInline crossOrigin="anonymous" className="aspect-video w-full" src={chapter.videoUrl} onTimeUpdate={()=>onProgress(false)} onEnded={()=>onProgress(true)}><track kind="captions" srcLang="es" label="Español" default src={captionsUrl}/></video></div>;
   return <div className="overflow-hidden rounded-2xl border border-[#183a67]/20 bg-gradient-to-br from-[#0e2e55] via-[#183a67] to-[#2e5f92] p-5 text-white shadow-inner">
     <div className="flex aspect-video flex-col justify-between rounded-xl border border-white/20 bg-slate-950/30 p-5">
