@@ -1011,13 +1011,14 @@ if (str_starts_with($route, 'chat')) {
         chat_serve_attachment($pdo, $chatUser, $matches[1]);
     }
     if ($method === 'GET' && $route === 'chat/bootstrap') {
-        $settings = $pdo->prepare('SELECT sound_enabled,desktop_enabled FROM internal_chat_settings WHERE user_id=?');
-        $settings->execute([(int) $chatUser['id']]); $row = $settings->fetch() ?: ['sound_enabled' => 1, 'desktop_enabled' => 0];
+        $settings = $pdo->prepare('SELECT sound_enabled,desktop_enabled,push_enabled FROM internal_chat_settings WHERE user_id=?');
+        $settings->execute([(int) $chatUser['id']]); $row = $settings->fetch() ?: ['sound_enabled' => 1, 'desktop_enabled' => 0, 'push_enabled' => 0];
         // chat_can_contact también comprueba el estado activo: incluirlo evita
         // que los contactos válidos queden descartados por un campo ausente.
         $candidates = $pdo->query('SELECT id,full_name,role,assigned_location,active FROM users WHERE active=1 ORDER BY full_name ASC')->fetchAll();
         $contacts = array_values(array_map(static fn ($item) => ['id' => (string) $item['id'], 'name' => $item['full_name'], 'role' => $item['role'], 'site' => $item['assigned_location']], array_filter($candidates, static fn ($item) => chat_can_contact($chatUser, $item))));
-        json_response(['ok' => true, 'settings' => ['sound' => (bool) $row['sound_enabled'], 'desktop' => (bool) $row['desktop_enabled']], 'contacts' => $contacts]);
+        $pushCredentials = chat_push_credentials($pdo);
+        json_response(['ok' => true, 'settings' => ['sound' => (bool) $row['sound_enabled'], 'desktop' => (bool) $row['desktop_enabled'], 'push' => (bool) $row['push_enabled']], 'push' => ['available' => $pushCredentials !== null, 'publicKey' => $pushCredentials['public_key'] ?? null], 'contacts' => $contacts]);
     }
     if ($method === 'GET' && $route === 'chat/threads') {
         $statement = $pdo->prepare('SELECT t.id FROM internal_chat_threads t JOIN internal_chat_participants p ON p.thread_id=t.id WHERE p.user_id=? ORDER BY t.site_name IS NULL, t.title');
@@ -1070,7 +1071,7 @@ if (str_starts_with($route, 'chat')) {
             if (count($rawAttachments) > 3) json_response(['ok' => false, 'error' => 'Podés adjuntar hasta tres archivos por mensaje.'], 422);
             try { $files = array_map('chat_attachment_payload', $rawAttachments); } catch (InvalidArgumentException $error) { json_response(['ok' => false, 'error' => $error->getMessage()], 422); }
             $messageId = chat_id(); $pdo->beginTransaction();
-            try { $pdo->prepare('INSERT INTO internal_chat_messages (id,thread_id,user_id,client_message_id,body) VALUES (?,?,?,?,?)')->execute([$messageId,$threadId,(int)$chatUser['id'],$clientId,$text]); $insertFile=$pdo->prepare('INSERT INTO internal_chat_attachments (id,message_id,original_name,mime_type,byte_size,content) VALUES (?,?,?,?,?,?)'); foreach($files as $file) $insertFile->execute([$file['id'],$messageId,$file['name'],$file['mime'],strlen($file['content']),$file['content']]); audit($pdo,(int)$chatUser['id'],'internal_chat_message_created','thread='.$threadId.';message='.$messageId.';attachments='.count($files)); $pdo->commit(); } catch(Throwable $error) { if($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+            try { $pdo->prepare('INSERT INTO internal_chat_messages (id,thread_id,user_id,client_message_id,body) VALUES (?,?,?,?,?)')->execute([$messageId,$threadId,(int)$chatUser['id'],$clientId,$text]); $insertFile=$pdo->prepare('INSERT INTO internal_chat_attachments (id,message_id,original_name,mime_type,byte_size,content) VALUES (?,?,?,?,?,?)'); foreach($files as $file) $insertFile->execute([$file['id'],$messageId,$file['name'],$file['mime'],strlen($file['content']),$file['content']]); audit($pdo,(int)$chatUser['id'],'internal_chat_message_created','thread='.$threadId.';message='.$messageId.';attachments='.count($files)); $pdo->commit(); chat_notify_push_recipients($pdo, $threadId, (int) $chatUser['id']); } catch(Throwable $error) { if($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
         }
         json_response(['ok' => true, 'messageId' => $messageId]);
     }
@@ -1078,7 +1079,17 @@ if (str_starts_with($route, 'chat')) {
         $body=request_body(); $threadId=(string)($body['threadId']??''); chat_require_member($pdo,$threadId,$chatUser); $pdo->prepare('UPDATE internal_chat_participants SET last_read_at=NOW() WHERE thread_id=? AND user_id=?')->execute([$threadId,(int)$chatUser['id']]); json_response(['ok'=>true]);
     }
     if ($method === 'POST' && $route === 'chat/settings') {
-        $body=request_body(); $pdo->prepare('INSERT INTO internal_chat_settings (user_id,sound_enabled,desktop_enabled) VALUES (?,?,?) ON DUPLICATE KEY UPDATE sound_enabled=VALUES(sound_enabled),desktop_enabled=VALUES(desktop_enabled)')->execute([(int)$chatUser['id'],!empty($body['sound'])?1:0,!empty($body['desktop'])?1:0]); audit($pdo,(int)$chatUser['id'],'internal_chat_settings_updated'); json_response(['ok'=>true]);
+        $body=request_body(); $pdo->prepare('INSERT INTO internal_chat_settings (user_id,sound_enabled,desktop_enabled,push_enabled) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE sound_enabled=VALUES(sound_enabled),desktop_enabled=VALUES(desktop_enabled),push_enabled=VALUES(push_enabled)')->execute([(int)$chatUser['id'],!empty($body['sound'])?1:0,!empty($body['desktop'])?1:0,!empty($body['push'])?1:0]); audit($pdo,(int)$chatUser['id'],'internal_chat_settings_updated'); json_response(['ok'=>true]);
+    }
+    if ($method === 'POST' && $route === 'chat/push/subscribe') {
+        $body = request_body(); $subscription = chat_push_subscription($body); if (!$subscription) json_response(['ok' => false, 'error' => 'La suscripción de notificaciones no es válida.'], 422);
+        if (!chat_push_credentials($pdo)) json_response(['ok' => false, 'error' => 'Este servidor no admite notificaciones push.'], 503);
+        $pdo->prepare('INSERT INTO internal_chat_push_subscriptions (user_id,endpoint_hash,endpoint,p256dh_key,auth_key,user_agent,enabled) VALUES (?,?,?,?,?,?,1) ON DUPLICATE KEY UPDATE user_id=VALUES(user_id),endpoint=VALUES(endpoint),p256dh_key=VALUES(p256dh_key),auth_key=VALUES(auth_key),user_agent=VALUES(user_agent),enabled=1,last_error=NULL')->execute([(int) $chatUser['id'], hash('sha256', $subscription['endpoint']), $subscription['endpoint'], $subscription['p256dh'], $subscription['auth'], substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255)]);
+        $pdo->prepare('INSERT INTO internal_chat_settings (user_id,sound_enabled,desktop_enabled,push_enabled) VALUES (?,1,0,1) ON DUPLICATE KEY UPDATE push_enabled=1')->execute([(int) $chatUser['id']]); audit($pdo, (int) $chatUser['id'], 'internal_chat_push_subscribed'); json_response(['ok' => true]);
+    }
+    if ($method === 'POST' && $route === 'chat/push/unsubscribe') {
+        $body = request_body(); $subscription = chat_push_subscription($body); if (!$subscription) json_response(['ok' => false, 'error' => 'La suscripción de notificaciones no es válida.'], 422);
+        $pdo->prepare('UPDATE internal_chat_push_subscriptions SET enabled=0 WHERE user_id=? AND endpoint_hash=?')->execute([(int) $chatUser['id'], hash('sha256', $subscription['endpoint'])]); $pdo->prepare('UPDATE internal_chat_settings SET push_enabled=0 WHERE user_id=?')->execute([(int) $chatUser['id']]); audit($pdo, (int) $chatUser['id'], 'internal_chat_push_unsubscribed'); json_response(['ok' => true]);
     }
     if ($method === 'POST' && preg_match('#^chat/messages/([a-f0-9]{32})/(edit|delete)$#', $route, $matches)) {
         $statement=$pdo->prepare('SELECT m.*,t.id AS thread_access FROM internal_chat_messages m JOIN internal_chat_participants t ON t.thread_id=m.thread_id AND t.user_id=? WHERE m.id=?'); $statement->execute([(int)$chatUser['id'],$matches[1]]); $message=$statement->fetch();

@@ -54,8 +54,89 @@ function ensure_internal_chat_schema(PDO $pdo): void
         user_id INT PRIMARY KEY,
         sound_enabled TINYINT(1) NOT NULL DEFAULT 1,
         desktop_enabled TINYINT(1) NOT NULL DEFAULT 0,
+        push_enabled TINYINT(1) NOT NULL DEFAULT 0,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    try { $pdo->exec('ALTER TABLE internal_chat_settings ADD COLUMN push_enabled TINYINT(1) NOT NULL DEFAULT 0'); } catch (Throwable $ignored) { }
+    $pdo->exec("CREATE TABLE IF NOT EXISTS internal_chat_push_credentials (
+        id TINYINT UNSIGNED PRIMARY KEY,
+        public_key VARCHAR(120) NOT NULL,
+        private_key TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS internal_chat_push_subscriptions (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        endpoint_hash CHAR(64) NOT NULL,
+        endpoint TEXT NOT NULL,
+        p256dh_key VARCHAR(180) NOT NULL,
+        auth_key VARCHAR(120) NOT NULL,
+        user_agent VARCHAR(255) NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 1,
+        last_sent_at DATETIME NULL,
+        last_error VARCHAR(255) NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_chat_push_endpoint (endpoint_hash),
+        INDEX idx_chat_push_user_enabled (user_id, enabled)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+}
+
+function chat_base64url(string $value): string { return rtrim(strtr(base64_encode($value), '+/', '-_'), '='); }
+function chat_base64url_decode(string $value): string { $value = strtr($value, '-_', '+/'); return base64_decode($value . str_repeat('=', (4 - strlen($value) % 4) % 4), true) ?: ''; }
+function chat_push_credentials(PDO $pdo): ?array
+{
+    $row = $pdo->query('SELECT public_key,private_key FROM internal_chat_push_credentials WHERE id=1')->fetch();
+    if ($row) return $row;
+    if (!function_exists('openssl_pkey_new')) return null;
+    $key = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1']);
+    if (!$key || !openssl_pkey_export($key, $private)) return null;
+    $details = openssl_pkey_get_details($key);
+    $ec = is_array($details['ec'] ?? null) ? $details['ec'] : null;
+    if (!$ec || !isset($ec['x'], $ec['y'])) return null;
+    $public = chat_base64url("\x04" . $ec['x'] . $ec['y']);
+    $pdo->prepare('INSERT INTO internal_chat_push_credentials (id,public_key,private_key) VALUES (1,?,?)')->execute([$public, $private]);
+    return ['public_key' => $public, 'private_key' => $private];
+}
+function chat_push_subscription(array $body): ?array
+{
+    $subscription = is_array($body['subscription'] ?? null) ? $body['subscription'] : [];
+    $endpoint = trim((string) ($subscription['endpoint'] ?? ''));
+    $keys = is_array($subscription['keys'] ?? null) ? $subscription['keys'] : [];
+    $p256dh = trim((string) ($keys['p256dh'] ?? '')); $auth = trim((string) ($keys['auth'] ?? ''));
+    if (!filter_var($endpoint, FILTER_VALIDATE_URL) || !str_starts_with($endpoint, 'https://') || !preg_match('/^[A-Za-z0-9_-]{20,180}$/', $p256dh) || !preg_match('/^[A-Za-z0-9_-]{12,120}$/', $auth)) return null;
+    return ['endpoint' => $endpoint, 'p256dh' => $p256dh, 'auth' => $auth];
+}
+function chat_vapid_token(string $endpoint, array $credentials): ?string
+{
+    $parts = parse_url($endpoint); if (!$parts || empty($parts['scheme']) || empty($parts['host'])) return null;
+    $header = chat_base64url(json_encode(['typ' => 'JWT', 'alg' => 'ES256'], JSON_UNESCAPED_SLASHES));
+    $payload = chat_base64url(json_encode(['aud' => $parts['scheme'] . '://' . $parts['host'], 'exp' => time() + 3600, 'sub' => 'mailto:administracion@lartisantaller.com'], JSON_UNESCAPED_SLASHES));
+    $input = $header . '.' . $payload;
+    if (!openssl_sign($input, $signature, $credentials['private_key'], OPENSSL_ALGO_SHA256)) return null;
+    // OpenSSL produce DER; JWT ES256 exige R || S de 32 bytes cada uno.
+    if (strlen($signature) < 8 || ord($signature[0]) !== 0x30) return null;
+    $offset = 2 + (ord($signature[1]) & 0x80 ? ord($signature[1]) & 0x7f : 0);
+    if (ord($signature[$offset]) !== 0x02) return null; $rLength = ord($signature[$offset + 1]); $r = substr($signature, $offset + 2, $rLength);
+    $offset += 2 + $rLength; if (ord($signature[$offset]) !== 0x02) return null; $sLength = ord($signature[$offset + 1]); $s = substr($signature, $offset + 2, $sLength);
+    $r = ltrim($r, "\0"); $s = ltrim($s, "\0");
+    if (strlen($r) > 32 || strlen($s) > 32) return null;
+    return $input . '.' . chat_base64url(str_repeat("\0", 32 - strlen($r)) . $r . str_repeat("\0", 32 - strlen($s)) . $s);
+}
+function chat_notify_push_recipients(PDO $pdo, string $threadId, int $senderId): void
+{
+    if (!function_exists('curl_init')) return;
+    $credentials = chat_push_credentials($pdo); if (!$credentials) return;
+    $rows = $pdo->prepare('SELECT s.id,s.endpoint FROM internal_chat_push_subscriptions s JOIN internal_chat_participants p ON p.user_id=s.user_id WHERE p.thread_id=? AND s.user_id<>? AND s.enabled=1');
+    $rows->execute([$threadId, $senderId]);
+    foreach ($rows->fetchAll() as $row) {
+        $jwt = chat_vapid_token((string) $row['endpoint'], $credentials); if (!$jwt) continue;
+        $curl = curl_init((string) $row['endpoint']);
+        curl_setopt_array($curl, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => '', CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 8, CURLOPT_HTTPHEADER => ['TTL: 120', 'Urgency: normal', 'Authorization: vapid t=' . $jwt . ', k=' . $credentials['public_key']]]);
+        curl_exec($curl); $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE); $error = substr((string) curl_error($curl), 0, 240); curl_close($curl);
+        if (in_array($status, [404, 410], true)) $pdo->prepare('UPDATE internal_chat_push_subscriptions SET enabled=0,last_error=? WHERE id=?')->execute(['Suscripción vencida', (int) $row['id']]);
+        else $pdo->prepare('UPDATE internal_chat_push_subscriptions SET last_sent_at=NOW(),last_error=? WHERE id=?')->execute([$status >= 200 && $status < 300 ? null : ('HTTP ' . $status . ' ' . $error), (int) $row['id']]);
+    }
 }
 
 function chat_id(): string { return bin2hex(random_bytes(16)); }

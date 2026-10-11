@@ -36,7 +36,8 @@ type Message = {
   sender: { id: string; name: string; role: string };
   attachments: Attachment[];
 };
-type Preferences = { sound: boolean; desktop: boolean };
+type Preferences = { sound: boolean; desktop: boolean; push: boolean };
+type PushConfig = { available: boolean; publicKey?: string | null };
 
 const readable = (date?: string | null) =>
   date
@@ -53,6 +54,11 @@ const allowed = new Set([
   "image/webp",
   "application/pdf",
 ]);
+const pushKey = (value: string) => {
+  const padded = `${value}${"=".repeat((4 - (value.length % 4)) % 4)}`.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(padded);
+  return Uint8Array.from(raw, (item) => item.charCodeAt(0));
+};
 const readFile = (file: File) =>
   new Promise<{ name: string; mime: string; data: string }>(
     (resolve, reject) => {
@@ -82,7 +88,10 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
     [preferences, setPreferences] = useState<Preferences>({
       sound: true,
       desktop: false,
+      push: false,
     }),
+    [pushConfig, setPushConfig] = useState<PushConfig>({ available: false }),
+    [pushBusy, setPushBusy] = useState(false),
     [notice, setNotice] = useState(""),
     [loading, setLoading] = useState(true),
     [sending, setSending] = useState(false),
@@ -206,9 +215,11 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
         const data = bootstrap as {
           contacts?: Contact[];
           settings?: Preferences;
+          push?: PushConfig;
         };
         setContacts(data.contacts ?? []);
-        setPreferences(data.settings ?? { sound: true, desktop: false });
+        setPreferences(data.settings ?? { sound: true, desktop: false, push: false });
+        setPushConfig(data.push ?? { available: false });
       })
       .catch(
         (error) =>
@@ -271,6 +282,32 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
         "No se concedió el permiso de escritorio. El aviso visual y el sonido permanecen disponibles.",
       );
     await savePreferences({ ...preferences, desktop: true });
+  };
+  const togglePush = async () => {
+    if (!pushConfig.available || !pushConfig.publicKey || !("serviceWorker" in navigator) || !("PushManager" in window))
+      return setNotice("Este navegador no admite avisos push. Podés seguir usando los avisos visibles y el sonido dentro del sistema.");
+    setPushBusy(true); setNotice("");
+    try {
+      const registration = await navigator.serviceWorker.register("/chat-push-sw.js", { scope: "/" });
+      if (preferences.push) {
+        const subscription = await registration.pushManager.getSubscription();
+        if (subscription) {
+          await request("chat/push/unsubscribe", { method: "POST", body: JSON.stringify({ subscription: subscription.toJSON() }) });
+          await subscription.unsubscribe();
+        }
+        await savePreferences({ ...preferences, push: false });
+        setNotice("Los avisos push se desactivaron para este dispositivo.");
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") return setNotice("No se concedió el permiso de notificaciones. Podés activarlo más tarde desde el navegador.");
+      const subscription = (await registration.pushManager.getSubscription()) ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKey(pushConfig.publicKey) });
+      await request("chat/push/subscribe", { method: "POST", body: JSON.stringify({ subscription: subscription.toJSON() }) });
+      await savePreferences({ ...preferences, push: true });
+      setNotice("Listo: este dispositivo recibirá avisos de Chat Interno incluso con la aplicación cerrada.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "No se pudieron activar los avisos push.");
+    } finally { setPushBusy(false); }
   };
   const startDirect = async (contact: Contact) => {
     try {
@@ -435,6 +472,11 @@ export default function InternalChatPanel({ userId, floating = false, onClose }:
               className="rounded-lg border bg-white px-2.5 py-1.5 font-bold"
             >
               Activar avisos de escritorio
+            </button>
+          )}
+          {pushConfig.available && (
+            <button type="button" disabled={pushBusy} onClick={() => void togglePush()} className={`rounded-lg border px-2.5 py-1.5 font-bold ${preferences.push ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "bg-white"}`}>
+              {pushBusy ? "Configurando…" : preferences.push ? "Avisos push activos" : "Activar avisos en celular"}
             </button>
           )}
           {floating && onClose && <button type="button" onClick={onClose} aria-label="Cerrar chat" className="rounded-lg px-2.5 py-1 text-xl leading-none text-slate-500 transition hover:bg-slate-100 hover:text-[#183a67]">×</button>}
