@@ -1,0 +1,12 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+type PersonnelFile = { id: string; name: string; username: string; accessRole: string; jobTitle: string | null; site: string | null; status: string; createdAt: string; updatedAt: string };
+const titles: Record<string, string> = { jefe_area: "Jefe de área", cocinero: "Cocinero/a", ayudante_cocina: "Ayudante de cocina" };
+
+export default function PersonnelFilesPanel({ apiBase }: { apiBase: string }) {
+  const [files, setFiles] = useState<PersonnelFile[]>([]); const [notice, setNotice] = useState("");
+  useEffect(() => { let active = true; void fetch(`${apiBase}/admin/personnel-files`, { credentials: "include" }).then(async (response) => { const data = await response.json() as { files?: PersonnelFile[]; error?: string }; if (!active) return; if (response.ok) setFiles(data.files || []); else setNotice(data.error || "No se pudieron cargar los legajos."); }).catch(() => active && setNotice("No se pudieron cargar los legajos.")); return () => { active = false; }; }, [apiBase]);
+  return <section><p className="text-sm font-bold tracking-wide text-red-500">ADMINISTRACIÓN · PERSONAL</p><h1 className="mt-2 text-3xl font-black text-[#183a67]">Legajos</h1><p className="mt-2 text-slate-600">Cada alta realizada desde Personal genera un legajo automáticamente. La ficha conserva su vínculo con el usuario, cargo, local y trazabilidad.</p>{notice && <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">{notice}</p>}<div className="mt-5 overflow-auto rounded-2xl border bg-white"><table className="w-full min-w-[820px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Empleado</th><th className="p-3">Usuario</th><th className="p-3">Cargo</th><th className="p-3">Local</th><th className="p-3">Estado</th><th className="p-3">Alta</th></tr></thead><tbody>{files.map((file) => <tr key={file.id} className="border-t"><td className="p-3 font-bold">{file.name}</td><td className="p-3 text-center">{file.username}</td><td className="p-3 text-center">{titles[file.jobTitle || ""] || file.accessRole}</td><td className="p-3 text-center">{file.site || "—"}</td><td className="p-3 text-center">{file.status}</td><td className="p-3 text-center">{new Date(file.createdAt).toLocaleDateString("es-AR")}</td></tr>)}{!files.length && <tr><td colSpan={6} className="p-5 text-center text-slate-500">Todavía no hay legajos creados desde Personal.</td></tr>}</tbody></table></div></section>;
+}

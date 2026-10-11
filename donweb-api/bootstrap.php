@@ -247,6 +247,18 @@ function table_exists(PDO $pdo, string $table): bool
     return (bool) $statement->fetchColumn();
 }
 
+function ensure_personnel_files_schema(PDO $pdo): void
+{
+    $pdo->exec("CREATE TABLE IF NOT EXISTS lartisan_personnel_files (
+        id CHAR(36) NOT NULL PRIMARY KEY, employee_user_id BIGINT UNSIGNED NOT NULL,
+        job_title VARCHAR(80) NULL, assigned_site VARCHAR(120) NULL,
+        status VARCHAR(30) NOT NULL DEFAULT 'activo', created_by BIGINT UNSIGNED NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_personnel_file_user (employee_user_id), KEY idx_personnel_file_site (assigned_site),
+        CONSTRAINT fk_personnel_file_user FOREIGN KEY (employee_user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+}
+
 function assigned_locations(array $user): array
 {
     $raw = $user['assigned_locations'] ?? null;

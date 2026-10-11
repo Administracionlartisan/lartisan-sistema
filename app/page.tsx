@@ -13,7 +13,6 @@ import { downloadCsv } from "./modules/shared/downloadCsv";
 import { OperationalOutbox, isOpeningAlreadyClosedOnServer, latestQueuedState, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
 import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
-import ComingSoonPanel, { type ComingSoonSection } from "./modules/administracion/ComingSoonPanel";
 import MrpPanel from "./modules/administracion/MrpPanel";
 import CatalogEditor from "./modules/administracion/CatalogEditor";
 import { useCatalog } from "./modules/config/useCatalog";
@@ -24,6 +23,7 @@ import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
 import { AttendanceReport, PersonnelManager, ScheduleManager } from "./modules/asistencia/ScheduleManager";
+import PersonnelFilesPanel from "./modules/administracion/PersonnelFilesPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
@@ -6234,7 +6234,7 @@ export default function Home() {
           ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
             <MrpPanel initialView="Recetas y costos" />
           ) : tab === "Legajos" && user.role === "administracion" ? (
-            <ComingSoonPanel section={tab as ComingSoonSection} />
+            <PersonnelFilesPanel apiBase={API_BASE} />
           ) : tab === "MRP" && can("mrp") ? (
             <MrpPanel />
           ) : tab === "Compras de producción" && can("comprasProduccion") ? (

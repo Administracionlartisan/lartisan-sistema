@@ -321,7 +321,13 @@ if ($method === 'POST' && $route === 'attendance/personnel') {
     if ($name==='' || !valid_username($username) || !valid_password($password) || !in_array($title,$titles,true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Revisá nombre, usuario, contraseña, cargo y local.'],422);
     if (($manager['role'] ?? '') !== 'administracion' && !user_can_access_site($manager,$site)) json_response(['ok'=>false,'error'=>'No podés dar de alta personal para ese local.'],403);
     try { $stmt=$pdo->prepare("INSERT INTO users (username,full_name,password_hash,role,job_title,assigned_location,assigned_locations,access_all_locations,report_permissions,action_permissions,mfa_required) VALUES (?,?,?,'personal',?,?,?,0,'[]','[]',0)"); $stmt->execute([$username,$name,password_hash($password,PASSWORD_DEFAULT),$title,$site,json_encode([$site],JSON_UNESCAPED_UNICODE)]); } catch(PDOException $e) { if ((string)$e->getCode()==='23000') json_response(['ok'=>false,'error'=>'Ese usuario ya existe.'],409); throw $e; }
-    $id=(int)$pdo->lastInsertId(); audit($pdo,(int)$manager['id'],'attendance_personnel_created','user_id='.$id.';site='.$site.';title='.$title); json_response(['ok'=>true,'id'=>$id],201);
+    $id=(int)$pdo->lastInsertId(); ensure_personnel_files_schema($pdo); $fileId=bin2hex(random_bytes(16)); $pdo->prepare("INSERT INTO lartisan_personnel_files (id,employee_user_id,job_title,assigned_site,status,created_by) VALUES (?,?,?,?, 'activo',?)")->execute([$fileId,$id,$title,$site,(int)$manager['id']]); audit($pdo,(int)$manager['id'],'attendance_personnel_created','user_id='.$id.';file_id='.$fileId.';site='.$site.';title='.$title); json_response(['ok'=>true,'id'=>$id,'personnelFileId'=>$fileId],201);
+}
+
+if ($method === 'GET' && $route === 'admin/personnel-files') {
+    $admin=require_user($pdo,['administracion']); ensure_personnel_files_schema($pdo);
+    $rows=$pdo->query("SELECT f.id,f.employee_user_id,f.job_title,f.assigned_site,f.status,f.created_at,f.updated_at,u.full_name,u.username,u.role FROM lartisan_personnel_files f JOIN users u ON u.id=f.employee_user_id ORDER BY u.full_name")->fetchAll();
+    json_response(['ok'=>true,'files'=>array_map(static fn($row)=>['id'=>$row['id'],'employeeUserId'=>(int)$row['employee_user_id'],'name'=>$row['full_name'],'username'=>$row['username'],'accessRole'=>$row['role'],'jobTitle'=>$row['job_title'],'site'=>$row['assigned_site'],'status'=>$row['status'],'createdAt'=>$row['created_at'],'updatedAt'=>$row['updated_at']],$rows)]);
 }
 
 if ($method === 'GET' && $route === 'attendance/schedules') {
