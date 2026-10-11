@@ -320,8 +320,21 @@ if ($method === 'POST' && $route === 'attendance/personnel') {
     $titles=['jefe_area','cocinero','ayudante_cocina'];
     if ($name==='' || !valid_username($username) || !valid_password($password) || !in_array($title,$titles,true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Revisá nombre, usuario, contraseña, cargo y local.'],422);
     if (($manager['role'] ?? '') !== 'administracion' && !user_can_access_site($manager,$site)) json_response(['ok'=>false,'error'=>'No podés dar de alta personal para ese local.'],403);
-    try { $stmt=$pdo->prepare("INSERT INTO users (username,full_name,password_hash,role,job_title,assigned_location,assigned_locations,access_all_locations,report_permissions,action_permissions,mfa_required) VALUES (?,?,?,'personal',?,?,?,0,'[]','[]',0)"); $stmt->execute([$username,$name,password_hash($password,PASSWORD_DEFAULT),$title,$site,json_encode([$site],JSON_UNESCAPED_UNICODE)]); } catch(PDOException $e) { if ((string)$e->getCode()==='23000') json_response(['ok'=>false,'error'=>'Ese usuario ya existe.'],409); throw $e; }
-    $id=(int)$pdo->lastInsertId(); ensure_personnel_files_schema($pdo); $fileId=bin2hex(random_bytes(16)); $pdo->prepare("INSERT INTO lartisan_personnel_files (id,employee_user_id,job_title,assigned_site,status,created_by) VALUES (?,?,?,?, 'activo',?)")->execute([$fileId,$id,$title,$site,(int)$manager['id']]); audit($pdo,(int)$manager['id'],'attendance_personnel_created','user_id='.$id.';file_id='.$fileId.';site='.$site.';title='.$title); json_response(['ok'=>true,'id'=>$id,'personnelFileId'=>$fileId],201);
+    ensure_personnel_files_schema($pdo);
+    try {
+        $pdo->beginTransaction();
+        $stmt=$pdo->prepare("INSERT INTO users (username,full_name,password_hash,role,job_title,assigned_location,assigned_locations,access_all_locations,report_permissions,action_permissions,mfa_required) VALUES (?,?,?,'personal',?,?,?,0,'[]','[]',0)");
+        $stmt->execute([$username,$name,password_hash($password,PASSWORD_DEFAULT),$title,$site,json_encode([$site],JSON_UNESCAPED_UNICODE)]);
+        $id=(int)$pdo->lastInsertId();
+        $fileId=bin2hex(random_bytes(16));
+        $pdo->prepare("INSERT INTO lartisan_personnel_files (id,employee_user_id,job_title,assigned_site,status,created_by) VALUES (?,?,?,?, 'activo',?)")->execute([$fileId,$id,$title,$site,(int)$manager['id']]);
+        $pdo->commit();
+    } catch(PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ((string)$e->getCode()==='23000') json_response(['ok'=>false,'error'=>'Ese usuario ya existe.'],409);
+        throw $e;
+    }
+    audit($pdo,(int)$manager['id'],'attendance_personnel_created','user_id='.$id.';file_id='.$fileId.';site='.$site.';title='.$title); json_response(['ok'=>true,'id'=>$id,'personnelFileId'=>$fileId],201);
 }
 
 if ($method === 'GET' && $route === 'admin/personnel-files') {
