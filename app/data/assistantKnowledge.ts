@@ -1,5 +1,5 @@
 /** Source-reviewed help, not generative AI. Update the guide and its tests with each workflow change. */
-export type AssistantRole = "vendedora" | "supervisora" | "compras" | "administracion";
+export type AssistantRole = "vendedora" | "supervisora" | "compras" | "administracion" | "personal";
 export type HelpCapability = "central" | "minimumStock" | "countStock" | "approveStock" | "supervisorReports" | "schedules";
 export type HelpAccess = { role: AssistantRole; capabilities?: Partial<Record<HelpCapability, boolean>> };
 export type AssistantTopic = {

@@ -10,7 +10,7 @@ export type Product = {
   onlinePrice?: number;
 };
 
-export type Role = "vendedora" | "supervisora" | "compras" | "administracion";
+export type Role = "vendedora" | "supervisora" | "compras" | "administracion" | "personal";
 
 export type User = {
   name: string;
@@ -18,6 +18,7 @@ export type User = {
   location?: string;
   locations?: string[];
   accessAllLocations?: boolean;
+  jobTitle?: string | null;
 };
 
 export type ManagedUser = User & {

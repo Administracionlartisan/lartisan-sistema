@@ -2,7 +2,7 @@
  * This is a read-only report locator, not a query engine. Never infer data availability from a tab title.
  */
 export type ReportAccess = {
-  role: "vendedora" | "supervisora" | "compras" | "administracion";
+  role: "vendedora" | "supervisora" | "compras" | "administracion" | "personal";
   reportPermissions: string[];
   supervisorReports: boolean;
 };

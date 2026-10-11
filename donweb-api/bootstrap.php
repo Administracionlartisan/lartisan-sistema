@@ -197,6 +197,7 @@ function public_user(array $user, array $config): array
         'username' => $user['username'],
         'fullName' => $user['full_name'],
         'role' => $user['role'],
+        'jobTitle' => $user['job_title'] ?? null,
         'assignedLocation' => $user['assigned_location'],
         'assignedLocations' => assigned_locations($user),
         'accessAllLocations' => (bool) $user['access_all_locations'],
@@ -222,8 +223,8 @@ function ensure_user_locations_schema(PDO $pdo): void
     // para que el perfil MRP se conserve correctamente.
     $roleColumn = $pdo->query("SHOW COLUMNS FROM users LIKE 'role'")->fetch();
     $roleType = strtolower((string) ($roleColumn['Type'] ?? ''));
-    if (str_starts_with($roleType, 'enum(') && !str_contains($roleType, "'compras'")) {
-        $pdo->exec("ALTER TABLE users MODIFY role ENUM('vendedora','supervisora','compras','administracion') NOT NULL DEFAULT 'vendedora'");
+    if (str_starts_with($roleType, 'enum(') && (!str_contains($roleType, "'compras'") || !str_contains($roleType, "'personal'"))) {
+        $pdo->exec("ALTER TABLE users MODIFY role ENUM('vendedora','supervisora','compras','administracion','personal') NOT NULL DEFAULT 'vendedora'");
     }
     $column = $pdo->query("SHOW COLUMNS FROM users LIKE 'assigned_locations'")->fetch();
     if (!$column) {
@@ -233,6 +234,7 @@ function ensure_user_locations_schema(PDO $pdo): void
         'report_permissions' => 'TEXT NULL',
         'action_permissions' => 'TEXT NULL',
         'mfa_required' => 'TINYINT(1) NULL',
+        'job_title' => 'VARCHAR(80) NULL',
     ] as $name => $definition) {
         $existing = $pdo->query("SHOW COLUMNS FROM users LIKE " . $pdo->quote($name))->fetch();
         if (!$existing) $pdo->exec("ALTER TABLE users ADD COLUMN $name $definition");

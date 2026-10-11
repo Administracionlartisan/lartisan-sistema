@@ -23,7 +23,7 @@ import CustomerPanel from "./modules/clientes/CustomerPanel";
 import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
-import { AttendanceReport, ScheduleManager } from "./modules/asistencia/ScheduleManager";
+import { AttendanceReport, PersonnelManager, ScheduleManager } from "./modules/asistencia/ScheduleManager";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
 import type {
   AiSupportRequest, ApiPayload, ApiUser, AttendanceRecord, AuditEvent, AuditHistoryRow,
@@ -457,7 +457,7 @@ export default function Home() {
       : allowedSites[0] || next.location || "Recoleta";
     setSite(initialSite);
     setPayment((METHODS[initialSite] || METHODS.Recoleta || ["Efectivo"])[0]);
-    setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : "Ventas");
+    setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : next.role === "personal" ? "Fichaje" : "Ventas");
     setMessage("");
     return true;
   };
@@ -3949,6 +3949,8 @@ export default function Home() {
         ]
       : user.role === "compras"
         ? ["MRP", ...(can("comprasProduccion") ? ["Compras de producción"] : [])]
+        : user.role === "personal"
+          ? ["Fichaje"]
         : [
           "Ventas",
           "Historial de ventas",
@@ -3970,6 +3972,7 @@ export default function Home() {
     ...baseTabs,
     ...(managesCentralOrders ? ["Central de pedidos"] : []),
     ...(canManageSchedules ? ["Horarios"] : []),
+    ...(canManageSchedules ? ["Personal"] : []),
     ...(canManageSchedules ? ["Asistencia"] : []),
     ...(canViewSupervisorReports ? ["Reportes"] : []),
   ];
@@ -7368,6 +7371,8 @@ export default function Home() {
             </>
           ) : tab === "Horarios" && canManageSchedules ? (
             <ScheduleManager apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} canManage={canManageSchedules} />
+          ) : tab === "Personal" && canManageSchedules ? (
+            <PersonnelManager apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} />
           ) : tab === "Asistencia" && canManageSchedules ? (
             <AttendanceReport apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} />
           ) : (

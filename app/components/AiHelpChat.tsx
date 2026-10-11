@@ -12,12 +12,14 @@ const roleNames: Record<AssistantRole, string> = {
   supervisora: "Supervisión",
   compras: "Compras",
   administracion: "Administración / Gerencia",
+  personal: "Personal",
 };
 const suggestions: Record<AssistantRole, string[]> = {
   vendedora: ["¿Cómo registro una venta?", "¿Cómo envío solo una unidad de invitación?", "¿Cómo cierro mi turno?"],
   supervisora: ["¿Cómo elijo el local donde voy a trabajar?", "¿Cómo indico que falta un producto del pedido?", "¿Dónde veo los productos con stock bajo?"],
   compras: ["¿Qué significa MRP?", "¿La web modifica la planilla MRP?", "¿Qué puede consultar Compras?"],
   administracion: ["¿Cómo creo un usuario y su clave temporal?", "¿Cómo sincronizo el P&L con Google Drive?", "¿Dónde reviso la salud del sistema?"],
+  personal: ["¿Cómo registro mi entrada?", "¿Qué hago si la ubicación no es válida?", "¿Cómo registro mi salida?"],
 };
 
 export default function AiHelpChat({

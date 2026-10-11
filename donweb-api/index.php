@@ -302,6 +302,28 @@ if ($method === 'GET' && $route === 'attendance/schedule-users') {
     json_response(['ok'=>true,'users'=>$users]);
 }
 
+// Alta acotada para el personal que únicamente fichará. Supervisión puede
+// gestionar su propia dotación, sin recibir permisos para crear cuentas de
+// Administración ni de Compras.
+if ($method === 'GET' && $route === 'attendance/personnel') {
+    $manager = require_user($pdo); ensure_attendance_presence_schema($pdo);
+    if (($manager['role'] ?? '') !== 'administracion' && !user_can_report($manager, 'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para gestionar personal.'],403);
+    $rows = $pdo->query("SELECT id,full_name,username,role,job_title,assigned_locations,assigned_location,active FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
+    $out=[]; foreach($rows as $row){ if (($manager['role'] ?? '') !== 'administracion' && !array_intersect(assigned_locations($manager), assigned_locations($row))) continue; $out[]=['id'=>(int)$row['id'],'name'=>$row['full_name'],'username'=>$row['username'],'role'=>$row['role'],'jobTitle'=>$row['job_title'],'sites'=>assigned_locations($row)]; }
+    json_response(['ok'=>true,'personnel'=>$out]);
+}
+
+if ($method === 'POST' && $route === 'attendance/personnel') {
+    $manager = require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
+    if (($manager['role'] ?? '') !== 'administracion' && !user_can_report($manager, 'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para dar de alta personal.'],403);
+    $name=trim((string)($body['fullName']??'')); $username=mb_strtolower(trim((string)($body['username']??'')),'UTF-8'); $password=(string)($body['temporaryPassword']??''); $title=(string)($body['jobTitle']??''); $site=trim((string)($body['site']??''));
+    $titles=['jefe_area','cocinero','ayudante_cocina'];
+    if ($name==='' || !valid_username($username) || !valid_password($password) || !in_array($title,$titles,true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Revisá nombre, usuario, contraseña, cargo y local.'],422);
+    if (($manager['role'] ?? '') !== 'administracion' && !user_can_access_site($manager,$site)) json_response(['ok'=>false,'error'=>'No podés dar de alta personal para ese local.'],403);
+    try { $stmt=$pdo->prepare("INSERT INTO users (username,full_name,password_hash,role,job_title,assigned_location,assigned_locations,access_all_locations,report_permissions,action_permissions,mfa_required) VALUES (?,?,?,'personal',?,?,?,0,'[]','[]',0)"); $stmt->execute([$username,$name,password_hash($password,PASSWORD_DEFAULT),$title,$site,json_encode([$site],JSON_UNESCAPED_UNICODE)]); } catch(PDOException $e) { if ((string)$e->getCode()==='23000') json_response(['ok'=>false,'error'=>'Ese usuario ya existe.'],409); throw $e; }
+    $id=(int)$pdo->lastInsertId(); audit($pdo,(int)$manager['id'],'attendance_personnel_created','user_id='.$id.';site='.$site.';title='.$title); json_response(['ok'=>true,'id'=>$id],201);
+}
+
 if ($method === 'GET' && $route === 'attendance/schedules') {
     $scheduleUser = require_user($pdo); ensure_attendance_presence_schema($pdo);
     if (($scheduleUser['role'] ?? '') !== 'administracion' && !user_can_report($scheduleUser, 'Personal')) json_response(['ok'=>false,'error'=>'No tenés permiso para consultar horarios.'],403);
