@@ -4067,8 +4067,6 @@ export default function Home() {
                   <span>
                     {t === "Guía"
                       ? "Guía rápida"
-                      : t === "Legajos"
-                      ? `${t} (Próximamente)`
                       : t}
                   </span>
                   {t === "Tareas" && adminTaskAlertCount > 0 && (
