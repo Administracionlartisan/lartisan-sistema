@@ -1,6 +1,19 @@
 # Auditoría de la ayuda L’ARTISAN
 
-Fecha: 9 de septiembre de 2026. Alcance: código local del portal, guía, búsqueda y diagnóstico de pantalla. No es una auditoría de producción, penetración, base de datos ni comprobación de respaldos reales. Las mejoras quedan preparadas; la publicación se verifica por separado.
+Fecha de revisión vigente: 13 de octubre de 2026. Alcance: código local del portal, guía, búsqueda y diagnóstico de pantalla. No es una auditoría de producción, penetración, base de datos ni comprobación de respaldos reales. Las mejoras quedan preparadas; la publicación se verifica por separado.
+
+> La sección de resultado inicial conserva el contexto de la revisión anterior. La siguiente actualización la reemplaza para los flujos de Ventas y Supervisión.
+
+## Actualización vigente: Ventas y Supervisión
+
+- Se revisaron los procedimientos contra la interfaz y API actuales. La guía conserva solo rutas y acciones existentes; una función no habilitada devuelve una restricción en lugar de inventar pasos.
+- Se corrigieron los temas de caja: una única caja abierta y responsable por local, relevo únicamente luego de arqueo y cierre completo, y prohibición de modificar cajas ajenas o crear movimientos ficticios.
+- Se corrigieron fichaje y geocerca: el servidor valida ubicación, distancia y precisión; una lectura inválida crea una excepción y solo Administración puede resolverla con auditoría.
+- Se reforzó sincronización: se indica conservar la misma operación y su identidad, esperar confirmación y nunca duplicar cobros, anulaciones, ventas compensatorias o borrado de cola.
+- Se añadieron respuestas con variantes naturales para historial de ventas, stock, clientes duplicados, Chat Interno, adjuntos, avisos, Capacitación y fichaje rechazado.
+- Se añadieron procedimientos de Supervisión para control de caja, reportes, stock/pedidos, seguimiento de Chat, clientes, acciones restringidas y capacitación. Los temas que requieren Reportes respetan la habilitación `supervisorReports`.
+- La búsqueda ahora responde cuando hay un único procedimiento suficientemente preciso y mantiene una aclaración cuando existen alternativas reales.
+- La batería `npm run test:help` valida preguntas canónicas, tildes/mayúsculas, errores frecuentes, rutas por rol, restricciones y 51 consultas nuevas de Ventas y Supervisión.
 
 ## Resultado
 

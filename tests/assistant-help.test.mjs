@@ -74,7 +74,44 @@ const examples = {
 };
 for (const [id, queries] of Object.entries(examples)) for (const query of queries) test(`paraphrase: ${query}`, () => answer(query, id));
 
-for (const query of ['caja', 'ayuda', 'no funciona', 'no me deja', 'pedido', 'stock', 'como confirmo un pedido']) {
+const reviewedSalesAndSupervision = {
+  'sales-history': ['donde veo el historial de ventas', 'ventas de ayer', 'buscar una venta por fecha', 'quiero ver ventas del dia'],
+  'stock-consult': ['donde veo el stock', 'cuanto stock hay de este producto', 'no hay stock'],
+  'customer-duplicate': ['cliente duplicado', 'buscar cliente antes de alta', 'ya existe este cliente'],
+  'pending-sync-safety': ['aviso sincronizacion pendiente', 'no repito cobro si esta pendiente', 'operacion pendiente internet'],
+  'chat-contact': ['como hablo con administracion', 'quiero mandar mensaje a supervision', 'chat interno'],
+  'chat-files-notifications': ['que archivo puedo adjuntar en chat', 'notificaciones chat', 'mensaje no leido'],
+  'training-repeat': ['volver a ver capacitacion', 'repetir tutorial', 'capitulo obligatorio'],
+  'attendance-exception': ['por que no me deja fichar', 'gps no disponible para fichaje', 'ubicacion fuera de zona'],
+  'cash-single-responsible': ['solo puede haber una caja abierta', 'quien es responsable de caja'],
+  'supervisor-cash-control': ['control caja supervisora', 'relevo vendedoras', 'arqueo supervisar'],
+  'supervisor-operational-report': ['filtrar reportes supervision', 'indicadores locales', 'reporte por sucursal'],
+  'supervisor-stock-orders': ['supervisar stock pedidos', 'transferencia entre locales', 'recepcion pedido supervisora'],
+  'supervisor-attendance': ['supervision fichaje rechazado', 'aprobar geocerca', 'auditoria asistencia'],
+  'supervisor-chat-followup': ['supervisar conversaciones chat', 'mensaje entregado leido', 'grupos locales supervision'],
+  'supervisor-customer-history': ['historial cliente supervision', 'ventas de cliente', 'revisar cliente venta'],
+  'supervisor-permissions-audit': ['escalar administracion supervisora', 'accion sensible supervision', 'no puedo modificar caja ajena'],
+  'supervisor-training': ['capacitacion pendiente supervisora', 'curso obligatorio ventas'],
+};
+for (const [id, queries] of Object.entries(reviewedSalesAndSupervision)) for (const query of queries) {
+  const access = id.startsWith('supervisor-') ? supervisorReports : seller;
+  test(`reviewed knowledge: ${query}`, () => answer(query, id, access));
+}
+
+test('cash handoff, location and pending-sync guidance preserve current safety rules', () => {
+  for (const id of ['open-cash-problem', 'close-shift', 'attendance', 'sync', 'pending-sync-safety']) {
+    const text = assistantTopics.find(topic => topic.id === id).answers[0];
+    assert.doesNotMatch(text, /mantiene abierta la caja|repetí? (?:el )?cobro/i, id);
+  }
+  assert.match(assistantTopics.find(topic => topic.id === 'close-shift').answers[0], /arqueo.*cierre/i);
+  assert.match(assistantTopics.find(topic => topic.id === 'attendance-exception').answers[0], /Administración/i);
+});
+test('seller cannot receive a supervision-only procedure', () => {
+  assert.equal(searchAssistant('¿Cómo controla Supervisión una caja abierta, arqueo o diferencia?', seller).kind, 'restricted');
+  assert.equal(searchAssistant('¿Cómo sigue Supervisión un fichaje rechazado?', seller).kind, 'restricted');
+});
+
+for (const query of ['caja', 'ayuda', 'no funciona', 'no me deja', 'pedido', 'stock']) {
   test(`clarification: ${query}`, () => {
     const result = searchAssistant(query, seller);
     assert.equal(result.kind, 'clarify');
