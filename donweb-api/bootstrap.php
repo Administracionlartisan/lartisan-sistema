@@ -538,6 +538,33 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
     if (array_key_exists('stockAdjustments', $incoming) && user_can_action($user, 'stock')) {
         $known = operational_items_by_id($previous['stockAdjustments'] ?? []);
         $accepted = is_array($result['stockAdjustments'] ?? null) ? $result['stockAdjustments'] : [];
+        // Si una supervisora recibe la autoaprobación después de haber cargado
+        // un conteo propio, regularizamos únicamente esos pendientes. Nunca se
+        // toca un ajuste de otra persona ni se aplica dos veces: al aprobarse,
+        // deja de cumplir la condición Pendiente.
+        if (user_can_action($user, 'autoaprobarStockPropio')) {
+            $currentName = (string) ($user['full_name'] ?? $user['username'] ?? '');
+            foreach ($accepted as $index => $existing) {
+                if (!is_array($existing) || ($existing['status'] ?? '') !== 'Pendiente' || ($existing['requestedBy'] ?? '') !== $currentName) continue;
+                $productId = filter_var($existing['productId'] ?? null, FILTER_VALIDATE_INT);
+                if ($productId === false || $productId < 1 || !is_numeric($existing['counted'] ?? null) || !is_numeric($existing['theoretical'] ?? null)) continue;
+                $accepted[$index]['status'] = 'Aprobado';
+                $result['stock'] = is_array($result['stock'] ?? null) ? $result['stock'] : [];
+                $delta = (float) $existing['counted'] - (float) $existing['theoretical'];
+                $result['stock'][$productId] = max(0, (float) ($result['stock'][$productId] ?? 0) + $delta);
+                $result['stockMovements'] = is_array($result['stockMovements'] ?? null) ? $result['stockMovements'] : [];
+                $now = new DateTimeImmutable('now');
+                $hex = bin2hex(random_bytes(16));
+                array_unshift($result['stockMovements'], [
+                    'id' => substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-4' . substr($hex, 13, 3) . '-a' . substr($hex, 17, 3) . '-' . substr($hex, 20, 12),
+                    'site' => $existing['site'] ?? '', 'productId' => $productId, 'kind' => 'Ajuste de inventario',
+                    'quantity' => $delta, 'remito' => '', 'detail' => (string) ($existing['reason'] ?? ''), 'reference' => (string) ($existing['id'] ?? ''),
+                    'at' => $now->format('j/n/Y, H:i:s'),
+                    'atISO' => $now->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\\TH:i:s.v\\Z'),
+                    'createdBy' => $currentName,
+                ]);
+            }
+        }
         foreach (is_array($incoming['stockAdjustments']) ? $incoming['stockAdjustments'] : [] as $candidate) {
             if (!is_array($candidate) || empty($candidate['id']) || !is_scalar($candidate['id'])) continue;
             $id = (string) $candidate['id'];

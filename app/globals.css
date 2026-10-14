@@ -277,6 +277,15 @@ tbody tr:nth-child(even) { background-color: rgb(247 250 253 / 72%); }
 /* Un poco más de aire para los paneles operativos sin mover sus acciones. */
 @media (min-width: 1024px) {
   main > div.grid > section { padding: 1.65rem !important; }
+  /* El menú acompaña toda la navegación de escritorio sin ocupar espacio
+     sobre el contenido ni desaparecer al recorrer tablas largas. */
+  #menu-principal {
+    position: sticky;
+    top: 70px;
+    align-self: start;
+    height: calc(100vh - 70px);
+    overflow-y: auto;
+  }
 }
 @media (max-width: 640px) {
   main > header { min-height: 60px; padding-inline: 1rem !important; }

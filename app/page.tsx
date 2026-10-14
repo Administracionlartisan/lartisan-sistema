@@ -247,6 +247,10 @@ export default function Home() {
   const reloadAfterDrain = useRef(false);
   const pendingReceiptRef = useRef<Sale | null>(null);
   const syncingAdjustmentIds = useRef(new Set<string>());
+  // Evita aplicar dos veces una carga propia ya existente al recuperar una
+  // sesión. Es útil cuando se habilita la autoaprobación después de que la
+  // supervisora ya había registrado el conteo inicial.
+  const reconciledOwnStockAdjustments = useRef(new Set<string>());
   const salesScannerRef = useRef<HTMLInputElement | null>(null);
   const pedidoScannerRef = useRef<HTMLInputElement | null>(null);
   const receptionScannerRef = useRef<HTMLInputElement | null>(null);
@@ -1779,6 +1783,46 @@ export default function Home() {
       user?.accessAllLocations ||
       user?.location === "Villa Mitre" ||
       user?.locations?.includes("Villa Mitre"));
+  useEffect(() => {
+    if (!user || !operationalReady || !canAutoApproveOwnStockAdjustments) return;
+    const ownPending = stockAdjustments.filter((adjustment) =>
+      adjustment.status === "Pendiente" &&
+      adjustment.requestedBy === user.name &&
+      !reconciledOwnStockAdjustments.current.has(adjustment.id),
+    );
+    if (!ownPending.length) return;
+    ownPending.forEach((adjustment) => reconciledOwnStockAdjustments.current.add(adjustment.id));
+    setStockAdjustments((items) => items.map((item) =>
+      ownPending.some((adjustment) => adjustment.id === item.id)
+        ? { ...item, status: "Aprobado" }
+        : item,
+    ));
+    setStock((items) => {
+      const next = { ...items };
+      ownPending.forEach((adjustment) => {
+        const local = { ...(next[adjustment.site] || {}) };
+        local[adjustment.productId] = Math.max(
+          0,
+          safeStockQuantity(local[adjustment.productId]) + adjustment.counted - adjustment.theoretical,
+        );
+        next[adjustment.site] = local;
+      });
+      return next;
+    });
+    ownPending.forEach((adjustment) =>
+      recordStockMovement({
+        site: adjustment.site,
+        productId: adjustment.productId,
+        kind: "Ajuste de inventario",
+        quantity: adjustment.counted - adjustment.theoretical,
+        remito: "",
+        detail: adjustment.reason,
+        reference: adjustment.id,
+      }),
+    );
+    recordAudit("Ajustes propios aplicados", `${ownPending.length} carga(s) previa(s) de ${user.name}`);
+    setMessage(`Se aplicaron ${ownPending.length} carga(s) propia(s) pendiente(s) y quedaron auditadas.`);
+  }, [user?.id, user?.name, operationalReady, canAutoApproveOwnStockAdjustments, stockAdjustments]);
   const pendingResetFor = (profile: ManagedUser) =>
     resetRequests.find(
       (request) =>
@@ -5263,13 +5307,15 @@ export default function Home() {
                 <div className="mt-5 rounded-2xl border bg-white p-5">
                   <b>Cerrar control de stock del local</b>
                   <p className="mt-1 text-sm text-slate-500">
-                    Los perfiles con permiso de stock cargan el conteo de cada local. Al cerrar, cada diferencia con su observación queda en historial y aparece como tarea para Administración y los perfiles autorizados de stock; el stock teórico no cambia automáticamente.
+                    {canAutoApproveOwnStockAdjustments
+                      ? "Tu carga propia se aplica al stock de inmediato y queda auditada. Las cargas de otra supervisora requieren aprobación de Betzi."
+                      : "Los perfiles con permiso de stock cargan el conteo de cada local. Al cerrar, cada diferencia con su observación queda pendiente para aprobación de Betzi; el stock teórico no cambia hasta entonces."}
                   </p>
                   <button
                     onClick={submitStockControl}
                     className="mt-4 rounded bg-[#183a67] px-4 py-2.5 font-bold text-white"
                   >
-                    Enviar diferencias para revisión
+                    {canAutoApproveOwnStockAdjustments ? "Aplicar mi carga de stock" : "Enviar diferencias para aprobación"}
                   </button>
                   <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1.5fr_auto] md:items-end">
                     <label className="text-sm font-bold">
@@ -5304,7 +5350,7 @@ export default function Home() {
                       onClick={submitStockAdjustment}
                       className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white"
                     >
-                      Enviar a aprobación
+                      {canAutoApproveOwnStockAdjustments ? "Aplicar ajuste" : "Enviar a aprobación"}
                     </button>
                   </div>
                 </div>
