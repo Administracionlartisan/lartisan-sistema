@@ -700,6 +700,12 @@ function ensure_operations_schema(PDO $pdo): void
     ensure_normalized_operations_schema($pdo);
     ensure_operation_archive_schema($pdo);
     ensure_sale_validation_schema($pdo);
+    // La sincronización de una venta consulta los precios del catálogo dentro
+    // de su transacción. En una instalación nueva, crear catalog_documents en
+    // ese punto haría que MySQL confirme implícitamente el DDL y el commit
+    // posterior fallaría con "There is no active transaction". Preparar la
+    // estructura antes de que /sync abra la transacción lo mantiene atómico.
+    ensure_catalog_schema($pdo);
 }
 
 function ensure_sale_validation_schema(PDO $pdo): void

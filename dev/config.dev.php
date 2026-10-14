@@ -1,21 +1,23 @@
 <?php
 
 // Configuración EXCLUSIVA del entorno local de pruebas. No contiene secretos
-// reales: base local en 127.0.0.1:3307 y sin integraciones externas.
+// reales: base local en 127.0.0.1:3313 y sin integraciones externas.
 // Nunca copiar este archivo al servidor.
 return [
     'database' => [
-        'host' => '127.0.0.1;port=3307',
+        'host' => '127.0.0.1;port=3313',
         'name' => 'lartisan_dev',
         'user' => 'lartisan_dev',
         'password' => 'dev-local-only',
     ],
     'allowed_origins' => [
         'http://localhost:3000',
+        'http://localhost:3210',
         'http://localhost:5173',
     ],
     // Cookie solo para el host actual (localhost).
     'cookie_domain' => '',
+    'cookie_secure' => false,
     'session_hours' => 12,
     'primary_admin_username' => 'admin.pruebas',
     'admin_recovery_email' => '',

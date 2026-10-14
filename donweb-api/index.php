@@ -1759,7 +1759,14 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         $pdo->prepare('INSERT INTO operation_requests (request_id, site, user_id, revision) VALUES (?, ?, ?, ?)')
             ->execute([$requestId, $site, $user['id'], $nextRevision]);
         $syncStage = 'confirmar';
-        $pdo->commit();
+        // Las instalaciones que todavía completan una migración auxiliar en
+        // la primera escritura pueden recibir un COMMIT implícito de MySQL.
+        // Todo el estado, evento y requestId ya quedó escrito; volver a
+        // invocar commit() arroja "There is no active transaction" y deja al
+        // navegador reintentando una operación que en realidad sí persistió.
+        // La comprobación conserva la transacción normal y evita ese falso
+        // pendiente durante el primer arranque.
+        if ($pdo->inTransaction()) $pdo->commit();
     } catch (Throwable $error) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         $failureDetail = preg_replace('/[\r\n]+/', ' ', $error->getMessage()) ?: 'Sin detalle disponible.';
