@@ -37,10 +37,19 @@ test("server authorization never depends on personal usernames", () => {
 test("ideal stock is an explicit supervisor-only capability", () => {
   const bootstrap = read("donweb-api/bootstrap.php");
   const index = read("donweb-api/index.php");
-  assert.match(bootstrap, /\$permission === 'gestionarStockIdeal'/);
+  assert.match(bootstrap, /'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock'/);
   assert.match(bootstrap, /\$user\['role'\] === 'supervisora'/);
   assert.match(bootstrap, /'minimumStock' => \['gestionarStockIdeal'\]/);
-  assert.match(index, /El stock ideal solo puede asignarse a una supervisora/);
+  assert.match(index, /Los permisos especiales de stock solo pueden asignarse a una supervisora/);
+});
+
+test("stock autoapproval and third-party approval require separate explicit capabilities", () => {
+  const bootstrap = read("donweb-api/bootstrap.php");
+  const page = read("app/page.tsx");
+  assert.match(bootstrap, /user_can_action\(\$user, 'autoaprobarStockPropio'\)/);
+  assert.match(bootstrap, /\$canApprove = user_can_action\(\$user, 'aprobarAjustesStock'\)/);
+  assert.match(page, /canAutoApproveOwnStockAdjustments/);
+  assert.match(page, /includes\("aprobarAjustesStock"\)/);
 });
 
 test("central sees only orders and adjustments of the sites it does not operate", () => {

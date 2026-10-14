@@ -1764,8 +1764,10 @@ export default function Home() {
   const canCountRealStock = can("stock");
   const canManageIdealStock =
     user?.role === "supervisora" && user.actionPermissions.includes("gestionarStockIdeal");
+  const canAutoApproveOwnStockAdjustments =
+    user?.role === "supervisora" && user.actionPermissions.includes("autoaprobarStockPropio");
   const canApproveStockAdjustments =
-    (user?.role === "administracion" || user?.role === "supervisora") && can("stock");
+    user?.role === "supervisora" && user.actionPermissions.includes("aprobarAjustesStock");
   const canManageSchedules =
     user?.role === "administracion" || (user?.role === "supervisora" && user.reportPermissions.includes("Personal"));
   const canViewSupervisorReports =
@@ -2821,6 +2823,7 @@ export default function Home() {
     const countedValue = realStock[site][adjustProductId];
     if (countedValue === "" || !adjustReason.trim())
       return setMessage("Cargá el conteo real y el motivo del ajuste.");
+    const automatic = canAutoApproveOwnStockAdjustments;
     const adjustment: StockAdjustment = {
       id: crypto.randomUUID(),
       site,
@@ -2830,12 +2833,31 @@ export default function Home() {
       reason: adjustReason.trim(),
       requestedAt: new Date().toLocaleString("es-AR"),
       requestedBy: user.name,
-      status: "Pendiente",
+      status: automatic ? "Aprobado" : "Pendiente",
     };
     setStockAdjustments((items) => [adjustment, ...items]);
+    if (automatic) {
+      const delta = adjustment.counted - adjustment.theoretical;
+      setStock((items) => ({
+        ...items,
+        [site]: {
+          ...items[site],
+          [adjustProductId]: Math.max(0, safeStockQuantity(items[site]?.[adjustProductId]) + delta),
+        },
+      }));
+      recordStockMovement({
+        site,
+        productId: adjustProductId,
+        kind: "Ajuste de inventario",
+        quantity: delta,
+        remito: "",
+        detail: adjustment.reason,
+        reference: adjustment.id,
+      });
+    }
     setAdjustReason("");
     recordAudit("Ajuste de stock solicitado", `${site} · ${adjustment.reason}`);
-    setMessage("Ajuste enviado para aprobación.");
+    setMessage(automatic ? "Ajuste propio aplicado y auditado." : "Ajuste enviado para aprobación de la supervisora autorizada.");
   };
   const submitStockControl = () => {
     if (!user || !can("stock"))
@@ -2855,6 +2877,7 @@ export default function Home() {
     if (withoutComment)
       return setMessage(`Agregá una observación para ${withoutComment.product.name}.`);
     const now = new Date().toLocaleString("es-AR");
+    const automatic = canAutoApproveOwnStockAdjustments;
     const adjustments: StockAdjustment[] = lines.map((line) => ({
       id: crypto.randomUUID(),
       site,
@@ -2864,11 +2887,36 @@ export default function Home() {
       reason: line.comment,
       requestedAt: now,
       requestedBy: user.name,
-      status: "Pendiente",
+      status: automatic ? "Aprobado" : "Pendiente",
     }));
     setStockAdjustments((items) => [...adjustments, ...items]);
+    if (automatic) {
+      setStock((items) => ({
+        ...items,
+        [site]: adjustments.reduce((siteStock, adjustment) => ({
+          ...siteStock,
+          [adjustment.productId]: Math.max(
+            0,
+            safeStockQuantity(siteStock[adjustment.productId]) + adjustment.counted - adjustment.theoretical,
+          ),
+        }), { ...items[site] }),
+      }));
+      adjustments.forEach((adjustment) => {
+        recordStockMovement({
+          site,
+          productId: adjustment.productId,
+          kind: "Ajuste de inventario",
+          quantity: adjustment.counted - adjustment.theoretical,
+          remito: "",
+          detail: adjustment.reason,
+          reference: adjustment.id,
+        });
+      });
+    }
     recordAudit("Control de stock cerrado", `${site} · ${adjustments.length} diferencia(s) informada(s)`);
-    setMessage(`Control enviado: ${adjustments.length} diferencia(s) quedan en revisión y aparecen como tarea para los perfiles autorizados de Administración/stock.`);
+    setMessage(automatic
+      ? `Carga aplicada: ${adjustments.length} ajuste(s) de stock quedaron auditados.`
+      : `Control enviado: ${adjustments.length} diferencia(s) quedan pendientes de aprobación de la supervisora autorizada.`);
   };
   const approveStockAdjustment = (
     adjustment: StockAdjustment,
@@ -7366,7 +7414,7 @@ export default function Home() {
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {ACTION_PERMISSIONS.filter((permission) =>
-                          permission.id !== "gestionarStockIdeal" || profile.role === "supervisora",
+                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock"].includes(permission.id) || profile.role === "supervisora",
                         ).map((permission) => (
                           <label
                             key={permission.id}

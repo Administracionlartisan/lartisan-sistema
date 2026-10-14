@@ -449,7 +449,7 @@ function user_can_action(array $user, string $permission): bool
     // El stock ideal es una configuración operativa acotada: no se concede por
     // cargo ni por el bypass administrativo. Administración asigna esta acción
     // explícitamente a las supervisoras responsables desde Usuarios.
-    if ($permission === 'gestionarStockIdeal') {
+    if (in_array($permission, ['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock'], true)) {
         return $user['role'] === 'supervisora'
             && in_array($permission, user_action_permissions($user), true);
     }
@@ -499,13 +499,12 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
         'cashAdjustments' => ['egresos'],
         'stockRequests' => ['pedidos'],
         'incidents' => ['incidencias'],
-        'stockAdjustments' => ['stock'],
         'realStock' => ['stock'],
         'stockCountComments' => ['stock'],
         'minimumStock' => ['gestionarStockIdeal'],
         'cashTransfers' => ['transferirCaja'],
-        'stock' => ['cobrar', 'anular', 'pedidos', 'stock'],
-        'stockMovements' => ['cobrar', 'anular', 'pedidos', 'stock'],
+        'stock' => ['cobrar', 'anular', 'pedidos'],
+        'stockMovements' => ['cobrar', 'anular', 'pedidos'],
         'cash' => ['cobrar', 'egresos', 'transferirCaja'],
         'cashOpen' => ['cobrar'],
         'activeShift' => ['cobrar'],
@@ -532,6 +531,52 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
     }
     if (array_key_exists('schedules', $incoming) && user_can_report($user, 'Personal')) {
         $result['schedules'] = $incoming['schedules'];
+    }
+    // Los ajustes nunca se aceptan como una lista libre desde el navegador.
+    // Una supervisora autorizada puede autoaplicar únicamente sus propios
+    // conteos; el resto queda pendiente para la supervisora revisora.
+    if (array_key_exists('stockAdjustments', $incoming) && user_can_action($user, 'stock')) {
+        $known = operational_items_by_id($previous['stockAdjustments'] ?? []);
+        $accepted = is_array($result['stockAdjustments'] ?? null) ? $result['stockAdjustments'] : [];
+        foreach (is_array($incoming['stockAdjustments']) ? $incoming['stockAdjustments'] : [] as $candidate) {
+            if (!is_array($candidate) || empty($candidate['id']) || !is_scalar($candidate['id'])) continue;
+            $id = (string) $candidate['id'];
+            if (isset($known[$id])) continue;
+            $productId = filter_var($candidate['productId'] ?? null, FILTER_VALIDATE_INT);
+            if ($productId === false || $productId < 1 || !is_numeric($candidate['counted'] ?? null) || !is_numeric($candidate['theoretical'] ?? null)) continue;
+            $counted = max(0, (float) $candidate['counted']);
+            $theoretical = max(0, (float) $candidate['theoretical']);
+            $reason = trim((string) ($candidate['reason'] ?? ''));
+            if ($reason === '') continue;
+            $automatic = user_can_action($user, 'autoaprobarStockPropio');
+            $adjustment = [
+                'id' => $id,
+                'site' => (string) ($candidate['site'] ?? ''),
+                'productId' => $productId,
+                'counted' => $counted,
+                'theoretical' => $theoretical,
+                'reason' => mb_substr($reason, 0, 300, 'UTF-8'),
+                'requestedAt' => (new DateTimeImmutable('now'))->format('j/n/Y, H:i:s'),
+                'requestedBy' => (string) ($user['full_name'] ?? $user['username'] ?? 'Supervisión'),
+                'status' => $automatic ? 'Aprobado' : 'Pendiente',
+            ];
+            $accepted[] = $adjustment;
+            if (!$automatic) continue;
+            $delta = $counted - $theoretical;
+            $result['stock'] = is_array($result['stock'] ?? null) ? $result['stock'] : [];
+            $result['stock'][$productId] = max(0, (float) ($result['stock'][$productId] ?? 0) + $delta);
+            $result['stockMovements'] = is_array($result['stockMovements'] ?? null) ? $result['stockMovements'] : [];
+            $hex = bin2hex(random_bytes(16));
+            array_unshift($result['stockMovements'], [
+                'id' => substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-4' . substr($hex, 13, 3) . '-a' . substr($hex, 17, 3) . '-' . substr($hex, 20, 12),
+                'site' => $adjustment['site'], 'productId' => $productId, 'kind' => 'Ajuste de inventario',
+                'quantity' => $delta, 'remito' => '', 'detail' => $adjustment['reason'], 'reference' => $id,
+                'at' => (new DateTimeImmutable('now'))->format('j/n/Y, H:i:s'),
+                'atISO' => (new DateTimeImmutable('now'))->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\\TH:i:s.v\\Z'),
+                'createdBy' => (string) ($user['full_name'] ?? $user['username'] ?? 'Supervisión'),
+            ]);
+        }
+        $result['stockAdjustments'] = $accepted;
     }
     return $result;
 }
@@ -594,7 +639,7 @@ function authorize_central_changes(array $user, array $current, array $base, arr
         $result['stockRequests'][$index] = array_merge($request, ['status' => $status, 'lines' => $lines ?: ($request['lines'] ?? [])]);
     }
 
-    $canApprove = in_array($user['role'] ?? '', ['administracion', 'supervisora'], true) && user_can_action($user, 'stock');
+    $canApprove = user_can_action($user, 'aprobarAjustesStock');
     $baseAdjustments = operational_items_by_id($base['stockAdjustments'] ?? []);
     $incomingAdjustments = operational_items_by_id($incoming['stockAdjustments'] ?? []);
     foreach ($canApprove && is_array($result['stockAdjustments'] ?? null) ? $result['stockAdjustments'] : [] as $index => $adjustment) {
