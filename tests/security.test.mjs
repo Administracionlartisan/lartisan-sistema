@@ -34,6 +34,15 @@ test("server authorization never depends on personal usernames", () => {
   assert.match(server, /'comprasProduccion', user_action_permissions\(\$user\)/);
 });
 
+test("ideal stock is an explicit supervisor-only capability", () => {
+  const bootstrap = read("donweb-api/bootstrap.php");
+  const index = read("donweb-api/index.php");
+  assert.match(bootstrap, /\$permission === 'gestionarStockIdeal'/);
+  assert.match(bootstrap, /\$user\['role'\] === 'supervisora'/);
+  assert.match(bootstrap, /'minimumStock' => \['gestionarStockIdeal'\]/);
+  assert.match(index, /El stock ideal solo puede asignarse a una supervisora/);
+});
+
 test("central sees only orders and adjustments of the sites it does not operate", () => {
   const bootstrap = read("donweb-api/bootstrap.php");
   const index = read("donweb-api/index.php");

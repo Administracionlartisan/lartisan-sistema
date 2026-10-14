@@ -34,6 +34,7 @@ export const ACTION_PERMISSIONS = [
   { id: "pedidos", label: "Crear y recibir pedidos" },
   { id: "incidencias", label: "Registrar incidencias" },
   { id: "stock", label: "Ajustar / aprobar stock" },
+  { id: "gestionarStockIdeal", label: "Editar stock ideal por local (solo Supervisión)" },
   { id: "transferirCaja", label: "Transferir efectivo entre cajas" },
   { id: "exportar", label: "Exportar informes" },
   { id: "mrp", label: "Operar compras y MRP" },

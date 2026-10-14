@@ -5,6 +5,7 @@ import ReportNavigation from "./components/ReportNavigation";
 import { ADMIN_REPORTS, canOpenReport } from "./data/reportGuide";
 import Heading from "./modules/shared/components/Heading";
 import { buildThermalReceipt } from "./modules/ventas/thermalReceipt";
+import { orderDocumentHtml } from "./modules/pedidos/orderDocument";
 import {
   ACTION_PERMISSIONS, API_BASE, defaultActionPermissions, EMPTY_CASH_FIELDS,
   INITIAL_MANAGED_USERS, money, SITES,
@@ -1761,6 +1762,8 @@ export default function Home() {
     user?.role === "administracion" || Boolean(user?.actionPermissions.includes(permission));
   const canAdjustStock = can("stock");
   const canCountRealStock = can("stock");
+  const canManageIdealStock =
+    user?.role === "supervisora" && user.actionPermissions.includes("gestionarStockIdeal");
   const canApproveStockAdjustments =
     (user?.role === "administracion" || user?.role === "supervisora") && can("stock");
   const canManageSchedules =
@@ -1785,18 +1788,23 @@ export default function Home() {
   ).map((product) => ({
     productId: product.id,
     quantity: requestQuantities[product.id],
+    productName: product.name,
+    presentation: product.detail,
+    category: product.category,
+    currentStockAtRequest: safeStockQuantity(stock[site][product.id]),
+    idealStockAtRequest: safeStockQuantity(minimumStock[site][product.id]),
   }));
   const lowStockProducts = products.map((product) => ({
     product,
     current: stock[site][product.id] || 0,
-    minimum: minimumStock[site][product.id] || 0,
-  })).filter(({ current, minimum }) => minimum > 0 && current <= minimum);
+    ideal: minimumStock[site][product.id] || 0,
+  })).filter(({ current, ideal }) => ideal > 0 && current < ideal);
   const suggestedOrderLines = lowStockProducts
-    .map(({ product, current, minimum }) => ({
+    .map(({ product, current, ideal }) => ({
       product,
-      quantity: Math.max(minimum - current, 0),
+      quantity: Math.max(ideal - current, 0),
       current,
-      minimum,
+      ideal,
     }))
     .filter((line) => line.quantity > 0);
   const siteRequests = stockRequests.filter((request) => request.site === site);
@@ -1828,7 +1836,7 @@ export default function Home() {
       .filter((order) => order.site === site)
       .map((order) => ({ title: "Comanda abierta", detail: `${order.customer} · ${order.items.length} productos.`, action: "Ventas" })),
     ...(!managesCentralOrders
-      ? lowStockProducts.map(({ product, current, minimum }) => ({ title: "Stock bajo", detail: `${product.name}: ${current}/${minimum}.`, action: "Pedido" }))
+      ? lowStockProducts.map(({ product, current, ideal }) => ({ title: "Reposición sugerida", detail: `${product.name}: ${current}/${ideal}.`, action: "Pedido" }))
       : []),
     ...stockRequests
       .filter((request) => request.site === site && (request.status === "Despachado" || request.status === "Despachado parcial"))
@@ -2096,7 +2104,7 @@ export default function Home() {
       })),
     ...lowStockAlerts.map((alert) => ({
       label: `Stock crítico · ${alert.site}`,
-      detail: `${alert.product.name}: ${alert.current} en stock / mínimo ${alert.minimum}.`,
+      detail: `${alert.product.name}: ${alert.current} en stock / ideal ${alert.minimum}.`,
       tone: "bg-[#fff1ec]",
     })),
     ...expensesLog
@@ -2575,6 +2583,7 @@ export default function Home() {
       site,
       requestedBy: user.name,
       requestedAt: new Date().toLocaleString("es-AR"),
+      requestedAtISO: new Date().toISOString(),
       notes: requestNotes.trim(),
       status: "Pendiente",
       lines: currentRequestLines,
@@ -2588,6 +2597,19 @@ export default function Home() {
       `${site} · ${request.lines.reduce((total, line) => total + line.quantity, 0)} unidades · ${request.id.slice(0, 8)}`,
     );
     setMessage("Solicitud enviada a Central para su preparación.");
+  };
+  const downloadStockRequestPdf = (request: StockRequest) => {
+    const documentWindow = window.open("", "_blank", "noopener,noreferrer");
+    if (!documentWindow) {
+      setMessage("El navegador bloqueó la ventana de PDF. Permití ventanas emergentes e intentá otra vez.");
+      return;
+    }
+    documentWindow.document.open();
+    documentWindow.document.write(orderDocumentHtml(request, products));
+    documentWindow.document.close();
+    documentWindow.focus();
+    window.setTimeout(() => documentWindow.print(), 250);
+    recordAudit("Pedido de mercadería preparado para PDF", `${request.site} · ${request.id.slice(0, 8)}`, request.site);
   };
   const updateRequestStatus = (
     request: StockRequest,
@@ -5019,11 +5041,14 @@ export default function Home() {
                 h="Inventario"
                 p="La venta descuenta una unidad de la presentación vendida."
               />
+              <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#eef2f6] p-3 text-sm text-[#183a67]">
+                <b>Stock ideal:</b> define hasta qué cantidad se propone reponer cada producto. Solo las supervisoras autorizadas por Administración pueden editarlo; el resto de los perfiles lo consulta.
+              </p>
               {lowStockProducts.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[#f0bd4e] bg-[#fff5d8] p-4">
-                  <b>Alerta de stock bajo</b>
+                  <b>Reposición sugerida</b>
                   <p className="mt-1 text-sm text-slate-700">
-                    {lowStockProducts.length} producto{lowStockProducts.length === 1 ? "" : "s"} llegó o quedó por debajo del mínimo configurado.
+                    {lowStockProducts.length} producto{lowStockProducts.length === 1 ? "" : "s"} está por debajo del stock ideal configurado.
                     {!managesCentralOrders && " Podés usar el pedido sugerido en Solicitud de mercadería."}
                   </p>
                   <p className="mt-2 text-sm font-semibold text-[#183a67]">
@@ -5063,7 +5088,7 @@ export default function Home() {
                       <th className="p-3 text-left">Producto</th>
                       <th className="p-3 text-left">Presentación</th>
                       <th className="p-3">Stock</th>
-                      <th className="p-3">Mínimo</th>
+                      <th className="p-3">Stock ideal</th>
                       <th className="p-3">Real</th>
                       <th className="p-3">Diferencia</th>
                       <th className="p-3 text-left">Observación</th>
@@ -5082,7 +5107,7 @@ export default function Home() {
                         <td className="p-3">{p.detail}</td>
                         <td className="p-3 text-center">{safeStockQuantity(stock[site]?.[p.id])}</td>
                         <td className="p-3 text-center">
-                          {canAdjustStock ? (
+                          {canManageIdealStock ? (
                             <input
                               type="number"
                               min="0"
@@ -5097,7 +5122,8 @@ export default function Home() {
                                   },
                                 }))
                               }
-                              aria-label={`Stock mínimo de ${p.name}`}
+                              onBlur={() => recordAudit("Stock ideal actualizado", `${site} · ${p.name} · ideal ${minimumStock[site][p.id] || 0}`, site)}
+                              aria-label={`Stock ideal de ${p.name}`}
                               className="w-20 rounded border p-1 text-center"
                             />
                           ) : (
@@ -5399,9 +5425,9 @@ export default function Home() {
                     <div className="mb-4 rounded-xl border border-[#f0bd4e] bg-[#fff5d8] p-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <b>Pedido sugerido por stock mínimo</b>
+                          <b>Pedido sugerido por stock ideal</b>
                           <p className="mt-1 text-sm text-slate-700">
-                            El sistema propone reponer hasta el mínimo configurado. Los productos que ya están en mínimo requieren revisión, pero no agregan unidades automáticamente.
+                            El sistema propone reponer hasta el stock ideal de este local. La cantidad es stock ideal menos stock actual y podés revisarla antes de enviarla.
                           </p>
                         </div>
                         {suggestedOrderLines.length > 0 && (
@@ -5424,11 +5450,11 @@ export default function Home() {
                         )}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                        {lowStockProducts.map(({ product, current, minimum }) => {
-                          const suggestion = Math.max(minimum - current, 0);
+                        {lowStockProducts.map(({ product, current, ideal }) => {
+                          const suggestion = Math.max(ideal - current, 0);
                           return (
                             <span key={product.id} className="rounded-full bg-white px-3 py-1 font-semibold">
-                              {product.name}: {current}/{minimum}
+                              {product.name}: {current}/{ideal}
                               {suggestion > 0 ? ` · sugerido ${suggestion}` : " · revisar"}
                             </span>
                           );
@@ -5538,6 +5564,12 @@ export default function Home() {
                             )}{" "}
                             unidades solicitadas
                           </p>
+                          <button
+                            onClick={() => downloadStockRequestPdf(request)}
+                            className="mt-2 rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67]"
+                          >
+                            Descargar / guardar PDF
+                          </button>
                             {["Despachado", "Despachado parcial"].includes(
                               request.status,
                             ) &&
@@ -5760,10 +5792,10 @@ export default function Home() {
                           Descargar CSV
                         </button>
                         <button
-                          onClick={() => window.print()}
+                          onClick={() => downloadStockRequestPdf(selectedRequest)}
                           className="rounded border px-3 py-3 text-sm font-bold"
                         >
-                          Imprimir / Guardar PDF
+                          Descargar / guardar PDF
                         </button>
                       </div>
                     </>
@@ -7312,7 +7344,9 @@ export default function Home() {
                         )}
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {ACTION_PERMISSIONS.map((permission) => (
+                        {ACTION_PERMISSIONS.filter((permission) =>
+                          permission.id !== "gestionarStockIdeal" || profile.role === "supervisora",
+                        ).map((permission) => (
                           <label
                             key={permission.id}
                             className="flex items-center gap-2 rounded bg-[#eef2f6] p-3 text-sm"

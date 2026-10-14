@@ -446,6 +446,13 @@ function user_action_permissions(array $user): array
 
 function user_can_action(array $user, string $permission): bool
 {
+    // El stock ideal es una configuración operativa acotada: no se concede por
+    // cargo ni por el bypass administrativo. Administración asigna esta acción
+    // explícitamente a las supervisoras responsables desde Usuarios.
+    if ($permission === 'gestionarStockIdeal') {
+        return $user['role'] === 'supervisora'
+            && in_array($permission, user_action_permissions($user), true);
+    }
     return $user['role'] === 'administracion' || in_array($permission, user_action_permissions($user), true);
 }
 
@@ -476,6 +483,10 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
     if ($user['role'] === 'administracion') {
         unset($incoming['audit']);
         $incoming['audit'] = $previous['audit'] ?? [];
+        // Administración administra quién puede editar el ideal, pero no lo
+        // modifica: evita que un snapshot administrativo pise los valores de
+        // las supervisoras autorizadas.
+        $incoming['minimumStock'] = $previous['minimumStock'] ?? [];
         return $incoming;
     }
 
@@ -491,7 +502,7 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
         'stockAdjustments' => ['stock'],
         'realStock' => ['stock'],
         'stockCountComments' => ['stock'],
-        'minimumStock' => ['stock'],
+        'minimumStock' => ['gestionarStockIdeal'],
         'cashTransfers' => ['transferirCaja'],
         'stock' => ['cobrar', 'anular', 'pedidos', 'stock'],
         'stockMovements' => ['cobrar', 'anular', 'pedidos', 'stock'],

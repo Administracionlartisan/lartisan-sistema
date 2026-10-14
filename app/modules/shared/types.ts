@@ -131,9 +131,21 @@ export type StockRequest = {
   site: string;
   requestedBy: string;
   requestedAt: string;
+  requestedAtISO?: string;
   notes: string;
   status: "Pendiente" | "En preparación" | "Despachado" | "Despachado parcial" | "Entregado";
-  lines: { productId: number; quantity: number; preparedQuantity?: number; missingReason?: string }[];
+  lines: {
+    productId: number;
+    quantity: number;
+    preparedQuantity?: number;
+    missingReason?: string;
+    /** Foto del pedido para que el PDF histórico no dependa de cambios posteriores. */
+    productName?: string;
+    presentation?: string;
+    category?: string;
+    currentStockAtRequest?: number;
+    idealStockAtRequest?: number;
+  }[];
 };
 
 export type Expense = { id: string; site: string; category: string; amount: number; detail: string; receiptName: string; createdAt: string; createdBy: string; paidWithCash?: boolean };

@@ -2087,7 +2087,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
     // Si la edición no trae permisos, se conservan tal cual. NULL significa "los
     // del cargo": convertirlo en [] al bloquear o cambiar de local dejaba al
     // usuario sin ningún permiso (por ejemplo, sin poder cobrar).
@@ -2096,6 +2096,9 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     $mfaRequired = array_key_exists('mfaRequired', $body) ? (!empty($body['mfaRequired']) ? 1 : 0) : $existing['mfa_required'];
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
+    }
+    if (in_array('gestionarStockIdeal', $actionPermissions, true) && $role !== 'supervisora') {
+        json_response(['ok' => false, 'error' => 'El stock ideal solo puede asignarse a una supervisora.'], 422);
     }
     if (!valid_username($username)) {
         json_response(['ok' => false, 'error' => 'Usuario o correo laboral inválido'], 422);
@@ -2251,6 +2254,7 @@ if ($method === 'POST' && $route === 'admin/users') {
     if ($fullName === '') $fieldErrors['fullName'] = 'Ingresá nombre y apellido.';
     if (!valid_username($username)) $fieldErrors['username'] = 'Usá nombre.apellido o un correo @lartisantaller.com.';
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) $fieldErrors['role'] = 'Seleccioná un cargo válido.';
+    if (is_array($actionPermissions) && in_array('gestionarStockIdeal', $actionPermissions, true) && $role !== 'supervisora') $fieldErrors['actionPermissions'] = 'El stock ideal solo puede asignarse a una supervisora.';
     if (!$locations) $fieldErrors['locations'] = 'Seleccioná al menos un local o Todos los locales.';
     if (!valid_password($temporaryPassword)) $fieldErrors['temporaryPassword'] = 'Debe tener 8 o más caracteres, mayúscula, minúscula, número y símbolo.';
     if ($fieldErrors) {
