@@ -2567,6 +2567,15 @@ export default function Home() {
     ]);
     setOperationalVersion((version) => version + 1);
   };
+  const saveIdealStock = () => {
+    if (!canManageIdealStock) {
+      setMessage("Tu perfil no tiene permiso para editar el stock ideal.");
+      return;
+    }
+    const configured = Object.values(minimumStock[site] || {}).filter((quantity) => safeStockQuantity(quantity) > 0).length;
+    recordAudit("Stock ideal guardado", `${site} · ${configured} producto(s) con objetivo configurado`, site);
+    setMessage(`Stock ideal de ${site} guardado y sincronizado.`);
+  };
   const submitStockRequest = () => {
     if (!user) return;
     if (!catalog.ready) return setMessage("Esperá a que cargue el catálogo central antes de enviar el pedido.");
@@ -5122,7 +5131,6 @@ export default function Home() {
                                   },
                                 }))
                               }
-                              onBlur={() => recordAudit("Stock ideal actualizado", `${site} · ${p.name} · ideal ${minimumStock[site][p.id] || 0}`, site)}
                               aria-label={`Stock ideal de ${p.name}`}
                               className="w-20 rounded border p-1 text-center"
                             />
@@ -5188,8 +5196,21 @@ export default function Home() {
                 </table>
               </div>
               <p className="mt-3 text-sm text-slate-500">
-                El conteo real y sus observaciones quedan registrados. Las diferencias requieren comentario y no modifican el stock teórico hasta que se revisen.
+                {canManageIdealStock
+                  ? "Completá el objetivo de cada artículo y tocá Guardar stock ideal. El cambio queda auditado y se usa para sugerir los próximos pedidos del local."
+                  : "El stock ideal solo puede ser configurado por las supervisoras autorizadas. El conteo real y sus observaciones quedan registrados; las diferencias requieren comentario y no modifican el stock teórico hasta que se revisen."}
               </p>
+              {canManageIdealStock && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#b8c9dd] bg-[#eef4fa] p-4">
+                  <div>
+                    <b>Stock ideal de {site}</b>
+                    <p className="mt-1 text-sm text-slate-600">Definí la cantidad objetivo por producto para generar la reposición sugerida.</p>
+                  </div>
+                  <button onClick={saveIdealStock} className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#102d52] focus:outline-none focus:ring-2 focus:ring-[#ec3a35] focus:ring-offset-2">
+                    Guardar stock ideal
+                  </button>
+                </div>
+              )}
               {canCountRealStock && (
                 <div className="mt-5 rounded-2xl border bg-white p-5">
                   <b>Cerrar control de stock del local</b>
@@ -8819,7 +8840,7 @@ export default function Home() {
         }}
         capabilities={{
           central: managesCentralOrders,
-          minimumStock: canAdjustStock,
+          minimumStock: canManageIdealStock,
           countStock: canCountRealStock,
           approveStock: canApproveStockAdjustments,
           supervisorReports: canViewSupervisorReports,
