@@ -263,25 +263,45 @@ if ($method === 'POST' && $route === 'attendance/clock') {
     } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
 }
 
+// Las excepciones de presencia se revisan en Supervisión. La habilitación
+// "Personal" identifica a las supervisoras responsables (hoy Betzi y Andrea)
+// sin convertir a Administración en aprobadora de sus propios fichajes.
+function can_resolve_attendance_exceptions(array $user): bool
+{
+    return ($user['role'] ?? '') === 'supervisora' && user_can_report($user, 'Personal');
+}
+
+// Administración conserva la consulta y auditoría, pero no puede resolver.
 if ($method === 'GET' && $route === 'admin/attendance/exceptions') {
     require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
     $rows = $pdo->query("SELECT e.*, u.full_name FROM lartisan_attendance_exceptions e JOIN users u ON u.id=e.user_id ORDER BY e.requested_at DESC LIMIT 200")->fetchAll();
     json_response(['ok' => true, 'exceptions' => $rows]);
 }
 
-if ($method === 'POST' && preg_match('#^admin/attendance/exceptions/([a-f0-9-]{36})/(approve|reject)$#i', $route, $matches)) {
-    $admin = require_user($pdo, ['administracion']); ensure_operations_schema($pdo); ensure_attendance_presence_schema($pdo); $action = strtolower($matches[2]); $body = request_body(); $note = trim((string) ($body['note'] ?? ''));
+if ($method === 'GET' && $route === 'attendance/exceptions') {
+    $reviewer = require_user($pdo); ensure_attendance_presence_schema($pdo);
+    if (!can_resolve_attendance_exceptions($reviewer)) json_response(['ok' => false, 'error' => 'Solo Supervisión autorizada puede revisar excepciones de fichaje.'], 403);
+    $rows = $pdo->query("SELECT e.*, u.full_name FROM lartisan_attendance_exceptions e JOIN users u ON u.id=e.user_id ORDER BY e.requested_at DESC LIMIT 200")->fetchAll();
+    $rows = array_values(array_filter($rows, static fn (array $row): bool => user_can_access_site($reviewer, (string) $row['site'])));
+    json_response(['ok' => true, 'exceptions' => $rows]);
+}
+
+if ($method === 'POST' && preg_match('#^attendance/exceptions/([a-f0-9-]{36})/(approve|reject)$#i', $route, $matches)) {
+    $reviewer = require_user($pdo); ensure_operations_schema($pdo); ensure_attendance_presence_schema($pdo);
+    if (!can_resolve_attendance_exceptions($reviewer)) json_response(['ok' => false, 'error' => 'Solo Supervisión autorizada puede resolver excepciones de fichaje.'], 403);
+    $action = strtolower($matches[2]); $body = request_body(); $note = trim((string) ($body['note'] ?? ''));
     $pdo->beginTransaction();
     try {
         $lookup = $pdo->prepare('SELECT e.*, u.full_name FROM lartisan_attendance_exceptions e JOIN users u ON u.id=e.user_id WHERE e.id=? FOR UPDATE'); $lookup->execute([$matches[1]]); $exception = $lookup->fetch();
         if (!$exception) throw new RuntimeException('Excepción inexistente.');
+        if (!user_can_access_site($reviewer, (string) $exception['site'])) throw new RuntimeException('No tenés acceso al local de esta excepción.');
         if ($exception['status'] !== 'Pendiente') { $pdo->commit(); json_response(['ok' => true, 'alreadyResolved' => true]); }
         if ($action === 'approve') {
             $recordUser = ['id' => (int) $exception['user_id'], 'full_name' => (string) $exception['full_name']];
             attendance_append_to_locked_state($pdo, (string) $exception['site'], $recordUser, (string) $exception['kind'], ['presenceStatus' => 'Excepción aprobada', 'attendanceExceptionId' => (string) $exception['id']]);
         }
-        $pdo->prepare('UPDATE lartisan_attendance_exceptions SET status=?, resolved_at=NOW(), resolved_by=?, resolution_note=? WHERE id=?')->execute([$action === 'approve' ? 'Aprobada' : 'Rechazada', $admin['id'], $note ?: null, $exception['id']]);
-        audit($pdo, (int) $admin['id'], $action === 'approve' ? 'attendance_exception_approved' : 'attendance_exception_rejected', $exception['site'] . ' · ' . $exception['kind']);
+        $pdo->prepare('UPDATE lartisan_attendance_exceptions SET status=?, resolved_at=NOW(), resolved_by=?, resolution_note=? WHERE id=?')->execute([$action === 'approve' ? 'Aprobada' : 'Rechazada', $reviewer['id'], $note ?: null, $exception['id']]);
+        audit($pdo, (int) $reviewer['id'], $action === 'approve' ? 'attendance_exception_approved' : 'attendance_exception_rejected', $exception['site'] . ' · ' . $exception['kind']);
         $pdo->commit(); json_response(['ok' => true]);
     } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
 }

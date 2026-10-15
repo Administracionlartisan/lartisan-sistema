@@ -7521,7 +7521,7 @@ export default function Home() {
           ) : tab === "Personal" && canManageSchedules ? (
             <PersonnelManager apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} />
           ) : tab === "Asistencia" && canManageSchedules ? (
-            <AttendanceReport apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} />
+            <AttendanceReport apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} canResolveExceptions={user.role === "supervisora" && canManageSchedules} />
           ) : (
             <>
               <Heading
@@ -8642,8 +8642,8 @@ export default function Home() {
                     </section>
                     <section className="mt-6 rounded-xl border bg-white p-5">
                       <h3 className="text-lg font-bold text-[#183a67]">Excepciones de presencia</h3>
-                      <p className="mt-1 text-sm text-slate-600">Los casos con permiso denegado, GPS no disponible, baja precisión o fuera de zona no fichan automáticamente.</p>
-                      <div className="mt-3 overflow-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Persona</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Tipo</th><th className="p-2 text-left">Motivo</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Resolución</th></tr></thead><tbody>{attendanceExceptions.length ? attendanceExceptions.map((item) => <tr key={item.id} className="border-t"><td className="p-2">{item.full_name}</td><td className="p-2">{item.site}</td><td className="p-2">{item.kind}</td><td className="p-2">{item.reason}</td><td className="p-2">{item.status}</td><td className="p-2 text-right">{item.status === "Pendiente" && <><button onClick={() => void resolveAttendanceException(item.id, "approve")} className="mr-2 rounded border border-green-700 px-2 py-1 text-green-800">Aprobar</button><button onClick={() => void resolveAttendanceException(item.id, "reject")} className="rounded border border-red-700 px-2 py-1 text-red-800">Rechazar</button></>}</td></tr>) : <tr><td colSpan={6} className="p-3 text-slate-500">No hay excepciones pendientes.</td></tr>}</tbody></table></div>
+                      <p className="mt-1 text-sm text-slate-600">Los casos con permiso denegado, GPS no disponible, baja precisión o fuera de zona no fichan automáticamente. Administración los consulta aquí; Betzi y Andrea los resuelven desde Supervisión → Asistencia.</p>
+                      <div className="mt-3 overflow-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Persona</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Tipo</th><th className="p-2 text-left">Motivo</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Resolución</th></tr></thead><tbody>{attendanceExceptions.length ? attendanceExceptions.map((item) => <tr key={item.id} className="border-t"><td className="p-2">{item.full_name}</td><td className="p-2">{item.site}</td><td className="p-2">{item.kind}</td><td className="p-2">{item.reason}</td><td className="p-2">{item.status}</td><td className="p-2 text-right"><span className="text-xs text-slate-500">Supervisión → Asistencia</span></td></tr>) : <tr><td colSpan={6} className="p-3 text-slate-500">No hay excepciones pendientes.</td></tr>}</tbody></table></div>
                     </section>
                     </div>
                   )}
