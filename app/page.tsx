@@ -1841,6 +1841,9 @@ export default function Home() {
   const can = (permission: string) =>
     user?.role === "administracion" || Boolean(user?.actionPermissions.includes(permission));
   const canAdjustStock = can("stock");
+  // La vendedora puede registrar sólo ingresos de mercadería de su local.
+  // No obtiene permiso para conteos de control, mermas ni egresos manuales.
+  const canRegisterStockReceipt = canAdjustStock || user?.role === "vendedora";
   const canCountRealStock = can("stock");
   // El primer inventario no es un ajuste: la vendedora asignada al local puede
   // cargarlo una sola vez. Una vez confirmado, los conteos posteriores vuelven
@@ -3350,6 +3353,10 @@ export default function Home() {
   };
   const registerStockMovement = () => {
     if (!user) return;
+    if (!canRegisterStockReceipt)
+      return setMessage("Tu usuario no tiene permiso para registrar ingresos de stock.");
+    if (user.role === "vendedora" && !["Ingreso por remito", "Ingreso manual"].includes(movementKind))
+      return setMessage("Las vendedoras solo pueden registrar mercadería ingresada al local.");
     if (movementQuantity <= 0 || !movementDetail.trim())
       return setMessage("Completá cantidad y detalle del movimiento de stock.");
     const isEntry = ["Ingreso por remito", "Recepción de pedido", "Ingreso manual"].includes(movementKind);
@@ -5704,12 +5711,13 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              {canAdjustStock && (
+              {canRegisterStockReceipt && (
                 <div className="mt-5 rounded-2xl border bg-white p-5">
-                  <b>Movimientos de stock y remitos</b>
+                  <b>{user.role === "vendedora" ? "Cargar mercadería recibida" : "Movimientos de stock y remitos"}</b>
                   <p className="mt-1 text-sm text-slate-500">
-                    Registrá ingresos o egresos manuales; el stock se actualiza
-                    y queda trazabilidad.
+                    {user.role === "vendedora"
+                      ? "Elegí el producto, indicá la cantidad recibida y una referencia. El stock del local se actualiza al registrar y queda auditado."
+                      : "Registrá ingresos o egresos manuales; el stock se actualiza y queda trazabilidad."}
                   </p>
                   <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.3fr_.8fr_.7fr_1fr_1.5fr_auto] xl:items-end">
                     <label className="text-sm font-bold">
@@ -5741,8 +5749,7 @@ export default function Home() {
                       >
                         <option>Ingreso por remito</option>
                         <option>Ingreso manual</option>
-                        <option>Egreso manual</option>
-                        <option>Merma</option>
+                        {user.role !== "vendedora" && <><option>Egreso manual</option><option>Merma</option></>}
                       </select>
                     </label>
                     <label className="text-sm font-bold">
@@ -5783,7 +5790,7 @@ export default function Home() {
                       onClick={registerStockMovement}
                       className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white"
                     >
-                      Registrar
+                      Cargar stock
                     </button>
                   </div>
                   {stockMovements.filter((movement) => movement.site === site)

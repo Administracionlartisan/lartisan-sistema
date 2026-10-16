@@ -24,6 +24,7 @@ const THIRD_PARTY_ADDITIONS: Array<Pick<Product, "name" | "detail" | "category" 
   { name: "Pulpa condimentada con cebolla", detail: "Presentación sin especificar", category: "Tercerizados", price: 4500 },
   { name: "Pulpa de pizza", detail: "Presentación sin especificar", category: "Tercerizados", price: 4500 },
   { name: "Pulpa de Tomate", detail: "500 g", category: "Tercerizados", price: 4100 },
+  { name: "Pulpa de Tomate", detail: "910 g", category: "Tercerizados", price: 4500 },
   { name: "Tomate con Alcaucil y Cebolla", detail: "360 g", category: "Tercerizados", price: 6500 },
   { name: "Tomate con Berenjena Asada", detail: "360 g", category: "Tercerizados", price: 6500 },
   { name: "Tomate Frito en Oliva", detail: "500 g", category: "Tercerizados", price: 5500 },
