@@ -318,6 +318,9 @@ export default function Home() {
   const [movementQuantity, setMovementQuantity] = useState(0);
   const [movementRemito, setMovementRemito] = useState("");
   const [movementDetail, setMovementDetail] = useState("");
+  const [receiptGroup, setReceiptGroup] = useState("Tercerizados");
+  const [receiptQuantities, setReceiptQuantities] = useState<Record<number, string>>({});
+  const [receiptReference, setReceiptReference] = useState("");
   const [requestQuantities, setRequestQuantities] = useState<
     Record<number, number>
   >({});
@@ -3396,6 +3399,37 @@ export default function Home() {
     );
     setMessage("Movimiento de stock registrado.");
   };
+  const registerBulkStockReceipt = () => {
+    if (!user || !canRegisterStockReceipt)
+      return setMessage("Tu usuario no tiene permiso para registrar ingresos de stock.");
+    const lines = products
+      .filter((product) => product.category === receiptGroup)
+      .map((product) => ({ product, quantity: Number(receiptQuantities[product.id]) || 0 }))
+      .filter((line) => line.quantity > 0);
+    if (!lines.length) return setMessage("Ingresá al menos una cantidad mayor a cero.");
+    if (!receiptReference.trim())
+      return setMessage("Indicá una referencia, por ejemplo el número de remito o quién entregó la mercadería.");
+    const now = new Date();
+    setStock((items) => {
+      const nextSiteStock = { ...items[site] };
+      lines.forEach(({ product, quantity }) => {
+        nextSiteStock[product.id] = safeStockQuantity(nextSiteStock[product.id]) + quantity;
+      });
+      return { ...items, [site]: nextSiteStock };
+    });
+    lines.forEach(({ product, quantity }) => {
+      const movement: StockMovement = {
+        id: crypto.randomUUID(), site, productId: product.id, kind: "Ingreso manual", quantity,
+        remito: "", detail: receiptReference.trim(), at: now.toLocaleString("es-AR"),
+        atISO: now.toISOString(), createdBy: user.name,
+      };
+      setStockMovements((items) => [movement, ...items]);
+    });
+    recordAudit("Carga masiva de mercadería", `${site} · ${receiptGroup} · ${lines.length} producto(s) · ${receiptReference.trim()}`);
+    setReceiptQuantities({});
+    setReceiptReference("");
+    setMessage(`Mercadería cargada: ${lines.length} producto(s) de ${receiptGroup}. El stock ya fue actualizado.`);
+  };
   const withdrawEnvelopes = () => {
     if (oscarWithdrawal <= 0)
       return setMessage("Ingresá el importe que retira Oscar.");
@@ -5714,11 +5748,28 @@ export default function Home() {
               {canRegisterStockReceipt && (
                 <div className="mt-5 rounded-2xl border bg-white p-5">
                   <b>{user.role === "vendedora" ? "Cargar mercadería recibida" : "Movimientos de stock y remitos"}</b>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {user.role === "vendedora"
-                      ? "Elegí el producto, indicá la cantidad recibida y una referencia. El stock del local se actualiza al registrar y queda auditado."
-                      : "Registrá ingresos o egresos manuales; el stock se actualiza y queda trazabilidad."}
-                  </p>
+                  <p className="mt-1 text-sm text-slate-500">{user.role === "vendedora" ? "Elegí un grupo e ingresá todas las cantidades recibidas. La carga se confirma junta y queda auditada por producto." : "Registrá ingresos o egresos manuales; el stock se actualiza y queda trazabilidad."}</p>
+                  {user.role === "vendedora" ? (
+                    <div className="mt-4 space-y-4">
+                      <label className="block max-w-sm text-sm font-bold">Grupo de productos
+                        <select value={receiptGroup} onChange={(event) => { setReceiptGroup(event.target.value); setReceiptQuantities({}); }} className="mt-1 block w-full rounded border p-2 font-normal">
+                          {stockGroups.map((group) => <option key={group}>{group}</option>)}
+                        </select>
+                      </label>
+                      <div className="overflow-auto rounded-xl border">
+                        <table className="w-full min-w-[540px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-3 text-left">Producto</th><th className="p-3 text-left">Presentación</th><th className="p-3 text-center">Stock actual</th><th className="p-3 text-center">Cantidad recibida</th></tr></thead><tbody>
+                          {products.filter((product) => product.category === receiptGroup).map((product) => <tr key={product.id} className="border-t"><td className="p-3 font-bold">{product.name}</td><td className="p-3">{product.detail}</td><td className="p-3 text-center">{safeStockQuantity(stock[site]?.[product.id])}</td><td className="p-3 text-center"><input type="number" min="0" value={receiptQuantities[product.id] || ""} onChange={(event) => setReceiptQuantities((current) => ({ ...current, [product.id]: event.target.value }))} aria-label={`Cantidad recibida de ${product.name}`} placeholder="0" className="w-24 rounded border p-2 text-center" /></td></tr>)}
+                          {!products.some((product) => product.category === receiptGroup) && <tr><td colSpan={4} className="p-4 text-center text-slate-500">No hay productos en este grupo.</td></tr>}
+                        </tbody></table>
+                      </div>
+                      <div className="flex flex-wrap items-end gap-3">
+                        <label className="min-w-[260px] flex-1 text-sm font-bold">Referencia de la entrega
+                          <input value={receiptReference} onChange={(event) => setReceiptReference(event.target.value)} placeholder="Ej.: Remito 1234 · entrega Central" className="mt-1 block w-full rounded border p-2 font-normal" />
+                        </label>
+                        <button onClick={registerBulkStockReceipt} className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#102d52]">Confirmar carga masiva</button>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.3fr_.8fr_.7fr_1fr_1.5fr_auto] xl:items-end">
                     <label className="text-sm font-bold">
                       Producto
@@ -5749,7 +5800,7 @@ export default function Home() {
                       >
                         <option>Ingreso por remito</option>
                         <option>Ingreso manual</option>
-                        {user.role !== "vendedora" && <><option>Egreso manual</option><option>Merma</option></>}
+                        <option>Egreso manual</option><option>Merma</option>
                       </select>
                     </label>
                     <label className="text-sm font-bold">
@@ -5793,6 +5844,7 @@ export default function Home() {
                       Cargar stock
                     </button>
                   </div>
+                  )}
                   {stockMovements.filter((movement) => movement.site === site)
                     .length > 0 && (
                     <p className="mt-3 text-sm text-slate-500">
