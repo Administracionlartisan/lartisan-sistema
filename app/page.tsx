@@ -1808,6 +1808,13 @@ export default function Home() {
     user?.role === "administracion" || Boolean(user?.actionPermissions.includes(permission));
   const canAdjustStock = can("stock");
   const canCountRealStock = can("stock");
+  // El primer inventario no es un ajuste: la vendedora asignada al local puede
+  // cargarlo una sola vez. Una vez confirmado, los conteos posteriores vuelven
+  // al circuito restringido de control y aprobación.
+  const canLoadInitialStock = Boolean(
+    user && !initialStockLoads[site] && ["administracion", "supervisora", "vendedora"].includes(user.role),
+  );
+  const canEditRealStock = canCountRealStock || canLoadInitialStock;
   const canManageIdealStock =
     user?.role === "supervisora" && user.actionPermissions.includes("gestionarStockIdeal");
   const canAutoApproveOwnStockAdjustments =
@@ -3020,7 +3027,7 @@ export default function Home() {
       : `Control enviado: ${adjustments.length} diferencia(s) quedan pendientes de aprobación de la supervisora autorizada.`);
   };
   const submitInitialStockLoad = () => {
-    if (!user || !can("stock"))
+    if (!user || !canLoadInitialStock)
       return setMessage("Tu usuario no tiene permiso para cargar el stock inicial.");
     if (initialStockLoads[site])
       return setMessage(`La carga inicial de ${site} ya fue confirmada. Para cambios posteriores usá el control de stock.`);
@@ -5343,7 +5350,7 @@ export default function Home() {
                   <p className="mt-3 rounded-xl border border-[#b9d8bf] bg-white p-3 text-sm text-slate-700">
                     Confirmada por <b>{initialStockLoads[site].completedBy}</b> el {initialStockLoads[site].completedAt}. Referencia: {initialStockLoads[site].note}. Las correcciones posteriores se hacen desde <b>Cerrar control de stock</b> y siguen su circuito de autorización.
                   </p>
-                ) : canCountRealStock ? (
+                ) : canLoadInitialStock ? (
                   <div className="mt-4 flex flex-wrap items-end gap-3">
                     <label className="min-w-[260px] flex-1 text-sm font-bold">
                       Referencia de la carga inicial
@@ -5451,7 +5458,7 @@ export default function Home() {
                           )}
                         </td>
                         <td className="p-3 text-center">
-                          {canCountRealStock ? (
+                          {canEditRealStock ? (
                             <input
                               type="number"
                               min="0"
