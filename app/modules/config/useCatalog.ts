@@ -1,13 +1,13 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PRODUCTS } from "./operationalCatalog";
-import { applyCatalogRetirements, type CatalogDocument } from "./catalogModel";
+import { addConfirmedThirdPartyProducts, applyCatalogCategoryCorrections, applyCatalogRetirements, type CatalogDocument } from "./catalogModel";
 import type { Product } from "../shared/types";
 import { API_BASE } from "../shared/constants";
 
 const seed: CatalogDocument = {
   revision: 0,
-  products: applyCatalogRetirements(PRODUCTS.map((p) => ({ ...p, onlinePrice: Math.round(p.price * 1.25), barcodeAliases: p.code === "501" ? ["LART-401"] : [] }))),
+  products: addConfirmedThirdPartyProducts(applyCatalogCategoryCorrections(applyCatalogRetirements(PRODUCTS.map((p) => ({ ...p, onlinePrice: Math.round(p.price * 1.25), barcodeAliases: p.code === "501" ? ["LART-401"] : [] }))))),
   priceChanges: [],
 };
 
@@ -20,7 +20,12 @@ export function useCatalog(userId?: string) {
   const saving = useRef(false);
   const generation = useRef(0);
   const accept = useCallback((doc: CatalogDocument) => {
-    doc = { ...doc, products: applyCatalogRetirements(doc.products) };
+    doc = {
+      ...doc,
+      products: addConfirmedThirdPartyProducts(
+        applyCatalogCategoryCorrections(applyCatalogRetirements(doc.products)),
+      ),
+    };
     if (doc.revision < current.current.revision) return;
     if (doc.revision !== current.current.revision) {
       current.current = doc;

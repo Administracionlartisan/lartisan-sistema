@@ -7,6 +7,14 @@ export const RETIRED_CATALOG_CODES = new Set(["250", "251"]);
 export const applyCatalogRetirements = (products: Product[]) =>
   products.map((product) => RETIRED_CATALOG_CODES.has(product.code) ? { ...product, active: false } : product);
 
+/** Correcciones operativas que no deben depender de que un perfil administrativo guarde el catálogo. */
+export const applyCatalogCategoryCorrections = (products: Product[]) =>
+  products.map((product) =>
+    product.name.localeCompare("Queso Rallado", "es", { sensitivity: "accent" }) === 0
+      ? { ...product, category: "Salsas" }
+      : product,
+  );
+
 const THIRD_PARTY_ADDITIONS: Array<Pick<Product, "name" | "detail" | "category" | "price">> = [
   { name: "Bolognesa de la Torre", detail: "360 g", category: "Tercerizados", price: 6500 },
   { name: "Crema de Cebollas Asadas", detail: "230 g", category: "Tercerizados", price: 6400 },
