@@ -301,9 +301,15 @@ tbody tr:nth-child(even) { background-color: rgb(247 250 253 / 72%); }
 @media print {
   @page {
     size: 80mm auto;
-    margin: 3mm;
+    margin: 0;
   }
+  html,
   body {
+    width: 80mm !important;
+    min-height: 0 !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
     background: #fff;
   }
   header,
@@ -333,17 +339,22 @@ tbody tr:nth-child(even) { background-color: rgb(247 250 253 / 72%); }
     background: #fff !important;
   }
   body.receipt-printing .receipt-modal > div {
-    width: 74mm !important;
-    max-width: 74mm !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
     padding: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
   }
   body.receipt-printing .receipt-print-area {
     position: static !important;
-    width: 74mm !important;
-    max-width: 74mm !important;
-    padding: 0 0 8mm !important;
+    display: block !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
+    min-height: 0 !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 2mm 3mm 2mm !important;
+    line-height: 1.2 !important;
     break-inside: avoid;
     page-break-inside: avoid;
   }

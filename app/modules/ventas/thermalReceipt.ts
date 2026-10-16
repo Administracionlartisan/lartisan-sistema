@@ -69,7 +69,7 @@ export function buildThermalReceipt(sale: Sale, salePayments: Payment[], servedB
   lines.push(
     divider, thermalCenter(sale.invoiceType), "",
     ...thermalWrap("Este ticket no reemplaza una factura fiscal con CAE."), "",
-    thermalCenter("Gracias por tu compra"), "", "", "", "", "",
+    thermalCenter("Gracias por tu compra"), "",
   );
   return lines.join("\n");
 }
