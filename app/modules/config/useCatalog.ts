@@ -1,13 +1,13 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PRODUCTS } from "./operationalCatalog";
-import type { CatalogDocument } from "./catalogModel";
+import { applyCatalogRetirements, type CatalogDocument } from "./catalogModel";
 import type { Product } from "../shared/types";
 import { API_BASE } from "../shared/constants";
 
 const seed: CatalogDocument = {
   revision: 0,
-  products: PRODUCTS.map((p) => ({ ...p, onlinePrice: Math.round(p.price * 1.25), barcodeAliases: p.code === "501" ? ["LART-401"] : [] })),
+  products: applyCatalogRetirements(PRODUCTS.map((p) => ({ ...p, onlinePrice: Math.round(p.price * 1.25), barcodeAliases: p.code === "501" ? ["LART-401"] : [] }))),
   priceChanges: [],
 };
 
@@ -20,6 +20,7 @@ export function useCatalog(userId?: string) {
   const saving = useRef(false);
   const generation = useRef(0);
   const accept = useCallback((doc: CatalogDocument) => {
+    doc = { ...doc, products: applyCatalogRetirements(doc.products) };
     if (doc.revision < current.current.revision) return;
     if (doc.revision !== current.current.revision) {
       current.current = doc;
@@ -66,7 +67,7 @@ export function useCatalog(userId?: string) {
     setBusy(true);
     const session = generation.current;
     try {
-      const response = await fetch(`${API_BASE}/catalog`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: expectedRevision, products, priceChanges }), signal: AbortSignal.timeout(25000) });
+      const response = await fetch(`${API_BASE}/catalog`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: expectedRevision, products: applyCatalogRetirements(products), priceChanges }), signal: AbortSignal.timeout(25000) });
       const data = await response.json() as { catalog?: CatalogDocument; error?: string };
       if (!response.ok || !data.catalog) throw new Error(data.error || "No se confirmó el guardado. Recargá el catálogo para comprobarlo.");
       const doc = data.catalog;

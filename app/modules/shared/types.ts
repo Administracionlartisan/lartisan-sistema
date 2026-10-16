@@ -8,6 +8,8 @@ export type Product = {
   barcode: string;
   barcodeAliases?: string[];
   onlinePrice?: number;
+  /** Un producto retirado no se ofrece ni se solicita, pero conserva historial. */
+  active?: boolean;
 };
 
 export type Role = "vendedora" | "supervisora" | "compras" | "administracion" | "personal";

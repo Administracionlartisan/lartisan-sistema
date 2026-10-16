@@ -17,7 +17,7 @@ import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./module
 import MrpPanel from "./modules/administracion/MrpPanel";
 import CatalogEditor from "./modules/administracion/CatalogEditor";
 import { useCatalog } from "./modules/config/useCatalog";
-import { findScannedProduct } from "./modules/config/catalogModel";
+import { findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
 import CustomerPanel from "./modules/clientes/CustomerPanel";
 import InternalChatPanel from "./modules/chat/InternalChatPanel";
@@ -224,7 +224,8 @@ export default function Home() {
   };
   const isValidationTest = testOperatingDate.active && testOperatingDate.site === "Maure" && testOperatingDate.businessDate === "2026-10-15" && site === "Maure";
   const catalog = useCatalog(user?.id);
-  const products = catalog.document.products;
+  const allCatalogProducts = catalog.document.products;
+  const products = allCatalogProducts.filter((product) => product.active !== false);
   const priceChanges = catalog.document.priceChanges;
   const prices = useMemo(() => Object.fromEntries(products.map((p) => [p.id, p.price])), [products]);
   const onlinePrices = useMemo(() => Object.fromEntries(products.map((p) => [p.id, p.onlinePrice ?? p.price])), [products]);
@@ -424,6 +425,18 @@ export default function Home() {
       });
     }
   // La revisión 0 solo existe antes del primer guardado central.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.role, catalog.ready, catalog.document.revision]);
+  useEffect(() => {
+    if (user?.role !== "administracion" || !catalog.ready) return;
+    const retiredStillActive = catalog.document.products.some(
+      (product) => RETIRED_CATALOG_CODES.has(product.code) && product.active !== false,
+    );
+    if (!retiredStillActive) return;
+    void catalog.save(catalog.document.products, catalog.document.priceChanges, catalog.document.revision)
+      .then(() => recordAudit("Productos retirados del catálogo", "Pasta Extruida 500 g y Pasta Extruida 200 g fueron retiradas de venta, pedidos y stock operativo; se conserva su historial."))
+      .catch((error) => setMessage(error instanceof Error ? error.message : "No se pudieron retirar los productos reemplazados."));
+  // Se ejecuta sólo si el catálogo central todavía conserva alguna de las dos presentaciones activas.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, catalog.ready, catalog.document.revision]);
   const cashFields = cashFieldsBySite[site] || EMPTY_CASH_FIELDS;
@@ -2664,7 +2677,7 @@ export default function Home() {
       afterPrices,
     };
     try {
-      await catalog.save(products.map((p) => ({ ...p, price: afterPrices[p.id] })), [change, ...priceChanges]);
+      await catalog.save(allCatalogProducts.map((p) => ({ ...p, price: afterPrices[p.id] })), [change, ...priceChanges]);
     } catch (error) {
       return setMessage(error instanceof Error ? error.message : "No se pudo guardar el aumento.");
     }
@@ -7169,7 +7182,7 @@ export default function Home() {
                               onClick={async () => {
                                 if (!window.confirm(`¿Restaurar la lista anterior al aumento del ${change.percentage}%?`)) return;
                                 try {
-                                  await catalog.save(products.map((p) => ({ ...p, price: change.beforePrices[p.id] ?? p.price })));
+                                  await catalog.save(allCatalogProducts.map((p) => ({ ...p, price: change.beforePrices[p.id] ?? p.price })));
                                 } catch (error) {
                                   setMessage(error instanceof Error ? error.message : "No se pudo restaurar la lista.");
                                   return;

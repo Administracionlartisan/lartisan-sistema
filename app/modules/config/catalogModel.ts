@@ -2,6 +2,11 @@ import type { Product, PriceChange } from "../shared/types";
 
 export type CatalogDocument = { revision: number; products: Product[]; priceChanges: PriceChange[]; updatedAt?: string };
 
+/** Productos reemplazados: se retiran de operación sin borrar su trazabilidad. */
+export const RETIRED_CATALOG_CODES = new Set(["250", "251"]);
+export const applyCatalogRetirements = (products: Product[]) =>
+  products.map((product) => RETIRED_CATALOG_CODES.has(product.code) ? { ...product, active: false } : product);
+
 // Tres dígitos conservan los ceros y evitan lecturas parciales de códigos más largos.
 export const normalizeBarcode = (value: string) => {
   const text = value.trim().toUpperCase();
@@ -39,7 +44,7 @@ export function validateCatalog(next: Product[], previous: Product[]): Product[]
       if (codes.has(code) && codes.get(code) !== p.id) throw new Error(`El código ${code} ya pertenece a otro producto o a una etiqueta anterior.`);
       codes.set(code, p.id);
     }
-    return { id: p.id, name: p.name.trim(), detail: p.detail.trim(), category: p.category.trim(), price: Math.round(p.price * 100) / 100, onlinePrice: Math.round(p.onlinePrice! * 100) / 100, code: barcode.slice(5), barcode, barcodeAliases: aliases };
+    return { id: p.id, name: p.name.trim(), detail: p.detail.trim(), category: p.category.trim(), price: Math.round(p.price * 100) / 100, onlinePrice: Math.round(p.onlinePrice! * 100) / 100, code: barcode.slice(5), barcode, barcodeAliases: aliases, active: p.active !== false };
   });
   if (previous.some((p) => !ids.has(p.id))) throw new Error("No se pueden eliminar productos con historial del catálogo.");
   return result;

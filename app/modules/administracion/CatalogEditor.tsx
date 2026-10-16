@@ -15,26 +15,29 @@ export default function CatalogEditor({ catalog, ready, busy, onSave }: Props) {
   const [baseRevision, setBaseRevision] = useState(0);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const products = catalog.products;
+  const products = catalog.products.filter((product) => product.active !== false);
+  const retiredProducts = catalog.products.filter((product) => product.active === false);
   const edit = (product?: Product) => {
-    const used = new Set(products.flatMap((p) => [p.barcode, ...(p.barcodeAliases ?? [])]));
+    const used = new Set(catalog.products.flatMap((p) => [p.barcode, ...(p.barcodeAliases ?? [])]));
     const available = Array.from({ length: 999 }, (_, i) => `LART-${String(i + 1).padStart(3, "0")}`).find((b) => !used.has(b)) ?? "";
-    setDraft(product ? { ...product } : { id: Math.max(...products.map((p) => p.id)) + 1, name: "", detail: "", category: "", price: 0, onlinePrice: 0, barcode: available, code: available.slice(5) });
+    setDraft(product ? { ...product } : { id: Math.max(...catalog.products.map((p) => p.id)) + 1, name: "", detail: "", category: "", price: 0, onlinePrice: 0, barcode: available, code: available.slice(5) });
     setBaseRevision(catalog.revision); setError(""); setNotice("");
   };
   const submit = async () => {
     if (!draft) return;
     setError("");
     try {
-      const next = products.some((p) => p.id === draft.id) ? products.map((p) => p.id === draft.id ? draft : p) : [...products, draft];
-      const validated = validateCatalog(next, products);
+      const activeNext = products.some((p) => p.id === draft.id) ? products.map((p) => p.id === draft.id ? draft : p) : [...products, draft];
+      const next = catalog.products.map((product) => product.active === false ? product : activeNext.find((item) => item.id === product.id) ?? product);
+      if (!catalog.products.some((product) => product.id === draft.id)) next.push(draft);
+      const validated = validateCatalog(next, catalog.products);
       await onSave(validated, baseRevision);
       setNotice(`${draft.name}: guardado para todos los locales.`); setDraft(null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo guardar."); }
   };
   return <section className="mb-6 rounded-2xl border bg-white p-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><h2 className="text-xl font-bold">Productos y códigos de barras</h2><p className="mt-1 text-sm text-slate-500">{products.length} productos · Compartido por todos los locales.</p></div>
+      <div><h2 className="text-xl font-bold">Productos y códigos de barras</h2><p className="mt-1 text-sm text-slate-500">{products.length} productos activos · Compartido por todos los locales.</p>{retiredProducts.length > 0 && <p className="mt-1 text-xs text-slate-500">{retiredProducts.length} producto{retiredProducts.length === 1 ? " retirado" : "s retirados"} se conserva{retiredProducts.length === 1 ? "" : "n"} solo en el historial.</p>}</div>
       <div className="flex flex-wrap gap-2">
         <button disabled={!ready || busy || Boolean(draft)} onClick={() => edit()} className="rounded bg-[#183a67] px-4 py-2 font-bold text-white disabled:opacity-40">Agregar producto</button>
         <button disabled={!ready} onClick={() => downloadCsv("Catalogo_codigos_LArtisan.csv", [["Producto", "Presentación", "Categoría", "Código de barras", "Códigos anteriores válidos", "Precio mostrador", "Precio online"], ...products.map((p) => [p.name, p.detail, p.category, p.barcode, (p.barcodeAliases ?? []).join(" / "), p.price, p.onlinePrice ?? p.price])])} className="rounded border px-4 py-2 font-bold disabled:opacity-40">Exportar para Excel</button>
