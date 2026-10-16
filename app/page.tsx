@@ -1760,6 +1760,12 @@ export default function Home() {
         (entry) => entry.site === site && entry.shiftId === activeShift.id,
       )
     : [];
+  // Una apertura equivocada (por ejemplo, declarada en $0) puede corregirse
+  // antes del primer cobro o movimiento. Luego el fondo debe permanecer fijo
+  // para que el arqueo conserve una base verificable.
+  const canCorrectOpeningFund = Boolean(activeShift) && !currentCashLedger.some(
+    (entry) => entry.kind !== "Apertura de caja",
+  );
   const siteCashLedger = cashLedger.filter((entry) => entry.site === site);
   const ledgerCashBalance = currentCashLedger.reduce(
     (total, entry) => total + entry.cashImpact,
@@ -4064,6 +4070,32 @@ export default function Home() {
     recordAudit("Caja abierta", `Fondo inicial ${money.format(fund)}`);
     setMessage(`Caja abierta para ${site}. Ya se pueden registrar cobros.`);
   };
+  const correctOpeningFund = () => {
+    if (!user || !activeShift) return;
+    if (!canCorrectOpeningFund)
+      return setMessage("El fondo inicial ya no se puede corregir porque la caja tiene cobros o movimientos. Registrá el movimiento correspondiente para conservar el arqueo.");
+    const nextFund = Math.max(0, Number(fund) || 0);
+    const previousFund = activeShift.initialFund;
+    if (nextFund === previousFund)
+      return setMessage("El fondo inicial ya tiene ese importe.");
+    setActiveShiftBySite((items) => ({
+      ...items,
+      [site]: { ...activeShift, initialFund: nextFund },
+    }));
+    setShiftLog((items) => items.map((shift) =>
+      shift.id === activeShift.id ? { ...shift, initialFund: nextFund } : shift,
+    ));
+    setCashLedger((items) => items.map((entry) =>
+      entry.shiftId === activeShift.id && entry.kind === "Apertura de caja"
+        ? { ...entry, amount: nextFund, cashImpact: nextFund, detail: "Fondo inicial declarado (corregido antes del primer cobro)" }
+        : entry,
+    ));
+    recordAudit(
+      "Fondo inicial corregido",
+      `${site} · ${money.format(previousFund)} → ${money.format(nextFund)} · antes del primer cobro`,
+    );
+    setMessage("Fondo inicial corregido y auditado. La caja conserva el importe real para el arqueo.");
+  };
   useEffect(() => {
     if (!user || typeof window === "undefined") return;
     const storageKey = "lartisan:attendance-device";
@@ -5062,7 +5094,7 @@ export default function Home() {
                     min="0"
                     value={fund}
                     onChange={(e) => setFund(Number(e.target.value))}
-                    disabled={Boolean(activeShift)}
+                    disabled={Boolean(activeShift) && !canCorrectOpeningFund}
                     className="mt-1 w-full rounded border p-2"
                   />
                   {!cashIsOpen && suggestedInitialFund != null && (
@@ -5079,11 +5111,23 @@ export default function Home() {
                       Abrir caja
                     </button>
                   )}
+                  {cashIsOpen && canCorrectOpeningFund && (
+                    <div className="mt-2 rounded border border-[#f0bd4e] bg-[#fff5d8] p-3 text-xs text-slate-700">
+                      <p>Podés corregir el fondo porque todavía no hay cobros ni otros movimientos en este turno.</p>
+                      <button
+                        type="button"
+                        onClick={correctOpeningFund}
+                        className="mt-2 rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67]"
+                      >
+                        Guardar corrección del fondo
+                      </button>
+                    </div>
+                  )}
                   {cashIsOpen && activeShift && (
                     <div className="mt-3 rounded border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm">
                       <b>Turno abierto</b>
                       <p className="mt-1">Responsable: {activeShift.openedBy} · Fondo declarado: {money.format(activeShift.initialFund)}</p>
-                      <p className="mt-2 text-xs text-slate-600">El fondo queda bloqueado después de abrir para preservar el arqueo. Si hubo un error, registrá el movimiento correspondiente; no se edita una apertura ya confirmada.</p>
+                      <p className="mt-2 text-xs text-slate-600">{canCorrectOpeningFund ? "El fondo todavía puede corregirse antes del primer cobro; la corrección queda auditada." : "El fondo queda bloqueado después del primer cobro o movimiento para preservar el arqueo. Si hubo un error, registrá el movimiento correspondiente; no se edita una apertura ya confirmada."}</p>
                       <p className="mt-2 text-xs text-slate-600">Para el relevo es obligatorio realizar el cierre completo, incluido el arqueo. La siguiente responsable podrá abrir una nueva caja una vez confirmado el cierre.</p>
                     </div>
                   )}
