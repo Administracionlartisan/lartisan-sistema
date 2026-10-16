@@ -168,6 +168,8 @@ export default function Home() {
     [attendanceReminder, setAttendanceReminder] = useState<"Entrada" | "Salida" | null>(null),
     [presenceSettings, setPresenceSettings] = useState<Record<string, { site: string; latitude: number | null; longitude: number | null; radiusMeters: number; maxAccuracyMeters: number }>>({}),
     [attendanceExceptions, setAttendanceExceptions] = useState<{ id: string; site: string; kind: string; status: string; reason: string; full_name: string; requested_at: string }[]>([]),
+    [attendanceDevice, setAttendanceDevice] = useState<{ deviceId: string; token: string; status: "Pendiente" | "Aprobado" | "Revocado"; label: string } | null>(null),
+    [attendanceDevices, setAttendanceDevices] = useState<{ id: string; site: string; label: string; status: string; requested_at: string; full_name: string }[]>([]),
     [presenceSaving, setPresenceSaving] = useState<string | null>(null),
     [locations, setLocations] = useState<LocationConfig[]>([]),
     [locationDraft, setLocationDraft] = useState<LocationConfig>(() => blankLocation()),
@@ -1108,6 +1110,26 @@ export default function Home() {
       if (exceptionsResponse.ok) setAttendanceExceptions(exceptionsData.exceptions || []);
     }).catch(() => undefined);
   }, [user?.role, tab, adminReport, operationalVersion]);
+
+  useEffect(() => {
+    if (user?.role !== "administracion" || tab !== "Administración" || adminReport !== "Personal") return;
+    let active = true;
+    fetch(`${API_BASE}/admin/attendance/devices`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => ({ response, data: await response.json() as { devices?: { id: string; site: string; label: string; status: string; requested_at: string; full_name: string }[] } }))
+      .then(({ response, data }) => { if (active && response.ok) setAttendanceDevices(data.devices || []); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [user?.role, tab, adminReport, operationalVersion]);
+
+  const resolveAttendanceDevice = async (id: string, action: "approve" | "revoke") => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/attendance/devices/${id}/${action}`, { method: "POST", credentials: "include" });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) return setMessage(data.error || "No se pudo actualizar el equipo.");
+      setAttendanceDevices((items) => items.map((item) => item.id === id ? { ...item, status: action === "approve" ? "Aprobado" : "Revocado" } : item));
+      setMessage(`Equipo ${action === "approve" ? "autorizado" : "revocado"} y auditado.`);
+    } catch { setMessage("No se pudo actualizar el equipo."); }
+  };
 
   const savePresenceSettings = async (local: string) => {
     const item = presenceSettings[local];
@@ -3963,15 +3985,44 @@ export default function Home() {
     recordAudit("Caja abierta", `Fondo inicial ${money.format(fund)}`);
     setMessage(`Caja abierta para ${site}. Ya se pueden registrar cobros.`);
   };
+  useEffect(() => {
+    if (!user || typeof window === "undefined") return;
+    const storageKey = "lartisan:attendance-device";
+    let stored: { deviceId: string; token: string; status: "Pendiente" | "Aprobado" | "Revocado"; label: string } | null = null;
+    try { stored = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch { stored = null; }
+    if (!stored?.deviceId || !stored?.token) return setAttendanceDevice(null);
+    let active = true;
+    fetch(`${API_BASE}/attendance/devices/status?site=${encodeURIComponent(site)}&deviceId=${encodeURIComponent(stored.deviceId)}`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => ({ response, data: await response.json() as { device?: { status: "Pendiente" | "Aprobado" | "Revocado"; label: string } | null } }))
+      .then(({ response, data }) => { if (active) setAttendanceDevice(response.ok && data.device ? { ...stored!, ...data.device } : null); })
+      .catch(() => { if (active) setAttendanceDevice(null); });
+    return () => { active = false; };
+  }, [user?.id, site]);
+
+  const requestAttendanceDevice = async () => {
+    if (!user) return;
+    const storageKey = "lartisan:attendance-device";
+    const current = attendanceDevice || { deviceId: crypto.randomUUID(), token: `${crypto.randomUUID()}${crypto.randomUUID()}`, status: "Pendiente" as const, label: "" };
+    const label = window.prompt("Identificá esta computadora para autorizarla (ej.: Mostrador Villa Mitre):", current.label || `Computadora de ${site}`)?.trim();
+    if (!label) return;
+    try {
+      const response = await fetch(`${API_BASE}/attendance/devices`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, deviceId: current.deviceId, token: current.token, label }) });
+      const data = await response.json() as { device?: { status: "Pendiente" | "Aprobado"; label: string }; error?: string };
+      if (!response.ok || !data.device) return setMessage(data.error || "No se pudo solicitar la autorización del equipo.");
+      const next = { ...current, ...data.device }; window.localStorage.setItem(storageKey, JSON.stringify(next)); setAttendanceDevice(next); setMessage(data.device.status === "Aprobado" ? "Equipo autorizado para fichaje en este local." : "Solicitud enviada. Administración debe aprobar este equipo una sola vez.");
+    } catch { setMessage("No se pudo solicitar la autorización del equipo."); }
+  };
+
   const markAttendance = async (kind: AttendanceRecord["kind"]) => {
     if (!user) return;
-    setClock("Solicitando ubicación para validar presencia…");
-    const position = window.isSecureContext && navigator.geolocation
+    const usingDevice = attendanceDevice?.status === "Aprobado";
+    setClock(usingDevice ? "Validando equipo autorizado del local…" : "Solicitando ubicación para validar presencia…");
+    const position = !usingDevice && window.isSecureContext && navigator.geolocation
       ? await new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })).catch(() => null)
       : null;
     const geolocation = position ? { latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy, capturedAt: new Date(position.timestamp).toISOString() } : { capturedAt: new Date().toISOString() };
     try {
-      const response = await fetch(`${API_BASE}/attendance/clock`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, kind, geolocation }) });
+      const response = await fetch(`${API_BASE}/attendance/clock`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, kind, geolocation, ...(usingDevice ? { deviceAuth: { deviceId: attendanceDevice!.deviceId, token: attendanceDevice!.token } } : {}) }) });
       const data = await response.json() as { ok?: boolean; record?: AttendanceRecord; exception?: boolean; reason?: string; message?: string; error?: string };
       if (!response.ok || !data.ok) {
         setClock("");
@@ -3979,7 +4030,7 @@ export default function Home() {
         return;
       }
       if (data.record) setAttendanceRecords((items) => [data.record!, ...items.filter((item) => item.id !== data.record!.id)]);
-      setClock(`${kind} validada por geocerca a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
+      setClock(`${kind} validada ${usingDevice ? "por equipo autorizado" : "por geocerca"} a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
       setAttendanceReminder(null);
     } catch {
       setClock(""); setMessage("No se pudo validar la ubicación. No se registró el fichaje; solicitá una excepción a Administración.");
@@ -5477,6 +5528,9 @@ export default function Home() {
                     >
                       Marcar salida
                     </button>
+                  </div>
+                  <div className="mt-3 rounded border border-[#183a67]/20 bg-[#eef2f6] p-3 text-sm">
+                    {attendanceDevice?.status === "Aprobado" ? <p><b>Equipo autorizado:</b> {attendanceDevice.label}. En esta computadora el fichaje valida el equipo del local y tu sesión personal.</p> : attendanceDevice?.status === "Pendiente" ? <p><b>Equipo pendiente de autorización:</b> {attendanceDevice.label}. Administración debe aprobarlo antes de usarlo para fichar.</p> : <><p><b>¿Es la computadora fija del local?</b> Podés solicitar su autorización una sola vez; no reemplaza tu sesión personal.</p><button type="button" onClick={() => void requestAttendanceDevice()} className="mt-2 rounded border border-[#183a67] bg-white px-3 py-2 text-sm font-bold">Autorizar esta computadora del local</button></>}
                   </div>
                   {clock && (
                     <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
@@ -8644,6 +8698,11 @@ export default function Home() {
                       <h3 className="text-lg font-bold text-[#183a67]">Excepciones de presencia</h3>
                       <p className="mt-1 text-sm text-slate-600">Los casos con permiso denegado, GPS no disponible, baja precisión o fuera de zona no fichan automáticamente. Administración los consulta aquí; Betzi y Andrea los resuelven desde Supervisión → Asistencia.</p>
                       <div className="mt-3 overflow-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Persona</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Tipo</th><th className="p-2 text-left">Motivo</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Resolución</th></tr></thead><tbody>{attendanceExceptions.length ? attendanceExceptions.map((item) => <tr key={item.id} className="border-t"><td className="p-2">{item.full_name}</td><td className="p-2">{item.site}</td><td className="p-2">{item.kind}</td><td className="p-2">{item.reason}</td><td className="p-2">{item.status}</td><td className="p-2 text-right"><span className="text-xs text-slate-500">Supervisión → Asistencia</span></td></tr>) : <tr><td colSpan={6} className="p-3 text-slate-500">No hay excepciones pendientes.</td></tr>}</tbody></table></div>
+                    </section>
+                    <section className="mt-6 rounded-xl border-2 border-[#183a67] bg-white p-5">
+                      <h3 className="text-lg font-bold text-[#183a67]">Computadoras autorizadas para fichaje</h3>
+                      <p className="mt-1 text-sm text-slate-600">Autorizá solo computadoras fijas que estén físicamente en el local. Cada fichaje conserva la sesión personal del empleado y la autorización queda auditada.</p>
+                      <div className="mt-3 overflow-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Equipo</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Solicitado por</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Acción</th></tr></thead><tbody>{attendanceDevices.length ? attendanceDevices.map((item) => <tr key={item.id} className="border-t"><td className="p-2 font-bold">{item.label}</td><td className="p-2">{item.site}</td><td className="p-2">{item.full_name}</td><td className="p-2">{item.status}</td><td className="p-2 text-right">{item.status === "Pendiente" ? <button type="button" onClick={() => void resolveAttendanceDevice(item.id, "approve")} className="rounded border border-green-700 px-3 py-1.5 font-bold text-green-800">Autorizar</button> : item.status === "Aprobado" ? <button type="button" onClick={() => void resolveAttendanceDevice(item.id, "revoke")} className="rounded border border-red-700 px-3 py-1.5 font-bold text-red-800">Revocar</button> : "—"}</td></tr>) : <tr><td colSpan={5} className="p-3 text-slate-500">No hay equipos solicitados.</td></tr>}</tbody></table></div>
                     </section>
                     </div>
                   )}

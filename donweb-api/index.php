@@ -247,7 +247,10 @@ if ($method === 'POST' && $route === 'attendance/clock') {
     $body = request_body(); $site = trim((string) ($body['site'] ?? '')); $kind = (string) ($body['kind'] ?? '');
     if (!user_can_access_site($user, $site) || !in_array($kind, ['Entrada', 'Salida'], true)) json_response(['ok' => false, 'error' => 'Fichaje inválido o local no autorizado.'], 422);
     $geo = is_array($body['geolocation'] ?? null) ? $body['geolocation'] : [];
-    $evaluation = presence_evaluate($pdo, $site, $geo);
+    $trustedDevice = attendance_authorized_device($pdo, $site, is_array($body['deviceAuth'] ?? null) ? $body['deviceAuth'] : []);
+    $evaluation = $trustedDevice
+        ? ['ok' => true, 'reason' => 'Equipo autorizado', 'device' => $trustedDevice]
+        : presence_evaluate($pdo, $site, $geo);
     $evidence = ['reason' => $evaluation['reason'], 'distanceMeters' => isset($evaluation['distance']) ? round((float) $evaluation['distance'], 1) : null, 'accuracyMeters' => isset($evaluation['accuracy']) ? round((float) $evaluation['accuracy'], 1) : null, 'capturedAt' => $geo['capturedAt'] ?? null];
     $pdo->beginTransaction();
     try {
@@ -257,10 +260,45 @@ if ($method === 'POST' && $route === 'attendance/clock') {
             audit($pdo, (int) $user['id'], 'attendance_exception_requested', $site . ' · ' . $kind . ' · ' . $evaluation['reason']);
             $pdo->commit(); json_response(['ok' => false, 'exception' => true, 'exceptionId' => $id, 'reason' => $evaluation['reason'], 'message' => 'El fichaje requiere autorización de Administración.']);
         }
-        $record = attendance_append_to_locked_state($pdo, $site, $user, $kind, ['presenceStatus' => 'Dentro de zona', 'distanceMeters' => $evidence['distanceMeters'], 'accuracyMeters' => $evidence['accuracyMeters'], 'locationCapturedAt' => $evidence['capturedAt']]);
-        audit($pdo, (int) $user['id'], 'attendance_clocked_with_geofence', $site . ' · ' . $kind);
+        $record = attendance_append_to_locked_state($pdo, $site, $user, $kind, $trustedDevice
+            ? ['presenceStatus' => 'Equipo autorizado', 'attendanceDeviceId' => (string) $trustedDevice['id']]
+            : ['presenceStatus' => 'Dentro de zona', 'distanceMeters' => $evidence['distanceMeters'], 'accuracyMeters' => $evidence['accuracyMeters'], 'locationCapturedAt' => $evidence['capturedAt']]);
+        audit($pdo, (int) $user['id'], $trustedDevice ? 'attendance_clocked_with_authorized_device' : 'attendance_clocked_with_geofence', $site . ' · ' . $kind);
         $pdo->commit(); json_response(['ok' => true, 'record' => $record]);
     } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+}
+
+if ($method === 'POST' && $route === 'attendance/devices') {
+    $user = require_user($pdo); ensure_attendance_presence_schema($pdo); $body = request_body();
+    $site = trim((string) ($body['site'] ?? '')); $deviceId = trim((string) ($body['deviceId'] ?? '')); $token = trim((string) ($body['token'] ?? '')); $label = trim((string) ($body['label'] ?? 'Computadora del local'));
+    if (!user_can_access_site($user, $site) || !preg_match('/^[a-f0-9-]{36}$/i', $deviceId) || strlen($token) < 32 || strlen($token) > 300 || $label === '') json_response(['ok' => false, 'error' => 'Solicitud de equipo inválida.'], 422);
+    $label = mb_substr($label, 0, 120); $hash = hash('sha256', $token);
+    $existing = $pdo->prepare('SELECT * FROM lartisan_attendance_devices WHERE site=? AND device_id=? LIMIT 1'); $existing->execute([$site, $deviceId]); $row = $existing->fetch();
+    if ($row && $row['status'] === 'Aprobado') json_response(['ok' => true, 'device' => ['status' => 'Aprobado', 'label' => $row['label']]]);
+    if ($row) $pdo->prepare("UPDATE lartisan_attendance_devices SET token_hash=?, label=?, status='Pendiente', requested_by=?, requested_at=NOW(), approved_by=NULL, approved_at=NULL WHERE id=?")->execute([$hash, $label, $user['id'], $row['id']]);
+    else $pdo->prepare("INSERT INTO lartisan_attendance_devices (id,site,device_id,token_hash,label,requested_by) VALUES (?,?,?,?,?,?)")->execute([presence_uuid(), $site, $deviceId, $hash, $label, $user['id']]);
+    audit($pdo, (int) $user['id'], 'attendance_device_requested', $site . ' · ' . $label);
+    json_response(['ok' => true, 'device' => ['status' => 'Pendiente', 'label' => $label]]);
+}
+
+if ($method === 'GET' && $route === 'attendance/devices/status') {
+    $user = require_user($pdo); ensure_attendance_presence_schema($pdo); $site = trim((string) ($_GET['site'] ?? '')); $deviceId = trim((string) ($_GET['deviceId'] ?? ''));
+    if (!user_can_access_site($user, $site) || !preg_match('/^[a-f0-9-]{36}$/i', $deviceId)) json_response(['ok' => false, 'error' => 'Equipo inválido.'], 422);
+    $stmt = $pdo->prepare('SELECT status,label FROM lartisan_attendance_devices WHERE site=? AND device_id=? LIMIT 1'); $stmt->execute([$site, $deviceId]); $row = $stmt->fetch();
+    json_response(['ok' => true, 'device' => $row ? ['status' => (string) $row['status'], 'label' => (string) $row['label']] : null]);
+}
+
+if ($method === 'GET' && $route === 'admin/attendance/devices') {
+    require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
+    $rows = $pdo->query("SELECT d.id,d.site,d.label,d.status,d.requested_at,u.full_name FROM lartisan_attendance_devices d JOIN users u ON u.id=d.requested_by ORDER BY d.requested_at DESC LIMIT 200")->fetchAll();
+    json_response(['ok' => true, 'devices' => $rows]);
+}
+
+if ($method === 'POST' && preg_match('#^admin/attendance/devices/([a-f0-9-]{36})/(approve|revoke)$#i', $route, $matches)) {
+    $admin = require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo); $status = strtolower($matches[2]) === 'approve' ? 'Aprobado' : 'Revocado';
+    $stmt = $pdo->prepare('UPDATE lartisan_attendance_devices SET status=?, approved_by=?, approved_at=NOW() WHERE id=?'); $stmt->execute([$status, $admin['id'], $matches[1]]);
+    if ($stmt->rowCount() === 0) json_response(['ok' => false, 'error' => 'Equipo inexistente.'], 404);
+    audit($pdo, (int) $admin['id'], $status === 'Aprobado' ? 'attendance_device_approved' : 'attendance_device_revoked', $matches[1]); json_response(['ok' => true]);
 }
 
 // Las excepciones de presencia se revisan en Supervisión. La habilitación

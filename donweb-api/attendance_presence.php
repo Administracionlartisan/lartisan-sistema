@@ -31,6 +31,23 @@ function ensure_attendance_presence_schema(PDO $pdo): void
         INDEX idx_lartisan_attendance_exceptions_site_status (site, status),
         INDEX idx_lartisan_attendance_exceptions_user_status (user_id, status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // Una computadora de mostrador puede autorizarse una sola vez para un
+    // local. Conserva un secreto aleatorio local: no se usa IP ni ubicación
+    // estimada, y nunca se habilita sola.
+    $pdo->exec("CREATE TABLE IF NOT EXISTS lartisan_attendance_devices (
+        id CHAR(36) NOT NULL PRIMARY KEY,
+        site VARCHAR(80) NOT NULL,
+        device_id CHAR(36) NOT NULL,
+        token_hash CHAR(64) NOT NULL,
+        label VARCHAR(120) NOT NULL,
+        status ENUM('Pendiente','Aprobado','Revocado') NOT NULL DEFAULT 'Pendiente',
+        requested_by BIGINT UNSIGNED NOT NULL,
+        requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        approved_by BIGINT UNSIGNED NULL,
+        approved_at DATETIME NULL,
+        UNIQUE KEY uq_lartisan_attendance_device (site, device_id),
+        INDEX idx_lartisan_attendance_device_status (site, status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     // Los horarios no viven dentro del snapshot del navegador: cada versión es
     // una fuente histórica independiente para que un cambio futuro jamás
     // recalcule injustamente un fichaje ya ocurrido.
@@ -99,6 +116,16 @@ function presence_uuid(): string
 {
     $bytes = bin2hex(random_bytes(16));
     return substr($bytes, 0, 8) . '-' . substr($bytes, 8, 4) . '-4' . substr($bytes, 13, 3) . '-a' . substr($bytes, 17, 3) . '-' . substr($bytes, 20, 12);
+}
+
+function attendance_authorized_device(PDO $pdo, string $site, array $device): ?array
+{
+    $deviceId = trim((string) ($device['deviceId'] ?? ''));
+    $token = trim((string) ($device['token'] ?? ''));
+    if (!preg_match('/^[a-f0-9-]{36}$/i', $deviceId) || strlen($token) < 32 || strlen($token) > 300) return null;
+    $stmt = $pdo->prepare("SELECT * FROM lartisan_attendance_devices WHERE site=? AND device_id=? AND status='Aprobado' LIMIT 1");
+    $stmt->execute([$site, $deviceId]); $row = $stmt->fetch();
+    return $row && hash_equals((string) $row['token_hash'], hash('sha256', $token)) ? $row : null;
 }
 
 function presence_evaluate(PDO $pdo, string $site, array $geo): array
