@@ -1815,6 +1815,20 @@ export default function Home() {
     user && !initialStockLoads[site] && ["administracion", "supervisora", "vendedora"].includes(user.role),
   );
   const canEditRealStock = canCountRealStock || canLoadInitialStock;
+  const initialCountedProductCount = products.filter(
+    (product) => realStock[site]?.[product.id] !== "",
+  ).length;
+  // Recuperación muy acotada: permite corregir sólo una carga inicial vacía,
+  // sin ventas ni movimientos posteriores. La auditoría de la confirmación se
+  // conserva y no puede usarse para reabrir inventarios ya operativos.
+  const canReopenEmptyInitialStockLoad = Boolean(
+    user &&
+      initialStockLoads[site] &&
+      ["administracion", "supervisora", "vendedora"].includes(user.role) &&
+      products.every((product) => safeStockQuantity(stock[site]?.[product.id]) === 0) &&
+      !sales.some((sale) => sale.site === site) &&
+      !stockMovements.some((movement) => movement.site === site),
+  );
   const canManageIdealStock =
     user?.role === "supervisora" && user.actionPermissions.includes("gestionarStockIdeal");
   const canAutoApproveOwnStockAdjustments =
@@ -3033,6 +3047,8 @@ export default function Home() {
       return setMessage(`La carga inicial de ${site} ya fue confirmada. Para cambios posteriores usá el control de stock.`);
     if (!initialStockNote.trim())
       return setMessage("Indicá una referencia para esta carga inicial (por ejemplo, fecha y responsable del conteo).");
+    if (!initialCountedProductCount)
+      return setMessage("Primero cargá el conteo físico en la columna Real. No se puede confirmar una carga inicial vacía.");
 
     const countedStock = Object.fromEntries(
       products.map((product) => [
@@ -3072,6 +3088,18 @@ export default function Home() {
     );
     setInitialStockNote("");
     setMessage(`Carga inicial aplicada: ${nonZeroProducts.length} producto(s) con stock y ${products.length - nonZeroProducts.length} en cero. Quedó auditada y bloqueada para ${site}.`);
+  };
+  const reopenEmptyInitialStockLoad = () => {
+    if (!canReopenEmptyInitialStockLoad)
+      return setMessage("No se puede reabrir esta carga inicial porque el local ya tiene operaciones o movimientos registrados.");
+    if (!window.confirm("Esta carga inicial quedó vacía. Se reabrirá únicamente para ingresar el conteo físico antes de operar. La auditoría se conservará. ¿Continuar?")) return;
+    setInitialStockLoads((items) => {
+      const next = { ...items };
+      delete next[site];
+      return next;
+    });
+    recordAudit("Carga inicial vacía reabierta", `${site} · sin ventas ni movimientos posteriores`);
+    setMessage("Carga inicial reabierta. Cargá los valores en Real antes de volver a confirmar.");
   };
   const approveStockAdjustment = (
     adjustment: StockAdjustment,
@@ -5347,13 +5375,19 @@ export default function Home() {
                   {initialStockLoads[site] && <span className="rounded-full bg-[#d8efdc] px-3 py-1 text-xs font-bold text-[#176b38]">Carga inicial confirmada</span>}
                 </div>
                 {initialStockLoads[site] ? (
-                  <p className="mt-3 rounded-xl border border-[#b9d8bf] bg-white p-3 text-sm text-slate-700">
-                    Confirmada por <b>{initialStockLoads[site].completedBy}</b> el {initialStockLoads[site].completedAt}. Referencia: {initialStockLoads[site].note}. Las correcciones posteriores se hacen desde <b>Cerrar control de stock</b> y siguen su circuito de autorización.
-                  </p>
+                  <div className="mt-3 rounded-xl border border-[#b9d8bf] bg-white p-3 text-sm text-slate-700">
+                    <p>Confirmada por <b>{initialStockLoads[site].completedBy}</b> el {initialStockLoads[site].completedAt}. Referencia: {initialStockLoads[site].note}. Las correcciones posteriores se hacen desde <b>Cerrar control de stock</b> y siguen su circuito de autorización.</p>
+                    {canReopenEmptyInitialStockLoad && (
+                      <div className="mt-3 rounded border border-[#f0bd4e] bg-[#fff5d8] p-3 text-xs">
+                        Esta carga quedó completamente en cero y el local todavía no tiene operaciones. Si se confirmó antes de ingresar el conteo, podés reabrirla una única vez.
+                        <button type="button" onClick={reopenEmptyInitialStockLoad} className="ml-2 mt-2 rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67] sm:mt-0">Reabrir carga inicial vacía</button>
+                      </div>
+                    )}
+                  </div>
                 ) : canLoadInitialStock ? (
                   <div className="mt-4 flex flex-wrap items-end gap-3">
                     <label className="min-w-[260px] flex-1 text-sm font-bold">
-                      Referencia de la carga inicial
+                      Referencia de la carga inicial · {initialCountedProductCount} de {products.length} productos contados
                       <input
                         value={initialStockNote}
                         onChange={(event) => setInitialStockNote(event.target.value)}
