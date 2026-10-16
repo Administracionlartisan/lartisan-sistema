@@ -64,6 +64,15 @@ const completeStockMap = (saved: Record<number, unknown> | undefined, products: 
     ...Object.entries(saved ?? {}).map(([id, value]) => [id, safeStockQuantity(value)]),
     ...products.map((product) => [product.id, safeStockQuantity(saved?.[product.id])]),
   ]) as Record<number, number>;
+const SALE_PROMOTIONS: { name: string; discount?: number; method?: string }[] = [
+  { name: "10% débito", discount: 10, method: "Tarjeta" },
+  { name: "15% efectivo", discount: 15, method: "Efectivo" },
+  { name: "6x5 cajas" },
+  { name: "Club La Nación Black" },
+  { name: "Club La Nación Premium" },
+  { name: "Promoción del mes" },
+  { name: "Promoción ñoquis" },
+];
 type LocationConfig = {
   site: string; code: string; kind: "Local propio" | "Franquicia";
   address: string; city: string; province: string;
@@ -118,6 +127,8 @@ export default function Home() {
     [pedidoScannerValue, setPedidoScannerValue] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
+    [isPromotion, setIsPromotion] = useState(false),
+    [promotion, setPromotion] = useState(""),
     [payment, setPayment] = useState("Efectivo"),
     [splitPayment, setSplitPayment] = useState(false),
     [splitPayments, setSplitPayments] = useState<Payment[]>([
@@ -2188,17 +2199,19 @@ export default function Home() {
     const invitationUnits = invited.reduce((total, sale) => total + Object.values(sale.invitedQuantities || {}).reduce((sum, quantity) => sum + quantity, 0), 0);
     const gross = discounted.reduce((total, sale) => total + sale.gross, 0);
     const discount = discounted.reduce((total, sale) => total + sale.discount, 0);
-    return { site: local, operations: localSales.filter((sale) => sale.discount > 0 || sale.invitation || Object.values(sale.invitedQuantities || {}).some((quantity) => quantity > 0)).length, discounted: discounted.length, invited: invited.length, invitationUnits, gross, discount, net: gross - discount };
+    const promoted = localSales.filter((sale) => Boolean(sale.promotion));
+    return { site: local, operations: localSales.filter((sale) => sale.discount > 0 || sale.invitation || Boolean(sale.promotion) || Object.values(sale.invitedQuantities || {}).some((quantity) => quantity > 0)).length, discounted: discounted.length, promoted: promoted.length, invited: invited.length, invitationUnits, gross, discount, net: gross - discount };
   });
   const promotionTotals = promotionRows.reduce((total, row) => ({
     operations: total.operations + row.operations,
     discounted: total.discounted + row.discounted,
+    promoted: total.promoted + row.promoted,
     invited: total.invited + row.invited,
     invitationUnits: total.invitationUnits + row.invitationUnits,
     gross: total.gross + row.gross,
     discount: total.discount + row.discount,
     net: total.net + row.net,
-  }), { operations: 0, discounted: 0, invited: 0, invitationUnits: 0, gross: 0, discount: 0, net: 0 });
+  }), { operations: 0, discounted: 0, promoted: 0, invited: 0, invitationUnits: 0, gross: 0, discount: 0, net: 0 });
   const cashReportRows = reportSites.map((local) => {
     const active = activeShiftBySite[local];
     const lastClosed = shiftLog.find((shift) => shift.site === local && shift.closedAt);
@@ -3179,7 +3192,7 @@ export default function Home() {
       [],
     ];
     const reportRows: Record<string, Array<Array<string | number | null>>> = {
-      DetalleVentas: [["Fecha", "Operación", "Local", "Cliente", "Comprobante", "Medio", "Bruto", "Descuento", "Neto", "Estado"], ...reportSales.map((sale) => [sale.createdAtISO, sale.id, sale.site, sale.customer, sale.invoiceType, sale.method, sale.gross, sale.discount, sale.net, sale.status])],
+      DetalleVentas: [["Fecha", "Operación", "Local", "Cliente", "Comprobante", "Medio", "Promoción", "Bruto", "Descuento", "Neto", "Estado"], ...reportSales.map((sale) => [sale.createdAtISO, sale.id, sale.site, sale.customer, sale.invoiceType, sale.method, sale.promotion || "", sale.gross, sale.discount, sale.net, sale.status])],
       Productos: [["Producto", "Categoría", "Unidades", "Venta bruta"], ...productPerformance.map((row) => [row.name, row.category, row.units, row.gross])],
       Rentabilidad: [["Producto", "Categoría", "Unidades", "Venta bruta", "Descuento distribuido", "Venta neta", "Costo unitario", "Margen"], ...profitabilityRows.map((row) => [row.name, row.category, row.units, Math.round(row.gross), Math.round(row.discount), Math.round(row.net), "Sin costo cargado", "No calculable"])],
       Pagos: [["Medio de pago", "Importe"], ...paymentReportRows.map((row) => [row.method, row.amount])],
@@ -3265,6 +3278,7 @@ export default function Home() {
       customerId: selectedCustomerId || undefined,
       items: [...cart],
       discount,
+      promotion: isPromotion ? promotion : undefined,
       payment,
       invoiceType,
       customerDocumentType,
@@ -3278,6 +3292,8 @@ export default function Home() {
     setSavedOrders((items) => [order, ...items]);
     setCart([]);
     setDiscount(0);
+    setIsPromotion(false);
+    setPromotion("");
     setInvitedQuantities({});
     recordAudit("Comanda guardada", `${site} · ${order.id.slice(0, 8)}`);
     setMessage("Comanda guardada. Podés continuar otra venta.");
@@ -3286,6 +3302,8 @@ export default function Home() {
     setCart(order.items);
     setCustomer(order.customer);
     setDiscount(order.discount);
+    setIsPromotion(Boolean(order.promotion));
+    setPromotion(order.promotion || "");
     setPayment(order.payment);
     setInvoiceType(order.invoiceType);
     setCustomerDocumentType(order.customerDocumentType || "Consumidor final");
@@ -3427,6 +3445,11 @@ export default function Home() {
     if (!cashIsOpen)
       return setMessage("Primero tenés que abrir la caja de este local.");
     if (!cart.length) return setMessage("Agregá productos a la venta.");
+    if (isPromotion && !promotion)
+      return setMessage("Seleccioná el tipo de promoción antes de cobrar.");
+    const selectedPromotion = SALE_PROMOTIONS.find((item) => item.name === promotion);
+    if (selectedPromotion?.method && (splitPayment || payment !== selectedPromotion.method))
+      return setMessage(`La promoción ${selectedPromotion.name} requiere cobrar con ${selectedPromotion.method}.`);
     const rawPayments = splitPayment
       ? splitPayments.filter((item) => item.amount > 0)
       : [{ method: payment, amount: net }];
@@ -3471,6 +3494,7 @@ export default function Home() {
       items: [...cart],
       gross: total,
       discount: total - net,
+      promotion: isPromotion ? promotion : undefined,
       net,
       method: splitPayment ? "Múltiple" : payment,
       invoiceType,
@@ -3506,7 +3530,7 @@ export default function Home() {
         cashImpact: item.method === "Efectivo" ? item.amount : 0,
         paymentMethod: item.method,
         reference: sale.id,
-        detail: `${invoiceType} · ${customer}`,
+        detail: `${invoiceType} · ${customer}${isPromotion ? ` · ${promotion}` : ""}`,
       }),
     );
     setPendingSync((value) => value + 1);
@@ -3526,14 +3550,16 @@ export default function Home() {
       }),
     );
     setMessage(
-      `${invitation ? "Invitación" : "Venta"} pendiente de confirmación: ${money.format(net)}. No recargues hasta ver “Operación guardada”.`,
+      `${invitation ? "Invitación" : "Venta"}${isPromotion ? ` · ${promotion}` : ""} pendiente de confirmación: ${money.format(net)}. No recargues hasta ver “Operación guardada”.`,
     );
     recordAudit(
       "Venta registrada",
-      `${sale.id.slice(0, 8)} · ${money.format(net)} · ${splitPayment ? "cobro múltiple" : payment}`,
+      `${sale.id.slice(0, 8)} · ${money.format(net)} · ${splitPayment ? "cobro múltiple" : payment}${isPromotion ? ` · ${promotion}` : ""}`,
     );
     setCart([]);
     setDiscount(0);
+    setIsPromotion(false);
+    setPromotion("");
     setInvitedQuantities({});
     setSplitPayment(false);
     setSplitPayments([{ method: "Efectivo", amount: 0 }, { method: "Transferencia", amount: 0 }]);
@@ -4450,7 +4476,7 @@ export default function Home() {
               {salesHistoryError && <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-800">{salesHistoryError}</div>}
               {salesHistoryLoading ? <div className="rounded-2xl border bg-white p-6 text-sm">Cargando ventas guardadas…</div> : (
                 <div className="overflow-auto rounded-2xl border bg-white shadow-sm">
-                  <table className="w-full min-w-[880px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Fecha y hora</th><th className="p-3 text-left">Comprobante</th><th className="p-3 text-left">Cliente</th><th className="p-3 text-left">Medio</th><th className="p-3 text-right">Total</th><th className="p-3 text-left">Estado</th><th className="p-3 text-right">Detalle</th></tr></thead><tbody>{salesHistory.filter((sale) => `${sale.id} ${sale.invoiceType} ${sale.customer} ${sale.method}`.toLocaleLowerCase("es-AR").includes(salesHistorySearch.trim().toLocaleLowerCase("es-AR"))).map((sale) => <tr key={sale.id} className="border-t"><td className="p-3 whitespace-nowrap">{new Date(sale.createdAtISO).toLocaleString("es-AR")}</td><td className="p-3">{sale.invoiceType}<br /><span className="text-xs text-slate-500">{sale.id.slice(0, 8)}</span></td><td className="p-3">{sale.customer}</td><td className="p-3">{sale.method}</td><td className="p-3 text-right font-bold">{money.format(sale.net)}</td><td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${sale.status === "anulada" ? "bg-red-100 text-red-800" : "bg-emerald-100 text-emerald-800"}`}>{sale.status === "anulada" ? "Anulada" : "Cobrada"}</span></td><td className="p-3 text-right"><button type="button" onClick={() => setReceiptSale(sale)} className="rounded border px-3 py-1.5 font-bold hover:bg-slate-50">Ver</button></td></tr>)}{!salesHistory.filter((sale) => `${sale.id} ${sale.invoiceType} ${sale.customer} ${sale.method}`.toLocaleLowerCase("es-AR").includes(salesHistorySearch.trim().toLocaleLowerCase("es-AR"))).length && <tr><td colSpan={7} className="p-6 text-center text-slate-500">No hay ventas para los filtros elegidos.</td></tr>}</tbody></table>
+                  <table className="w-full min-w-[980px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Fecha y hora</th><th className="p-3 text-left">Comprobante</th><th className="p-3 text-left">Cliente</th><th className="p-3 text-left">Medio</th><th className="p-3 text-left">Promoción</th><th className="p-3 text-right">Total</th><th className="p-3 text-left">Estado</th><th className="p-3 text-right">Detalle</th></tr></thead><tbody>{salesHistory.filter((sale) => `${sale.id} ${sale.invoiceType} ${sale.customer} ${sale.method} ${sale.promotion || ""}`.toLocaleLowerCase("es-AR").includes(salesHistorySearch.trim().toLocaleLowerCase("es-AR"))).map((sale) => <tr key={sale.id} className="border-t"><td className="p-3 whitespace-nowrap">{new Date(sale.createdAtISO).toLocaleString("es-AR")}</td><td className="p-3">{sale.invoiceType}<br /><span className="text-xs text-slate-500">{sale.id.slice(0, 8)}</span></td><td className="p-3">{sale.customer}</td><td className="p-3">{sale.method}</td><td className="p-3">{sale.promotion || "—"}</td><td className="p-3 text-right font-bold">{money.format(sale.net)}</td><td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${sale.status === "anulada" ? "bg-red-100 text-red-800" : "bg-emerald-100 text-emerald-800"}`}>{sale.status === "anulada" ? "Anulada" : "Cobrada"}</span></td><td className="p-3 text-right"><button type="button" onClick={() => setReceiptSale(sale)} className="rounded border px-3 py-1.5 font-bold hover:bg-slate-50">Ver</button></td></tr>)}{!salesHistory.filter((sale) => `${sale.id} ${sale.invoiceType} ${sale.customer} ${sale.method} ${sale.promotion || ""}`.toLocaleLowerCase("es-AR").includes(salesHistorySearch.trim().toLocaleLowerCase("es-AR"))).length && <tr><td colSpan={8} className="p-6 text-center text-slate-500">No hay ventas para los filtros elegidos.</td></tr>}</tbody></table>
                 </div>
               )}
             </>
@@ -4771,7 +4797,46 @@ export default function Home() {
                       </p>
                     )}
                   </div>
-                  <label className="text-sm font-bold">Descuento (%)</label>
+                  <div className="rounded-xl border border-[#cbd9ea] bg-[#f5f8fc] p-3">
+                    <label className="flex items-center gap-2 text-sm font-bold">
+                      <input
+                        type="checkbox"
+                        checked={isPromotion}
+                        onChange={(event) => {
+                          setIsPromotion(event.target.checked);
+                          if (!event.target.checked) setPromotion("");
+                        }}
+                      />
+                      Venta por promoción
+                    </label>
+                    {isPromotion && (
+                      <label className="mt-3 block text-sm font-bold">
+                        Tipo de promoción
+                        <select
+                          value={promotion}
+                          onChange={(event) => {
+                            const nextPromotion = event.target.value;
+                            setPromotion(nextPromotion);
+                            const selected = SALE_PROMOTIONS.find((item) => item.name === nextPromotion);
+                            if (selected?.discount !== undefined) setDiscount(selected.discount);
+                            if (selected?.method && !splitPayment) setPayment(selected.method);
+                          }}
+                          className="mt-1 w-full rounded border bg-white p-2 font-normal"
+                        >
+                          <option value="">Seleccionar promoción…</option>
+                          {SALE_PROMOTIONS.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+                        </select>
+                      </label>
+                    )}
+                    {isPromotion && promotion && (
+                      <p className="mt-2 text-xs text-slate-600">
+                        {SALE_PROMOTIONS.find((item) => item.name === promotion)?.discount !== undefined
+                          ? "El descuento y el medio de pago se aplicaron según la promoción."
+                          : "La promoción queda identificada en la venta. Cargá el descuento solo si corresponde."}
+                      </p>
+                    )}
+                  </div>
+                  <label className="mt-3 block text-sm font-bold">Descuento (%)</label>
                   <input
                     type="number"
                     min="0"
@@ -8212,6 +8277,7 @@ export default function Home() {
                             <th className="p-3 text-left">Cliente</th>
                             <th className="p-3 text-left">Comprobante</th>
                             <th className="p-3 text-left">Cobro</th>
+                            <th className="p-3 text-left">Promoción</th>
                             <th className="p-3 text-right">Total</th>
                           </tr>
                         </thead>
@@ -8224,6 +8290,7 @@ export default function Home() {
                                   <td className="p-3">{sale.customer}</td>
                                   <td className="p-3">{sale.invoiceType}</td>
                                   <td className="p-3">{sale.method}</td>
+                                  <td className="p-3">{sale.promotion || "—"}</td>
                                   <td className="p-3 text-right font-bold">
                                     {money.format(sale.net)}
                                   </td>
@@ -8231,7 +8298,7 @@ export default function Home() {
                             ))
                           ) : (
                             <tr>
-                              <td colSpan={6} className="p-4 text-slate-500">
+                              <td colSpan={7} className="p-4 text-slate-500">
                                 No hay ventas activas guardadas para el período y local seleccionados.
                               </td>
                             </tr>
@@ -8953,8 +9020,8 @@ export default function Home() {
                   )}
                   {adminReport === "Promociones" && (
                     <div className="mt-5 space-y-4">
-                      <div className="grid gap-4 md:grid-cols-4"><div className="rounded bg-[#eef2f6] p-4"><b>Operaciones con beneficio</b><p className="mt-2 text-2xl font-bold">{promotionTotals.operations}</p><p className="text-sm">Descuento o invitación registrada.</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Descuento otorgado</b><p className="mt-2 text-2xl font-bold">{money.format(promotionTotals.discount)}</p><p className="text-sm">Sobre operaciones del período.</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Invitaciones</b><p className="mt-2 text-2xl font-bold">{promotionTotals.invitationUnits}</p><p className="text-sm">Unidades marcadas como invitación.</p></div><div className="rounded bg-[#fff5d8] p-4"><b>Margen no disponible</b><p className="mt-2 text-sm">Se necesitan costos unitarios para evaluar rentabilidad del beneficio.</p></div></div>
-                      <div className="overflow-auto rounded border"><table className="w-full min-w-[900px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Local</th><th className="p-3 text-right">Operaciones</th><th className="p-3 text-right">Con descuento</th><th className="p-3 text-right">Con invitación</th><th className="p-3 text-right">Unidades invitadas</th><th className="p-3 text-right">Bruto</th><th className="p-3 text-right">Descuento</th><th className="p-3 text-right">Neto</th></tr></thead><tbody>{promotionRows.map((row) => <tr key={row.site} className="border-t"><td className="p-3 font-bold">{row.site}</td><td className="p-3 text-right">{row.operations}</td><td className="p-3 text-right">{row.discounted}</td><td className="p-3 text-right">{row.invited}</td><td className="p-3 text-right">{row.invitationUnits}</td><td className="p-3 text-right">{money.format(row.gross)}</td><td className="p-3 text-right">{money.format(row.discount)}</td><td className="p-3 text-right font-bold">{money.format(row.net)}</td></tr>)}</tbody></table><p className="border-t p-3 text-xs text-slate-500">El sistema aún no administra campañas identificadas por nombre o vigencia. Este reporte consolida descuentos manuales e invitaciones efectivamente guardados.</p></div>
+                      <div className="grid gap-4 md:grid-cols-4"><div className="rounded bg-[#eef2f6] p-4"><b>Operaciones con beneficio</b><p className="mt-2 text-2xl font-bold">{promotionTotals.operations}</p><p className="text-sm">Descuento, invitación o promoción registrada.</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Tipo de promoción</b><p className="mt-2 text-2xl font-bold">{promotionTotals.promoted}</p><p className="text-sm">Ventas con campaña identificada.</p></div><div className="rounded bg-[#eef2f6] p-4"><b>Descuento otorgado</b><p className="mt-2 text-2xl font-bold">{money.format(promotionTotals.discount)}</p><p className="text-sm">Sobre operaciones del período.</p></div><div className="rounded bg-[#fff5d8] p-4"><b>Margen no disponible</b><p className="mt-2 text-sm">Se necesitan costos unitarios para evaluar rentabilidad del beneficio.</p></div></div>
+                      <div className="overflow-auto rounded border"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[#183a67] text-white"><tr><th className="p-3 text-left">Local</th><th className="p-3 text-right">Operaciones</th><th className="p-3 text-right">Con promoción</th><th className="p-3 text-right">Con descuento</th><th className="p-3 text-right">Con invitación</th><th className="p-3 text-right">Unidades invitadas</th><th className="p-3 text-right">Bruto</th><th className="p-3 text-right">Descuento</th><th className="p-3 text-right">Neto</th></tr></thead><tbody>{promotionRows.map((row) => <tr key={row.site} className="border-t"><td className="p-3 font-bold">{row.site}</td><td className="p-3 text-right">{row.operations}</td><td className="p-3 text-right">{row.promoted}</td><td className="p-3 text-right">{row.discounted}</td><td className="p-3 text-right">{row.invited}</td><td className="p-3 text-right">{row.invitationUnits}</td><td className="p-3 text-right">{money.format(row.gross)}</td><td className="p-3 text-right">{money.format(row.discount)}</td><td className="p-3 text-right font-bold">{money.format(row.net)}</td></tr>)}</tbody></table><p className="border-t p-3 text-xs text-slate-500">El sistema guarda el tipo de promoción elegido al cobrar. El reporte consolida también descuentos manuales e invitaciones; no calcula vigencias ni rentabilidad.</p></div>
                     </div>
                   )}
                   {adminReport === "Calidad" && (

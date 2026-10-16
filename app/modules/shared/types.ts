@@ -44,6 +44,8 @@ export type Sale = {
   items: Product[];
   gross: number;
   discount: number;
+  /** Nombre de la promoción seleccionado al cobrar, si corresponde. */
+  promotion?: string;
   net: number;
   method: string;
   invoiceType: "Factura B" | "Factura B electrónica" | "Factura A" | "Remito interno";
@@ -67,6 +69,7 @@ export type SavedOrder = {
   customerId?: string;
   items: Product[];
   discount: number;
+  promotion?: string;
   payment: string;
   invoiceType: Sale["invoiceType"];
   customerDocumentType?: Sale["customerDocumentType"];

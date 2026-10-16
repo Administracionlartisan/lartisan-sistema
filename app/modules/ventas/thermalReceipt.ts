@@ -53,6 +53,7 @@ export function buildThermalReceipt(sale: Sale, salePayments: Payment[], servedB
     ...thermalWrap(`Atendio: ${servedBy}`), ...thermalWrap(`Cliente: ${sale.customer}`),
     `Canal: ${thermalSafe(sale.channel)}`, divider,
   ];
+  if (sale.promotion) lines.push(...thermalWrap(`Promocion: ${sale.promotion}`));
   grouped.forEach(({ product, quantity }) => {
     lines.push(...thermalWrap(`${quantity} x ${product.name}`));
     const invited = sale.invitedQuantities?.[product.id] || 0;
