@@ -258,7 +258,7 @@ if ($method === 'POST' && $route === 'attendance/clock') {
             $id = presence_uuid();
             $pdo->prepare('INSERT INTO lartisan_attendance_exceptions (id, user_id, site, kind, reason, evidence_json) VALUES (?, ?, ?, ?, ?, ?)')->execute([$id, $user['id'], $site, $kind, $evaluation['reason'], json_encode($evidence, JSON_UNESCAPED_UNICODE)]);
             audit($pdo, (int) $user['id'], 'attendance_exception_requested', $site . ' · ' . $kind . ' · ' . $evaluation['reason']);
-            $pdo->commit(); json_response(['ok' => false, 'exception' => true, 'exceptionId' => $id, 'reason' => $evaluation['reason'], 'message' => 'El fichaje requiere autorización de Administración.']);
+            $pdo->commit(); json_response(['ok' => false, 'exception' => true, 'exceptionId' => $id, 'reason' => $evaluation['reason'], 'message' => 'El fichaje requiere autorización de Supervisión.']);
         }
         $record = attendance_append_to_locked_state($pdo, $site, $user, $kind, $trustedDevice
             ? ['presenceStatus' => 'Equipo autorizado', 'attendanceDeviceId' => (string) $trustedDevice['id']]
@@ -288,25 +288,40 @@ if ($method === 'GET' && $route === 'attendance/devices/status') {
     json_response(['ok' => true, 'device' => $row ? ['status' => (string) $row['status'], 'label' => (string) $row['label']] : null]);
 }
 
-if ($method === 'GET' && $route === 'admin/attendance/devices') {
-    require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
-    $rows = $pdo->query("SELECT d.id,d.site,d.label,d.status,d.requested_at,u.full_name FROM lartisan_attendance_devices d JOIN users u ON u.id=d.requested_by ORDER BY d.requested_at DESC LIMIT 200")->fetchAll();
-    json_response(['ok' => true, 'devices' => $rows]);
-}
-
-if ($method === 'POST' && preg_match('#^admin/attendance/devices/([a-f0-9-]{36})/(approve|revoke)$#i', $route, $matches)) {
-    $admin = require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo); $status = strtolower($matches[2]) === 'approve' ? 'Aprobado' : 'Revocado';
-    $stmt = $pdo->prepare('UPDATE lartisan_attendance_devices SET status=?, approved_by=?, approved_at=NOW() WHERE id=?'); $stmt->execute([$status, $admin['id'], $matches[1]]);
-    if ($stmt->rowCount() === 0) json_response(['ok' => false, 'error' => 'Equipo inexistente.'], 404);
-    audit($pdo, (int) $admin['id'], $status === 'Aprobado' ? 'attendance_device_approved' : 'attendance_device_revoked', $matches[1]); json_response(['ok' => true]);
-}
-
 // Las excepciones de presencia se revisan en Supervisión. La habilitación
 // "Personal" identifica a las supervisoras responsables (hoy Betzi y Andrea)
 // sin convertir a Administración en aprobadora de sus propios fichajes.
 function can_resolve_attendance_exceptions(array $user): bool
 {
     return ($user['role'] ?? '') === 'supervisora' && user_can_report($user, 'Personal');
+}
+
+// Solo las supervisoras habilitadas para Personal (Betzi y Andrea actualmente)
+// pueden confiar o revocar una computadora fija. Administración conserva la
+// auditoría, pero no reemplaza la validación operativa del local.
+if ($method === 'GET' && $route === 'attendance/devices/review') {
+    $reviewer = require_user($pdo); ensure_attendance_presence_schema($pdo);
+    if (!can_resolve_attendance_exceptions($reviewer)) json_response(['ok' => false, 'error' => 'Solo Supervisión autorizada puede revisar computadoras de fichaje.'], 403);
+    $rows = $pdo->query("SELECT d.id,d.site,d.label,d.status,d.requested_at,u.full_name FROM lartisan_attendance_devices d JOIN users u ON u.id=d.requested_by ORDER BY d.requested_at DESC LIMIT 200")->fetchAll();
+    $rows = array_values(array_filter($rows, static fn (array $row): bool => user_can_access_site($reviewer, (string) $row['site'])));
+    json_response(['ok' => true, 'devices' => $rows]);
+}
+
+if ($method === 'POST' && preg_match('#^attendance/devices/([a-f0-9-]{36})/(approve|revoke)$#i', $route, $matches)) {
+    $reviewer = require_user($pdo); ensure_attendance_presence_schema($pdo);
+    if (!can_resolve_attendance_exceptions($reviewer)) json_response(['ok' => false, 'error' => 'Solo Supervisión autorizada puede resolver computadoras de fichaje.'], 403);
+    $lookup = $pdo->prepare('SELECT site FROM lartisan_attendance_devices WHERE id=? LIMIT 1'); $lookup->execute([$matches[1]]); $device = $lookup->fetch();
+    if (!$device) json_response(['ok' => false, 'error' => 'Equipo inexistente.'], 404);
+    if (!user_can_access_site($reviewer, (string) $device['site'])) json_response(['ok' => false, 'error' => 'No tenés acceso a este local.'], 403);
+    $status = strtolower($matches[2]) === 'approve' ? 'Aprobado' : 'Revocado';
+    $stmt = $pdo->prepare('UPDATE lartisan_attendance_devices SET status=?, approved_by=?, approved_at=NOW() WHERE id=?'); $stmt->execute([$status, $reviewer['id'], $matches[1]]);
+    audit($pdo, (int) $reviewer['id'], $status === 'Aprobado' ? 'attendance_device_approved' : 'attendance_device_revoked', $matches[1]); json_response(['ok' => true]);
+}
+
+if ($method === 'GET' && $route === 'admin/attendance/devices') {
+    require_user($pdo, ['administracion']); ensure_attendance_presence_schema($pdo);
+    $rows = $pdo->query("SELECT d.id,d.site,d.label,d.status,d.requested_at,u.full_name FROM lartisan_attendance_devices d JOIN users u ON u.id=d.requested_by ORDER BY d.requested_at DESC LIMIT 200")->fetchAll();
+    json_response(['ok' => true, 'devices' => $rows]);
 }
 
 // Administración conserva la consulta y auditoría, pero no puede resolver.

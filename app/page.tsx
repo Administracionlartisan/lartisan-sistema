@@ -1112,9 +1112,11 @@ export default function Home() {
   }, [user?.role, tab, adminReport, operationalVersion]);
 
   useEffect(() => {
-    if (user?.role !== "administracion" || tab !== "Administración" || adminReport !== "Personal") return;
+    const supervisionReview = user?.role === "supervisora" && tab === "Asistencia";
+    const administrationAudit = user?.role === "administracion" && tab === "Administración" && adminReport === "Personal";
+    if (!supervisionReview && !administrationAudit) return;
     let active = true;
-    fetch(`${API_BASE}/admin/attendance/devices`, { credentials: "include", cache: "no-store" })
+    fetch(`${API_BASE}/${supervisionReview ? "attendance/devices/review" : "admin/attendance/devices"}`, { credentials: "include", cache: "no-store" })
       .then(async (response) => ({ response, data: await response.json() as { devices?: { id: string; site: string; label: string; status: string; requested_at: string; full_name: string }[] } }))
       .then(({ response, data }) => { if (active && response.ok) setAttendanceDevices(data.devices || []); })
       .catch(() => undefined);
@@ -1123,7 +1125,7 @@ export default function Home() {
 
   const resolveAttendanceDevice = async (id: string, action: "approve" | "revoke") => {
     try {
-      const response = await fetch(`${API_BASE}/admin/attendance/devices/${id}/${action}`, { method: "POST", credentials: "include" });
+      const response = await fetch(`${API_BASE}/attendance/devices/${id}/${action}`, { method: "POST", credentials: "include" });
       const data = await response.json() as { error?: string };
       if (!response.ok) return setMessage(data.error || "No se pudo actualizar el equipo.");
       setAttendanceDevices((items) => items.map((item) => item.id === id ? { ...item, status: action === "approve" ? "Aprobado" : "Revocado" } : item));
@@ -4008,8 +4010,11 @@ export default function Home() {
     const storageKey = "lartisan:attendance-device";
     let stored: { deviceId: string; token: string; status: "Pendiente" | "Aprobado" | "Revocado"; label: string } | null = null;
     try { stored = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch { stored = null; }
-    if (!stored?.deviceId || !stored?.token) return setAttendanceDevice(null);
     let active = true;
+    if (!stored?.deviceId || !stored?.token) {
+      queueMicrotask(() => { if (active) setAttendanceDevice(null); });
+      return () => { active = false; };
+    }
     fetch(`${API_BASE}/attendance/devices/status?site=${encodeURIComponent(site)}&deviceId=${encodeURIComponent(stored.deviceId)}`, { credentials: "include", cache: "no-store" })
       .then(async (response) => ({ response, data: await response.json() as { device?: { status: "Pendiente" | "Aprobado" | "Revocado"; label: string } | null } }))
       .then(({ response, data }) => { if (active) setAttendanceDevice(response.ok && data.device ? { ...stored!, ...data.device } : null); })
@@ -4027,7 +4032,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE}/attendance/devices`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, deviceId: current.deviceId, token: current.token, label }) });
       const data = await response.json() as { device?: { status: "Pendiente" | "Aprobado"; label: string }; error?: string };
       if (!response.ok || !data.device) return setMessage(data.error || "No se pudo solicitar la autorización del equipo.");
-      const next = { ...current, ...data.device }; window.localStorage.setItem(storageKey, JSON.stringify(next)); setAttendanceDevice(next); setMessage(data.device.status === "Aprobado" ? "Equipo autorizado para fichaje en este local." : "Solicitud enviada. Administración debe aprobar este equipo una sola vez.");
+      const next = { ...current, ...data.device }; window.localStorage.setItem(storageKey, JSON.stringify(next)); setAttendanceDevice(next); setMessage(data.device.status === "Aprobado" ? "Equipo autorizado para fichaje en este local." : "Solicitud enviada. Supervisión (Betzi o Andrea) debe aprobar este equipo una sola vez.");
     } catch { setMessage("No se pudo solicitar la autorización del equipo."); }
   };
 
@@ -5555,7 +5560,7 @@ export default function Home() {
                     </button>
                   </div>
                   <div className="mt-3 rounded border border-[#183a67]/20 bg-[#eef2f6] p-3 text-sm">
-                    {attendanceDevice?.status === "Aprobado" ? <p><b>Equipo autorizado:</b> {attendanceDevice.label}. En esta computadora el fichaje valida el equipo del local y tu sesión personal.</p> : attendanceDevice?.status === "Pendiente" ? <p><b>Equipo pendiente de autorización:</b> {attendanceDevice.label}. Administración debe aprobarlo antes de usarlo para fichar.</p> : <><p><b>¿Es la computadora fija del local?</b> Podés solicitar su autorización una sola vez; no reemplaza tu sesión personal.</p><button type="button" onClick={() => void requestAttendanceDevice()} className="mt-2 rounded border border-[#183a67] bg-white px-3 py-2 text-sm font-bold">Autorizar esta computadora del local</button></>}
+                    {attendanceDevice?.status === "Aprobado" ? <p><b>Equipo autorizado:</b> {attendanceDevice.label}. En esta computadora el fichaje valida el equipo del local y tu sesión personal.</p> : attendanceDevice?.status === "Pendiente" ? <p><b>Equipo pendiente de autorización:</b> {attendanceDevice.label}. Betzi o Andrea deben aprobarlo desde Supervisión → Asistencia antes de usarlo para fichar.</p> : <><p><b>¿Es la computadora fija del local?</b> Podés solicitar su autorización una sola vez; no reemplaza tu sesión personal.</p><button type="button" onClick={() => void requestAttendanceDevice()} className="mt-2 rounded border border-[#183a67] bg-white px-3 py-2 text-sm font-bold">Autorizar esta computadora del local</button></>}
                   </div>
                   {clock && (
                     <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
@@ -7600,7 +7605,13 @@ export default function Home() {
           ) : tab === "Personal" && canManageSchedules ? (
             <PersonnelManager apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} />
           ) : tab === "Asistencia" && canManageSchedules ? (
-            <AttendanceReport apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} canResolveExceptions={user.role === "supervisora" && canManageSchedules} />
+            <>
+              {user.role === "supervisora" && <section className="mb-5 rounded-2xl border-2 border-[#183a67] bg-white p-5 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-lg font-bold text-[#183a67]">Computadoras pendientes de fichaje</h3><p className="mt-1 text-sm text-slate-600">Autorizá solamente computadoras fijas que estén dentro del local. La autorización no reemplaza la sesión personal y queda auditada.</p></div><span className="rounded-full bg-[#eef2f6] px-3 py-1 text-sm font-bold">{attendanceDevices.filter((item) => item.status === "Pendiente").length} pendientes</span></div>
+                <div className="mt-3 overflow-auto"><table className="w-full min-w-[640px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Equipo</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Solicitado por</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Acción</th></tr></thead><tbody>{attendanceDevices.length ? attendanceDevices.map((item) => <tr key={item.id} className="border-t"><td className="p-2 font-bold">{item.label}</td><td className="p-2">{item.site}</td><td className="p-2">{item.full_name}</td><td className="p-2">{item.status}</td><td className="p-2 text-right">{item.status === "Pendiente" ? <button type="button" onClick={() => void resolveAttendanceDevice(item.id, "approve")} className="rounded border border-green-700 px-3 py-1.5 font-bold text-green-800">Autorizar</button> : item.status === "Aprobado" ? <button type="button" onClick={() => void resolveAttendanceDevice(item.id, "revoke")} className="rounded border border-red-700 px-3 py-1.5 font-bold text-red-800">Revocar</button> : "—"}</td></tr>) : <tr><td colSpan={5} className="p-3 text-slate-500">No hay computadoras solicitadas para tus locales.</td></tr>}</tbody></table></div>
+              </section>}
+              <AttendanceReport apiBase={API_BASE} sites={user.role === "administracion" ? SITES : (user.locations || [site])} canResolveExceptions={user.role === "supervisora" && canManageSchedules} />
+            </>
           ) : (
             <>
               <Heading
@@ -8726,8 +8737,8 @@ export default function Home() {
                     </section>
                     <section className="mt-6 rounded-xl border-2 border-[#183a67] bg-white p-5">
                       <h3 className="text-lg font-bold text-[#183a67]">Computadoras autorizadas para fichaje</h3>
-                      <p className="mt-1 text-sm text-slate-600">Autorizá solo computadoras fijas que estén físicamente en el local. Cada fichaje conserva la sesión personal del empleado y la autorización queda auditada.</p>
-                      <div className="mt-3 overflow-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Equipo</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Solicitado por</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Acción</th></tr></thead><tbody>{attendanceDevices.length ? attendanceDevices.map((item) => <tr key={item.id} className="border-t"><td className="p-2 font-bold">{item.label}</td><td className="p-2">{item.site}</td><td className="p-2">{item.full_name}</td><td className="p-2">{item.status}</td><td className="p-2 text-right">{item.status === "Pendiente" ? <button type="button" onClick={() => void resolveAttendanceDevice(item.id, "approve")} className="rounded border border-green-700 px-3 py-1.5 font-bold text-green-800">Autorizar</button> : item.status === "Aprobado" ? <button type="button" onClick={() => void resolveAttendanceDevice(item.id, "revoke")} className="rounded border border-red-700 px-3 py-1.5 font-bold text-red-800">Revocar</button> : "—"}</td></tr>) : <tr><td colSpan={5} className="p-3 text-slate-500">No hay equipos solicitados.</td></tr>}</tbody></table></div>
+                      <p className="mt-1 text-sm text-slate-600">Consulta y auditoría de equipos solicitados. Betzi o Andrea autorizan y revocan desde Supervisión → Asistencia; Administración no puede aprobar equipos.</p>
+                      <div className="mt-3 overflow-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-[#eef2f6]"><tr><th className="p-2 text-left">Equipo</th><th className="p-2 text-left">Local</th><th className="p-2 text-left">Solicitado por</th><th className="p-2 text-left">Estado</th><th className="p-2 text-right">Gestión</th></tr></thead><tbody>{attendanceDevices.length ? attendanceDevices.map((item) => <tr key={item.id} className="border-t"><td className="p-2 font-bold">{item.label}</td><td className="p-2">{item.site}</td><td className="p-2">{item.full_name}</td><td className="p-2">{item.status}</td><td className="p-2 text-right"><span className="text-xs text-slate-500">Supervisión → Asistencia</span></td></tr>) : <tr><td colSpan={5} className="p-3 text-slate-500">No hay equipos solicitados.</td></tr>}</tbody></table></div>
                     </section>
                     </div>
                   )}
