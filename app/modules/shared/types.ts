@@ -107,7 +107,7 @@ export type StockMovement = {
   id: string;
   site: string;
   productId: number;
-  kind: "Ingreso por remito" | "Recepción de pedido" | "Venta" | "Anulación" | "Devolución" | "Ajuste de inventario" | "Merma" | "Ingreso manual" | "Egreso manual";
+  kind: "Carga inicial de stock" | "Ingreso por remito" | "Recepción de pedido" | "Venta" | "Anulación" | "Devolución" | "Ajuste de inventario" | "Merma" | "Ingreso manual" | "Egreso manual";
   quantity: number;
   remito: string;
   detail: string;
@@ -158,6 +158,8 @@ export type CashTransfer = { id: string; originSite: string; destination: string
 export type AttendanceRecord = { id: string; userId?: number; userName: string; site: string; kind: "Entrada" | "Salida"; at: string; atISO: string; lateMinutes?: number; presenceStatus?: "Dentro de zona" | "Excepción aprobada"; distanceMeters?: number; accuracyMeters?: number; locationCapturedAt?: string; attendanceExceptionId?: string };
 export type Incident = { id: string; site: string; type: string; detail: string; createdAt: string; createdBy: string; status: "Abierta" | "En revisión" | "Resuelta" };
 export type StockAdjustment = { id: string; site: string; productId: number; counted: number; theoretical: number; reason: string; requestedAt: string; requestedBy: string; status: "Pendiente" | "Aprobado" | "Rechazado" };
+/** Registro inmutable de la única carga de inventario con la que inicia un local. */
+export type InitialStockLoad = { site: string; completedAt: string; completedBy: string; note: string; productCount: number };
 export type CashFields = { fund: number; expenses: number; withdrawals: number; counted: number; envelope: number; closed: boolean };
 
 export type OperationalSnapshot = {
@@ -165,6 +167,7 @@ export type OperationalSnapshot = {
   minimumStock?: Record<number, number>;
   realStock?: Record<number, string>;
   stockCountComments?: Record<number, string>;
+  initialStockLoad?: InitialStockLoad;
   sales?: Sale[];
   payments?: Payment[];
   customers?: CustomerRecord[];

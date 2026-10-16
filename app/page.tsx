@@ -34,7 +34,7 @@ import type {
   ExpenseSyncSnapshot,
   OperationalLimits, OperationalSnapshot, PasswordResetRequest, Payment,
   PriceChange, Product, ReturnTransaction, Role, Sale, SavedOrder,
-  StockAdjustment, StockMovement, StockRequest, SystemHealth, CustomerRecord,
+  InitialStockLoad, StockAdjustment, StockMovement, StockRequest, SystemHealth, CustomerRecord,
   PostCloseCancellationAdjustment,
 } from "./modules/shared/types";
 import {
@@ -390,6 +390,8 @@ export default function Home() {
       ]),
     ),
   );
+  const [initialStockLoads, setInitialStockLoads] = useState<Record<string, InitialStockLoad>>({});
+  const [initialStockNote, setInitialStockNote] = useState("");
   const [payments, setPayments] = useState<Payment[]>([]);
   useEffect(() => {
     // Conserva una transición limpia para quienes tenían abierto el chat de la
@@ -955,6 +957,14 @@ export default function Home() {
           ]),
         ),
       }));
+      setInitialStockLoads((items) => ({
+        ...items,
+        ...Object.fromEntries(
+          entries.flatMap(([local, entry]) =>
+            entry.state.initialStockLoad ? [[local, entry.state.initialStockLoad] as const] : [],
+          ),
+        ),
+      }));
       setSales(all("sales") as Sale[]);
       setPayments(all("payments") as Payment[]);
       // Compatibilidad con las primeras cargas del módulo: los registros
@@ -1206,6 +1216,7 @@ export default function Home() {
       minimumStock: minimumStock[local] || {},
       realStock: realStock[local] || {},
       stockCountComments: stockCountComments[local] || {},
+      initialStockLoad: initialStockLoads[local],
       sales: localSales,
       payments: payments.filter((item) => item.saleId && saleIds.has(item.saleId)),
       customers: customers.filter((item) => item.site === local),
@@ -1432,6 +1443,7 @@ export default function Home() {
     minimumStock,
     realStock,
     stockCountComments,
+    initialStockLoads,
     sales,
     payments,
     customers,
@@ -3000,6 +3012,53 @@ export default function Home() {
     setMessage(automatic
       ? `Carga aplicada: ${adjustments.length} ajuste(s) de stock quedaron auditados.`
       : `Control enviado: ${adjustments.length} diferencia(s) quedan pendientes de aprobación de la supervisora autorizada.`);
+  };
+  const submitInitialStockLoad = () => {
+    if (!user || !can("stock"))
+      return setMessage("Tu usuario no tiene permiso para cargar el stock inicial.");
+    if (initialStockLoads[site])
+      return setMessage(`La carga inicial de ${site} ya fue confirmada. Para cambios posteriores usá el control de stock.`);
+    if (!initialStockNote.trim())
+      return setMessage("Indicá una referencia para esta carga inicial (por ejemplo, fecha y responsable del conteo).");
+
+    const countedStock = Object.fromEntries(
+      products.map((product) => [
+        product.id,
+        Math.max(0, Number(realStock[site]?.[product.id] || 0)),
+      ]),
+    ) as Record<number, number>;
+    const nonZeroProducts = products.filter((product) => countedStock[product.id] > 0);
+    if (!window.confirm(
+      `Vas a aplicar el conteo inicial de ${site} (${products.length} productos; ${nonZeroProducts.length} con existencias). Los campos Real vacíos se tomarán como 0. Esta acción queda auditada y no se podrá repetir. ¿Confirmás?`,
+    )) return;
+
+    const now = operationalNow();
+    const load: InitialStockLoad = {
+      site,
+      completedAt: now.toLocaleString("es-AR"),
+      completedBy: user.name,
+      note: initialStockNote.trim(),
+      productCount: products.length,
+    };
+    setStock((items) => ({ ...items, [site]: countedStock }));
+    setInitialStockLoads((items) => ({ ...items, [site]: load }));
+    nonZeroProducts.forEach((product) => {
+      recordStockMovement({
+        site,
+        productId: product.id,
+        kind: "Carga inicial de stock",
+        quantity: countedStock[product.id],
+        remito: "",
+        detail: load.note,
+        reference: `carga-inicial:${site}:${now.toISOString()}`,
+      });
+    });
+    recordAudit(
+      "Carga inicial de stock confirmada",
+      `${site} · ${products.length} productos contados · ${nonZeroProducts.length} con existencias · ${load.note}`,
+    );
+    setInitialStockNote("");
+    setMessage(`Carga inicial aplicada: ${nonZeroProducts.length} producto(s) con stock y ${products.length - nonZeroProducts.length} en cero. Quedó auditada y bloqueada para ${site}.`);
   };
   const approveStockAdjustment = (
     adjustment: StockAdjustment,
@@ -5226,6 +5285,42 @@ export default function Home() {
               <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#eef2f6] p-3 text-sm text-[#183a67]">
                 <b>Stock ideal:</b> define hasta qué cantidad se propone reponer cada producto. Solo las supervisoras autorizadas por Administración pueden editarlo; el resto de los perfiles lo consulta.
               </p>
+              <div className="mb-4 rounded-2xl border border-[#9bc6a5] bg-[#eef8f0] p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <b>Carga inicial de stock</b>
+                    <p className="mt-1 max-w-3xl text-sm text-slate-700">
+                      Se usa solo el primer día de un local. Cargá el conteo físico en la columna <b>Real</b> de la tabla y confirmalo acá: se aplicará directo al stock, sin aprobación, quedará auditado y después se bloqueará.
+                    </p>
+                  </div>
+                  {initialStockLoads[site] && <span className="rounded-full bg-[#d8efdc] px-3 py-1 text-xs font-bold text-[#176b38]">Carga inicial confirmada</span>}
+                </div>
+                {initialStockLoads[site] ? (
+                  <p className="mt-3 rounded-xl border border-[#b9d8bf] bg-white p-3 text-sm text-slate-700">
+                    Confirmada por <b>{initialStockLoads[site].completedBy}</b> el {initialStockLoads[site].completedAt}. Referencia: {initialStockLoads[site].note}. Las correcciones posteriores se hacen desde <b>Cerrar control de stock</b> y siguen su circuito de autorización.
+                  </p>
+                ) : canCountRealStock ? (
+                  <div className="mt-4 flex flex-wrap items-end gap-3">
+                    <label className="min-w-[260px] flex-1 text-sm font-bold">
+                      Referencia de la carga inicial
+                      <input
+                        value={initialStockNote}
+                        onChange={(event) => setInitialStockNote(event.target.value)}
+                        placeholder="Ej.: Conteo inicial Maure · 16/10 · responsable"
+                        className="mt-1 block w-full rounded border border-[#9bc6a5] bg-white p-2 font-normal"
+                      />
+                    </label>
+                    <button
+                      onClick={submitInitialStockLoad}
+                      className="rounded bg-[#176b38] px-4 py-2.5 font-bold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#10552b] focus:outline-none focus:ring-2 focus:ring-[#ec3a35] focus:ring-offset-2"
+                    >
+                      Confirmar carga inicial
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-slate-600">Tu perfil no tiene permiso para confirmar la carga inicial. Pedile a la responsable de stock que la realice desde este módulo.</p>
+                )}
+              </div>
               {lowStockProducts.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[#f0bd4e] bg-[#fff5d8] p-4">
                   <b>Reposición sugerida</b>
