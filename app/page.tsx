@@ -2226,6 +2226,21 @@ export default function Home() {
     return intervals;
   }, [hourInterval, reportFrom, reportSite, reportTo, sales]);
   const cashControlIsOpen = Boolean(cashIsOpen && activeShift?.id);
+  // El fondo que queda luego del último cierre es una referencia para la
+  // próxima apertura: efectivo contado menos el importe retirado al sobre.
+  // No reemplaza el conteo físico ni se usa hasta que la responsable confirme
+  // la nueva apertura.
+  const suggestedInitialFund = useMemo(() => {
+    const lastClosedShift = shiftLog
+      .filter((shift) => shift.site === site && (shift.closedAtISO || shift.closedAt))
+      .sort((left, right) =>
+        Date.parse(right.closedAtISO || right.closedAt || "") - Date.parse(left.closedAtISO || left.closedAt || ""),
+      )[0];
+    if (!lastClosedShift) return null;
+    const countedAtClose = lastClosedShift.countedCash ?? lastClosedShift.expectedCash;
+    if (countedAtClose == null) return null;
+    return Math.max(0, countedAtClose - (lastClosedShift.envelopeAmount || 0));
+  }, [shiftLog, site]);
   const expected = cashControlIsOpen ? ledgerCashBalance - expenses - withdrawals : 0,
     cashRemaining = cashControlIsOpen ? counted - (requiresEnvelope ? envelope : 0) : 0,
     cashVariance = cashControlIsOpen ? counted - expected : 0;
@@ -3894,6 +3909,9 @@ export default function Home() {
         items.map((shift) => (shift.id === finalShift.id ? finalShift : shift)),
       );
       setActiveShiftBySite((items) => ({ ...items, [site]: undefined }));
+      // Deja una sugerencia editable para la siguiente responsable. El valor
+      // sigue siendo una declaración nueva, no una reapertura automática.
+      setFund(Math.max(0, cashRemaining));
     }
     if (requiresEnvelope && envelope > 0)
       setEnvelopeRecords((items) => [
@@ -4983,6 +5001,12 @@ export default function Home() {
                     disabled={Boolean(activeShift)}
                     className="mt-1 w-full rounded border p-2"
                   />
+                  {!cashIsOpen && suggestedInitialFund != null && (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-[#b9d8c0] bg-[#eef5ef] p-2 text-xs text-[#183a67]">
+                      <span>Último cierre: quedó sugerido {money.format(suggestedInitialFund)}. Contalo y corregilo si el efectivo real es otro.</span>
+                      <button type="button" onClick={() => setFund(suggestedInitialFund)} className="font-bold underline">Usar sugerido</button>
+                    </div>
+                  )}
                   {!cashIsOpen && (
                     <button
                       onClick={openCash}
@@ -4995,6 +5019,7 @@ export default function Home() {
                     <div className="mt-3 rounded border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm">
                       <b>Turno abierto</b>
                       <p className="mt-1">Responsable: {activeShift.openedBy} · Fondo declarado: {money.format(activeShift.initialFund)}</p>
+                      <p className="mt-2 text-xs text-slate-600">El fondo queda bloqueado después de abrir para preservar el arqueo. Si hubo un error, registrá el movimiento correspondiente; no se edita una apertura ya confirmada.</p>
                       <p className="mt-2 text-xs text-slate-600">Para el relevo es obligatorio realizar el cierre completo, incluido el arqueo. La siguiente responsable podrá abrir una nueva caja una vez confirmado el cierre.</p>
                     </div>
                   )}
