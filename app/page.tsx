@@ -17,7 +17,7 @@ import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./module
 import MrpPanel from "./modules/administracion/MrpPanel";
 import CatalogEditor from "./modules/administracion/CatalogEditor";
 import { useCatalog } from "./modules/config/useCatalog";
-import { findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
+import { addConfirmedThirdPartyProducts, findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
 import CustomerPanel from "./modules/clientes/CustomerPanel";
 import InternalChatPanel from "./modules/chat/InternalChatPanel";
@@ -425,6 +425,16 @@ export default function Home() {
       });
     }
   // La revisión 0 solo existe antes del primer guardado central.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.role, catalog.ready, catalog.document.revision]);
+  useEffect(() => {
+    if (user?.role !== "administracion" || !catalog.ready) return;
+    const nextProducts = addConfirmedThirdPartyProducts(catalog.document.products);
+    if (nextProducts.length === catalog.document.products.length) return;
+    void catalog.save(nextProducts, catalog.document.priceChanges, catalog.document.revision)
+      .then(() => recordAudit("Productos tercerizados incorporados", "Se incorporaron 13 productos confirmados desde la lista de precios al grupo Tercerizados."))
+      .catch((error) => setMessage(error instanceof Error ? error.message : "No se pudieron incorporar los productos tercerizados."));
+  // Sólo se ejecuta si falta alguno de los productos confirmados.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, catalog.ready, catalog.document.revision]);
   useEffect(() => {

@@ -7,6 +7,49 @@ export const RETIRED_CATALOG_CODES = new Set(["250", "251"]);
 export const applyCatalogRetirements = (products: Product[]) =>
   products.map((product) => RETIRED_CATALOG_CODES.has(product.code) ? { ...product, active: false } : product);
 
+const THIRD_PARTY_ADDITIONS: Array<Pick<Product, "name" | "detail" | "category" | "price">> = [
+  { name: "Bolognesa de la Torre", detail: "360 g", category: "Tercerizados", price: 6500 },
+  { name: "Crema de Cebollas Asadas", detail: "230 g", category: "Tercerizados", price: 6400 },
+  { name: "Pasta de Berenjena", detail: "230 g", category: "Tercerizados", price: 6500 },
+  { name: "Pasta de Garbanzos", detail: "230 g", category: "Tercerizados", price: 6500 },
+  { name: "Pulpa condimentada albahaca", detail: "500 g", category: "Tercerizados", price: 4500 },
+  { name: "Pulpa condimentada con cebolla", detail: "Presentación sin especificar", category: "Tercerizados", price: 4500 },
+  { name: "Pulpa de pizza", detail: "Presentación sin especificar", category: "Tercerizados", price: 4500 },
+  { name: "Pulpa de Tomate", detail: "500 g", category: "Tercerizados", price: 4100 },
+  { name: "Tomate con Alcaucil y Cebolla", detail: "360 g", category: "Tercerizados", price: 6500 },
+  { name: "Tomate con Berenjena Asada", detail: "360 g", category: "Tercerizados", price: 6500 },
+  { name: "Tomate Frito en Oliva", detail: "500 g", category: "Tercerizados", price: 5500 },
+  { name: "Tomate Oliva c Aceitunas", detail: "360 g", category: "Tercerizados", price: 6000 },
+  { name: "Tomate Triturado", detail: "500 g", category: "Tercerizados", price: 3000 },
+];
+
+/** Agrega sólo los artículos confirmados por la lista de precios recibida. */
+export const addConfirmedThirdPartyProducts = (products: Product[]) => {
+  const next = [...products];
+  let nextId = Math.max(0, ...next.map((product) => product.id)) + 1;
+  let nextCode = 900;
+  const usedCodes = new Set(next.map((product) => product.code));
+  for (const addition of THIRD_PARTY_ADDITIONS) {
+    const exists = next.some((product) =>
+      product.name.localeCompare(addition.name, "es", { sensitivity: "accent" }) === 0 &&
+      product.detail.localeCompare(addition.detail, "es", { sensitivity: "accent" }) === 0,
+    );
+    if (exists) continue;
+    while (usedCodes.has(String(nextCode))) nextCode += 1;
+    const code = String(nextCode++);
+    usedCodes.add(code);
+    next.push({
+      ...addition,
+      id: nextId++,
+      code,
+      barcode: `LART-${code}`,
+      onlinePrice: Math.round(addition.price * 1.25),
+      active: true,
+    });
+  }
+  return next;
+};
+
 // Tres dígitos conservan los ceros y evitan lecturas parciales de códigos más largos.
 export const normalizeBarcode = (value: string) => {
   const text = value.trim().toUpperCase();
