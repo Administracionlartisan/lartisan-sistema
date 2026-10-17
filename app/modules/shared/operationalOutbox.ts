@@ -100,6 +100,28 @@ export function isOpeningAlreadyClosedOnServer(
   );
 }
 
+/**
+ * Detecta una apertura local obsoleta que nunca llegó a confirmarse y fue
+ * reemplazada por una apertura posterior ya vigente en el servidor. No admite
+ * ventas, cobros, stock ni ningún otro movimiento: sólo puede retirar esa
+ * apertura inválida para que no bloquee operaciones nuevas que sí son reales.
+ */
+export function isOpeningSupersededByServer(
+  write: PendingOperationalWrite | undefined,
+  server: OperationalSnapshot | undefined,
+): boolean {
+  if (!write || !server?.cashOpen || !server.activeShift || !write.state.cashOpen || !write.state.activeShift) return false;
+  if (server.activeShift.id === write.state.activeShift.id) return false;
+  const added = (key: "sales" | "payments" | "returnsLog" | "stockMovements" | "cashAdjustments" | "cashTransfers") => {
+    const before = new Set(((write.baseState[key] ?? []) as unknown as { id?: string }[]).map((item) => item?.id).filter(Boolean));
+    return ((write.state[key] ?? []) as unknown as { id?: string }[]).some((item) => item?.id && !before.has(item.id));
+  };
+  if (added("sales") || added("payments") || added("returnsLog") || added("stockMovements") || added("cashAdjustments") || added("cashTransfers")) return false;
+  const newShifts = (write.state.shiftLog ?? []).filter((item) => !(write.baseState.shiftLog ?? []).some((base) => base.id === item.id));
+  const newLedger = (write.state.cashLedger ?? []).filter((item) => !(write.baseState.cashLedger ?? []).some((base) => base.id === item.id));
+  return newShifts.length === 1 && newShifts[0].id === write.state.activeShift.id && newLedger.length === 1 && newLedger[0].shiftId === write.state.activeShift.id;
+}
+
 const DB_NAME = "lartisan-outbox";
 const STORE = "queues";
 const legacyPrefix = (userId: string) => `lartisan:operations-outbox:${userId}:`;
@@ -205,6 +227,14 @@ export class OperationalOutbox {
 
   unblockAll() {
     return Promise.all(this.sites().map((site) => this.save(site, { ...this.get(site), blocked: undefined })));
+  }
+
+  /** Retira sólo una apertura local que el servidor ya reemplazó de forma segura. */
+  async discardSupersededOpening(site: string, server: OperationalSnapshot): Promise<boolean> {
+    const queue = this.get(site);
+    if (!isOpeningSupersededByServer(queue.writes[0], server)) return false;
+    await this.save(site, { ...queue, writes: queue.writes.slice(1), blocked: undefined });
+    return true;
   }
 
   /**

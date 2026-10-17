@@ -956,17 +956,28 @@ export default function Home() {
     // evidencia estricta; ventas, cobros, devoluciones y stock nunca entran en
     // esta recuperación.
     let recoveredStaleOpening = false;
+    const discardedSupersededOpenings: string[] = [];
     if (outbox) {
       for (const [local, entry] of Object.entries(data.states || {})) {
         const queue = outbox.get(local);
         if (queue.writes.length === 1 && isOpeningAlreadyClosedOnServer(queue.writes[0], entry.state)) {
           await outbox.acknowledge(local, queue.writes[0].requestId);
           recoveredStaleOpening = true;
+        } else if (await outbox.discardSupersededOpening(local, entry.state)) {
+          discardedSupersededOpenings.push(local);
         }
       }
       if (recoveredStaleOpening) {
         setPendingSync(outbox.count());
         setMessage("Se confirmó la apertura antigua ya cerrada en el servidor. No se creó ni modificó ningún cobro.");
+      }
+      if (discardedSupersededOpenings.length) {
+        setPendingSync(outbox.count());
+        setMessage(`Se retiró una apertura local obsoleta de ${discardedSupersededOpenings.join(", ")}. Las ventas pendientes se enviarán ahora sin duplicarlas.`);
+        // La cola que queda parte del estado vigente del servidor. Se vuelve a
+        // drenar de inmediato para no obligar a la vendedora a esperar el
+        // próximo ciclo automático ni repetir el cobro.
+        discardedSupersededOpenings.forEach((local) => { void drainSite(local); });
       }
     }
     // Una cola bloqueada fue rechazada definitivamente por el servidor. Se

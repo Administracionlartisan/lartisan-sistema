@@ -101,6 +101,15 @@ test("Relevos: una cola bloqueada no oculta la caja vigente del local", () => {
   assert.match(page, /Una cola bloqueada fue rechazada definitivamente/);
 });
 
+test("Relevos: una apertura local obsoleta no bloquea nuevas ventas", () => {
+  assert.match(outbox, /function isOpeningSupersededByServer/);
+  assert.match(outbox, /No admite[\s\S]*ventas, cobros, stock ni ningún otro movimiento/);
+  assert.match(outbox, /discardSupersededOpening/);
+  assert.match(outbox, /writes: queue\.writes\.slice\(1\), blocked: undefined/);
+  assert.match(page, /Las ventas pendientes se enviarán ahora sin duplicarlas/);
+  assert.match(page, /void drainSite\(local\)/);
+});
+
 test("Acceso: el relevo puede volver al inicio con el botón Cambiar usuario", () => {
   assert.match(page, /Cambiar usuario/);
   assert.match(page, /onClick=\{logout\}/);
