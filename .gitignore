@@ -60,3 +60,5 @@ next-env.d.ts
 
 # documentos para entregar al cliente (no forman parte del código)
 /entregables/
+output/*.tgz
+output/*.tar.gz
