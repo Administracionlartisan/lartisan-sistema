@@ -438,7 +438,7 @@ function user_action_permissions(array $user): array
         if ($user['role'] === 'compras') return ['mrp'];
         return $user['role'] === 'supervisora'
             ? ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar']
-            : ['cobrar', 'egresos', 'pedidos', 'incidencias', 'transferirCaja'];
+            : ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'transferirCaja'];
     }
     $decoded = json_decode((string) ($user['action_permissions'] ?? '[]'), true);
     return is_array($decoded) ? array_values(array_filter($decoded, 'is_string')) : [];
@@ -446,6 +446,9 @@ function user_action_permissions(array $user): array
 
 function user_can_action(array $user, string $permission): bool
 {
+    // La anulación de una venta está disponible para quien la cobra en el
+    // local. Nunca borra la venta: queda una auditoría con usuario y hora.
+    if ($permission === 'anular' && $user['role'] === 'vendedora') return true;
     // El stock ideal es una configuración operativa acotada: no se concede por
     // cargo ni por el bypass administrativo. Administración asigna esta acción
     // explícitamente a las supervisoras responsables desde Usuarios.

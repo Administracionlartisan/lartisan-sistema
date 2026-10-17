@@ -52,7 +52,7 @@ export const defaultActionPermissions = (role: Role) =>
       ? ["mrp"]
     : role === "supervisora"
       ? ["cobrar", "anular", "egresos", "pedidos", "incidencias", "stock", "transferirCaja", "exportar"]
-      : ["cobrar", "egresos", "pedidos", "incidencias", "transferirCaja"];
+      : ["cobrar", "anular", "egresos", "pedidos", "incidencias", "transferirCaja"];
 
 // Las identidades se obtienen de la API después de autenticar.
 export const INITIAL_MANAGED_USERS: ManagedUser[] = [];

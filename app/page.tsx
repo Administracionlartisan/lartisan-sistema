@@ -1842,7 +1842,7 @@ export default function Home() {
   // Administración es el rol propietario: ningún permiso agregado después de
   // iniciar sesión debe ocultarle un módulo operativo.
   const can = (permission: string) =>
-    user?.role === "administracion" || Boolean(user?.actionPermissions.includes(permission));
+    user?.role === "administracion" || (permission === "anular" && user?.role === "vendedora") || Boolean(user?.actionPermissions.includes(permission));
   const canAdjustStock = can("stock");
   // La vendedora puede registrar sólo ingresos de mercadería de su local.
   // No obtiene permiso para conteos de control, mermas ni egresos manuales.
@@ -3671,6 +3671,9 @@ export default function Home() {
     if (!can("anular"))
       return setMessage("Tu usuario no tiene permiso para anular ventas.");
     if (sale.status === "anulada") return;
+    const reason = window.prompt("Motivo de la anulación (obligatorio):")?.trim();
+    if (!reason) return setMessage("La venta no fue anulada: indicá el motivo para conservar el registro.");
+    if (!window.confirm(`¿Confirmás la anulación de ${money.format(sale.net)}? Se revertirán el cobro y el stock, y quedará auditada.`)) return;
     const salePayments = payments.filter((item) => item.saleId === sale.id);
     const priorReturns = returnsLog.filter((item) => item.saleId === sale.id);
     let alreadyRefunded = priorReturns
@@ -3695,7 +3698,7 @@ export default function Home() {
         // anulación se registra después del cierre. Así el libro mayor queda
         // trazable sin contaminar la próxima caja abierta.
         shiftId: item.shiftId,
-        detail: "Reversión de cobro por venta anulada",
+        detail: `Reversión de cobro por venta anulada · Motivo: ${reason}`,
       });
     });
     const returnedAndRestocked = priorReturns
@@ -3738,7 +3741,7 @@ export default function Home() {
     );
     recordAudit(
       "Venta anulada",
-      `${sale.id.slice(0, 8)} · ${money.format(sale.net)} · ${sale.method}`,
+      `${sale.id.slice(0, 8)} · ${money.format(sale.net)} · ${sale.method} · Motivo: ${reason}`,
     );
     // Una venta del turno cerrado debe compensarse en Drive. La clave es el
     // ID estable de la venta: el servidor y Apps Script la usan para que ni
@@ -3757,7 +3760,7 @@ export default function Home() {
         businessDate: dateKey(new Date(closedShift.closedAtISO || closedShift.closedAt || sale.createdAtISO)),
         amount,
         paymentMethod: salePayments.length === 1 ? salePayments[0].method : "Múltiple",
-        reason: "Anulación posterior al cierre",
+        reason: `Anulación posterior al cierre · ${reason}`,
         auditReference: `sale:${sale.id};close:${closedShift.id}`,
         status: "pending",
         attempts: 0,
@@ -3767,7 +3770,7 @@ export default function Home() {
       void syncPostCloseCancellation(adjustment);
     }
     setMessage(
-      "Venta anulada: se restituyó el stock y se descontó del cierre.",
+      "Venta anulada y auditada: se restituyó el stock y se descontó del cierre.",
     );
   };
   const registerReturn = () => {
@@ -5053,8 +5056,8 @@ export default function Home() {
                         </button>
                       ))}
                     <div className="mt-4 border-t pt-4">
-                      <p className="text-sm font-bold">Buscar venta y corregir medio de pago</p>
-                      <p className="mt-1 text-xs text-slate-500">La corrección conserva productos, total, stock y la venta original. Si interviene efectivo, ajusta la caja y deja auditoría.</p>
+                      <p className="text-sm font-bold">Buscar venta, corregir medio de pago o anular</p>
+                      <p className="mt-1 text-xs text-slate-500">La anulación pide motivo, revierte el cobro y el stock, y conserva el registro con usuaria, fecha y hora.</p>
                       <input
                         value={saleSearch}
                         onChange={(event) => setSaleSearch(event.target.value)}
@@ -5109,11 +5112,13 @@ export default function Home() {
                                 <option>Remito interno</option>
                               </select>
                               {sale.status === "activa" && (
-                              <button
+                              <button type="button"
+                                disabled={!can("anular")}
+                                title={can("anular") ? "Anular con registro" : "Tu usuario no tiene permiso para anular ventas"}
                                 onClick={() => cancelSale(sale)}
-                                className="underline"
+                                className="rounded border border-red-300 px-2 py-1 font-bold text-red-800 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                Anular
+                                Anular venta
                               </button>
                             )}
                             <button
