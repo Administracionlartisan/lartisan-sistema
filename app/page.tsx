@@ -9395,21 +9395,35 @@ export default function Home() {
                 Validando factura fiscal con ARCA…
               </div>
             ) : fiscalReceipt ? (
-              <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-3 font-mono text-[12px] leading-[1.35] text-black">
-                <pre className="whitespace-pre-wrap">{[
-                  "", "L'ARTISAN", "FACTURA ELECTRÓNICA", fiscalReceipt.invoiceType.toUpperCase(),
-                  "ORIGINAL", "--------------------------------", `Punto de venta: ${String(fiscalReceipt.pointOfSale).padStart(5, "0")}`,
-                  `Comprobante: ${String(fiscalReceipt.voucherNumber).padStart(8, "0")}`,
-                  `Cliente: ${fiscalReceipt.customerName}`,
-                  fiscalReceipt.customerDocumentNumber ? `${fiscalReceipt.customerDocumentType}: ${fiscalReceipt.customerDocumentNumber}` : "Consumidor final",
-                  "--------------------------------",
-                  ...receiptSale.items.map((item) => `1 x ${item.name}`),
-                  "--------------------------------", `Neto: ${money.format(fiscalReceipt.net)}`,
-                  `IVA: ${money.format(fiscalReceipt.vat)}`, `TOTAL: ${money.format(fiscalReceipt.total)}`,
-                  "--------------------------------", `CAE: ${fiscalReceipt.cae}`,
-                  `Vto. CAE: ${fiscalReceipt.caeExpiresOn || "—"}`, "",
-                ].join("\n")}</pre>
-                {fiscalReceiptQr ? <img src={fiscalReceiptQr} alt="Código QR fiscal ARCA" className="mx-auto mt-2 h-[36mm] w-[36mm]" /> : <p className="mt-2 text-center text-xs">Generando QR fiscal…</p>}
+              <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-3 font-mono text-[11px] leading-[1.35] text-black">
+                <header className="border-b border-dashed border-black pb-2 text-center">
+                  <p className="text-[13px] font-bold tracking-wide">PANDAS COORP S.R.L.</p>
+                  <p>L&apos;ARTISAN</p>
+                  <p>CUIT 30-71629347-1 · IVA Responsable Inscripto</p>
+                  <p className="mt-2 text-[13px] font-bold">{fiscalReceipt.invoiceType.toUpperCase()}</p>
+                  <p className="font-bold">ORIGINAL</p>
+                </header>
+                <section className="border-b border-dashed border-black py-2">
+                  <div className="flex justify-between"><span>Punto de venta</span><b>{String(fiscalReceipt.pointOfSale).padStart(5, "0")}</b></div>
+                  <div className="flex justify-between"><span>Comprobante</span><b>{String(fiscalReceipt.voucherNumber).padStart(8, "0")}</b></div>
+                  <div className="mt-1">Cliente: {fiscalReceipt.customerName}</div>
+                  <div>{fiscalReceipt.customerDocumentNumber ? `${fiscalReceipt.customerDocumentType}: ${fiscalReceipt.customerDocumentNumber}` : "A CONSUMIDOR FINAL"}</div>
+                </section>
+                <section className="border-b border-dashed border-black py-2">
+                  <div className="mb-1 grid grid-cols-[1fr_auto_auto] gap-x-2 text-[10px] font-bold"><span>DESCRIPCIÓN</span><span>CANT.</span><span>IMPORTE</span></div>
+                  {receiptSale.items.map((item) => <div key={item.id} className="grid grid-cols-[1fr_auto_auto] gap-x-2"><span>{item.name}</span><span>1</span><span>{money.format(item.price)}</span></div>)}
+                </section>
+                <section className="border-b border-dashed border-black py-2">
+                  <div className="flex justify-between"><span>Neto gravado</span><span>{money.format(fiscalReceipt.net)}</span></div>
+                  <div className="flex justify-between"><span>IVA</span><span>{money.format(fiscalReceipt.vat)}</span></div>
+                  <div className="mt-1 flex justify-between text-[14px] font-bold"><span>TOTAL</span><span>{money.format(fiscalReceipt.total)}</span></div>
+                </section>
+                <section className="pt-2 text-center">
+                  <p className="font-bold">CAE: {fiscalReceipt.cae}</p>
+                  <p>Vto. CAE: {fiscalReceipt.caeExpiresOn || "—"}</p>
+                  {fiscalReceiptQr ? <img src={fiscalReceiptQr} alt="Código QR fiscal ARCA" className="mx-auto mt-2 h-[30mm] w-[30mm]" /> : <p className="mt-2 text-center text-xs">Generando QR fiscal…</p>}
+                  <p className="mt-1 text-[9px]">Comprobante autorizado electrónicamente por ARCA</p>
+                </section>
               </div>
             ) : (
               <pre className="receipt-print-area mx-auto w-full max-w-[80mm] whitespace-pre-wrap bg-white p-3 font-mono text-[12px] leading-[1.35] text-black">
