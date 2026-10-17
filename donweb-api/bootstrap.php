@@ -508,6 +508,9 @@ function authorize_operational_snapshot(array $user, array $previous, array $inc
         'cashTransfers' => ['transferirCaja'],
         'stock' => ['cobrar', 'anular', 'pedidos'],
         'stockMovements' => ['cobrar', 'anular', 'pedidos'],
+        // La vendedora puede hacer una única carga inicial desde Ventas. Al
+        // persistir la marca, una recarga no vuelve a habilitarla por error.
+        'initialStockLoad' => ['cobrar'],
         'cash' => ['cobrar', 'egresos', 'transferirCaja'],
         'cashOpen' => ['cobrar'],
         'activeShift' => ['cobrar'],
@@ -1247,6 +1250,63 @@ function merge_operational_list(string $field, array $base, array $current, arra
     $result = [];
     foreach (array_values(array_unique($order)) as $key) if (array_key_exists($key, $map)) $result[] = $map[$key];
     return $result;
+}
+
+/**
+ * Stock is a derived balance, not an editable snapshot. A browser can be
+ * behind the server (or restore an old local cache), therefore accepting a
+ * changed balance without the matching audited movement can erase inventory.
+ *
+ * @return array{0: array, 1: array<int>}
+ */
+function protect_stock_snapshot_integrity(array $previous, array $candidate): array
+{
+    $previousStock = is_array($previous['stock'] ?? null) ? $previous['stock'] : [];
+    $candidateStock = is_array($candidate['stock'] ?? null) ? $candidate['stock'] : [];
+    $previousMovements = operational_items_by_id($previous['stockMovements'] ?? []);
+    $candidateMovements = is_array($candidate['stockMovements'] ?? null) ? $candidate['stockMovements'] : [];
+
+    // A partial browser cache must never be able to trim the audit journal.
+    $candidateById = operational_items_by_id($candidateMovements);
+    foreach ($previousMovements as $id => $movement) {
+        if (!isset($candidateById[$id])) $candidateMovements[] = $movement;
+    }
+    $candidate['stockMovements'] = $candidateMovements;
+
+    $recordedDeltas = [];
+    foreach ($candidateMovements as $movement) {
+        if (!is_array($movement) || empty($movement['id']) || !is_scalar($movement['id'])) continue;
+        $id = (string) $movement['id'];
+        // Existing movements are already reflected in the server balance.
+        if (isset($previousMovements[$id])) continue;
+        $productId = filter_var($movement['productId'] ?? null, FILTER_VALIDATE_INT);
+        if ($productId === false || $productId < 1 || !is_numeric($movement['quantity'] ?? null)) continue;
+        $recordedDeltas[$productId] = ($recordedDeltas[$productId] ?? 0.0) + (float) $movement['quantity'];
+    }
+
+    $productIds = array_unique(array_merge(array_keys($previousStock), array_keys($candidateStock), array_keys($recordedDeltas)));
+    $protectedStock = $previousStock;
+    $repairedProducts = [];
+    foreach ($productIds as $rawProductId) {
+        if (!is_numeric($rawProductId)) continue;
+        $productId = (int) $rawProductId;
+        if ($productId < 1) continue;
+        $before = max(0.0, (float) ($previousStock[$rawProductId] ?? $previousStock[$productId] ?? 0));
+        $incoming = max(0.0, (float) ($candidateStock[$rawProductId] ?? $candidateStock[$productId] ?? $before));
+        $documentedDelta = (float) ($recordedDeltas[$productId] ?? 0.0);
+        $expected = max(0.0, $before + $documentedDelta);
+        if (abs($incoming - $expected) > 0.00001) $repairedProducts[] = $productId;
+        $protectedStock[$productId] = $expected;
+    }
+    $candidate['stock'] = $protectedStock;
+
+    // Once confirmed, initial inventory is immutable. A reconnecting browser
+    // cannot reopen it and turn empty count fields into zeros.
+    if (!empty($previous['initialStockLoad'])) {
+        $candidate['initialStockLoad'] = $previous['initialStockLoad'];
+    }
+
+    return [$candidate, array_values(array_unique($repairedProducts))];
 }
 
 function merge_operational_snapshot(array $base, array $current, array $incoming): array

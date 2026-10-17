@@ -1825,6 +1825,15 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         } else {
             $state = $authorizedIncoming;
         }
+        [$state, $stockIntegrityRepairs] = protect_stock_snapshot_integrity($previousState, $state);
+        if ($stockIntegrityRepairs) {
+            audit(
+                $pdo,
+                (int) $user['id'],
+                'stock_snapshot_protected',
+                $site . ' · estado de stock sin movimientos respaldatorios · productos: ' . implode(',', $stockIntegrityRepairs),
+            );
+        }
         validate_test_operating_snapshot($pdo, $site, $previousState, $state, $clientEvent);
         // El registro del local está bloqueado con FOR UPDATE. Esta validación
         // convierte la política de una única caja/responsable en una garantía
