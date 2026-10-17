@@ -65,6 +65,10 @@ const completeStockMap = (saved: Record<number, unknown> | undefined, products: 
     ...Object.entries(saved ?? {}).map(([id, value]) => [id, safeStockQuantity(value)]),
     ...products.map((product) => [product.id, safeStockQuantity(saved?.[product.id])]),
   ]) as Record<number, number>;
+// Cada local habilita su única carga inicial al empezar a operar. Maure ya
+// completó y confirmó la suya, por eso allí sólo se muestran ingresos normales
+// de mercadería para evitar confundir ambos circuitos.
+const INITIAL_STOCK_DISABLED_SITES = new Set(["Maure"]);
 const SALE_PROMOTIONS: { name: string; discount?: number; method?: string }[] = [
   { name: "10% débito", discount: 10, method: "Tarjeta" },
   { name: "15% efectivo", discount: 15, method: "Efectivo" },
@@ -1872,7 +1876,10 @@ export default function Home() {
   // cargarlo una sola vez. Una vez confirmado, los conteos posteriores vuelven
   // al circuito restringido de control y aprobación.
   const canLoadInitialStock = Boolean(
-    user && !initialStockLoads[site] && ["administracion", "supervisora", "vendedora"].includes(user.role),
+    user &&
+      !INITIAL_STOCK_DISABLED_SITES.has(site) &&
+      !initialStockLoads[site] &&
+      ["administracion", "supervisora", "vendedora"].includes(user.role),
   );
   const canEditRealStock = canCountRealStock || canLoadInitialStock;
   const initialCountedProductCount = products.filter(
@@ -5574,7 +5581,7 @@ export default function Home() {
               <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#eef2f6] p-3 text-sm text-[#183a67]">
                 <b>Stock ideal:</b> define hasta qué cantidad se propone reponer cada producto. Solo las supervisoras autorizadas por Administración pueden editarlo; el resto de los perfiles lo consulta.
               </p>
-              <div className="mb-4 rounded-2xl border border-[#9bc6a5] bg-[#eef8f0] p-5">
+              {!INITIAL_STOCK_DISABLED_SITES.has(site) && <div className="mb-4 rounded-2xl border border-[#9bc6a5] bg-[#eef8f0] p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <b>Carga inicial de stock</b>
@@ -5615,7 +5622,7 @@ export default function Home() {
                 ) : (
                   <p className="mt-3 text-sm text-slate-600">Tu perfil no tiene permiso para confirmar la carga inicial. Pedile a la responsable de stock que la realice desde este módulo.</p>
                 )}
-              </div>
+              </div>}
               {lowStockProducts.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[#f0bd4e] bg-[#fff5d8] p-4">
                   <b>Reposición sugerida</b>
