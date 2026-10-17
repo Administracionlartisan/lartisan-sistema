@@ -74,10 +74,10 @@ test("sessions expire both by total duration and by inactivity", () => {
   const config = read("donweb-api/config.example.php");
   const page = read("app/page.tsx");
   assert.match(bootstrap, /last_seen_at > DATE_SUB\(NOW\(\), INTERVAL \$idleMinutes MINUTE\)/);
-  assert.match(bootstrap, /session_idle_minutes.*\?\? 30/);
+  assert.match(bootstrap, /\$idleMinutes = 360/);
   assert.match(bootstrap, /INSERT INTO user_sessions \(id, user_id, expires_at, last_seen_at\).*NOW\(\)/);
-  assert.match(config, /'session_idle_minutes' => 30/);
-  assert.match(page, /La sesión se cerró por 30 minutos sin actividad/);
+  assert.match(config, /'session_idle_minutes' => 360/);
+  assert.match(page, /La sesión se cerró por 6 horas sin actividad/);
 });
 
 test("order reception has a manual fallback when the scanner is unavailable", () => {

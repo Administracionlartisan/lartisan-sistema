@@ -282,7 +282,9 @@ function current_user(PDO $pdo): ?array
     $sessionId = hash('sha256', $token);
     // La expiración absoluta evita sesiones olvidadas durante días. El límite de
     // inactividad protege además los equipos compartidos de los locales.
-    $idleMinutes = max(5, min(240, (int) ($config['session_idle_minutes'] ?? 30)));
+    // Política operativa: una jornada puede permanecer abierta hasta seis horas
+    // sin interacción. La expiración absoluta de session_hours sigue vigente.
+    $idleMinutes = 360;
     $stmt = $pdo->prepare(
         "SELECT u.* FROM user_sessions s
          JOIN users u ON u.id = s.user_id

@@ -2411,7 +2411,7 @@ export default function Home() {
   };
   useEffect(() => {
     if (!user) return;
-    const inactivityMs = 30 * 60 * 1000;
+    const inactivityMs = 6 * 60 * 60 * 1000;
     let timeout = 0;
     const closeForInactivity = () => {
       void fetch(`${API_BASE}/auth/logout`, {
@@ -2423,7 +2423,7 @@ export default function Home() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmNewPassword("");
-      setMessage("La sesión se cerró por 30 minutos sin actividad. Volvé a ingresar para continuar.");
+      setMessage("La sesión se cerró por 6 horas sin actividad. Volvé a ingresar para continuar.");
     };
     const resetInactivityTimer = () => {
       window.clearTimeout(timeout);
