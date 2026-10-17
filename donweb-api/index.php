@@ -1812,6 +1812,28 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         $authorizedIncoming = $centralOnly
             ? authorize_central_changes($user, $previousState, is_array($baseState) ? $baseState : [], $state)
             : authorize_operational_snapshot($user, $previousState, $state);
+        // Cada envío contiene el snapshot completo del navegador. Si este
+        // equipo no modificó la caja desde su copia base, no puede convertir
+        // una caja abierta por otro equipo en un "cierre" incompleto al
+        // sincronizar una venta, pedido o stock. Conservamos la sesión vigente
+        // del servidor y solo aceptamos cambios de caja que realmente difieren
+        // de la copia que la persona recibió.
+        if (!$centralOnly && is_array($baseState)) {
+            $cashFields = ['cashOpen', 'activeShift', 'shiftLog'];
+            $cashUnchangedByClient = true;
+            foreach ($cashFields as $field) {
+                if (($authorizedIncoming[$field] ?? null) !== ($baseState[$field] ?? null)) {
+                    $cashUnchangedByClient = false;
+                    break;
+                }
+            }
+            if ($cashUnchangedByClient) {
+                foreach ($cashFields as $field) {
+                    if (array_key_exists($field, $previousState)) $authorizedIncoming[$field] = $previousState[$field];
+                    else unset($authorizedIncoming[$field]);
+                }
+            }
+        }
         $merged = false;
         if ($centralOnly) {
             // Los cambios de Central ya se aplicaron sobre el estado vigente.
