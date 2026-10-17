@@ -11,23 +11,25 @@ stock, ventas, ítems, pagos, cajas, fichajes, auditoría, comprobantes y estado
 operativos. Los cierres enviados a Sheets y la constancia de ARCA son controles
 complementarios; no reemplazan esta copia.
 
-Los archivos de usuario y la configuración privada se respaldan por una tarea
-separada, en un destino privado cifrado. No se deben incluir directamente en la
-copia SQL ni subir a `public_html`.
+Los archivos de usuario y la configuración privada se empaquetan por separado
+(`lartisan-assets-*.zip.enc`) y se cifran antes de enviarse al destino privado.
+Se incluyen documentos, imágenes, adjuntos y las configuraciones de recuperación
+fuera del webroot. La clave de cifrado no se incorpora jamás al archivo.
 
 ## Configuración privada requerida en el servidor
 
-En `/lartisan-backup-config.php` (fuera de `public_html`, permisos `600`) debe
-existir una clave aleatoria de 32 bytes codificada en base64, más las credenciales
-de Drive ya autorizadas. La clave se genera una única vez en el servidor y se
-guarda en un gestor de secretos administrado; no se imprime ni se copia en este
-documento.
+Las credenciales de Drive viven en `/lartisan-backup-config.php` y la clave
+aleatoria de 32 bytes codificada en base64 vive separada en
+`/lartisan-backup-encryption.php`, ambos fuera de `public_html` y con permisos
+`600`. La clave se guarda además en un gestor de secretos administrado; no se
+imprime ni se copia en este documento.
 
-La tarea programada debe ejecutar la copia todos los días. Además, debe conservar
-en Drive clases `daily` por 30 días, `weekly` por 3 meses y `monthly` por 12
-meses. La tarea local conserva únicamente 30 días. El monitor se ejecuta cada
-hora y avisa si falla una copia o pasan más de 26 horas sin una copia cifrada y
-validada.
+La tarea programada debe ejecutar la copia todos los días. Además, la limpieza
+automática conserva en Drive clases `daily` por 30 días, `weekly` por 92 días y
+`monthly` por 366 días. La copia local conserva únicamente 30 días. El monitor
+avisa si falla una copia, si falla la integridad/cifrado, o si pasan más de 26
+horas sin respaldos de base y archivos verificados. Las alertas se deduplican por
+incidente durante seis horas.
 
 ## Recuperación segura
 
@@ -46,7 +48,14 @@ validada.
 
 ## Prueba mensual
 
-La prueba se hace en una base aislada y con una copia reciente. Debe comprobar
-la estructura, los recuentos esenciales y el arranque de la API sin emitir
-facturas, sincronizar Drive ni modificar Producción. El resultado se guarda en
-`backup_restore_tests` y cualquier fallo abre una alerta.
+`backup_restore_test.php` realiza primero un preflight no destructivo: comprueba
+el hash, la autenticidad AES-GCM, la estructura SQL esencial y el manifiesto de
+adjuntos, sin modificar Producción. Su resultado queda en
+`backup_restore_tests` y un fallo abre una alerta.
+
+Para completar la restauración mensual real se requiere una base MySQL aislada,
+con usuario exclusivo y sin acceso a Producción. Una vez configurada por
+Administración, se importa allí la copia, se validan los recuentos, usuarios,
+ventas, stock, cajas, reportes y arranque de API sin ARCA ni Drive. No se debe
+marcar esa etapa como completa hasta que exista esa base aislada y se haya
+registrado una ejecución satisfactoria.

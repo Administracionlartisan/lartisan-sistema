@@ -38,6 +38,7 @@ date_default_timezone_set('America/Argentina/Buenos_Aires');
 $pdo = db($config);
 $command = $argv[1] ?? 'run';
 $backupDirectory = dirname(__DIR__, 2) . '/lartisan-backups';
+$accountRoot = dirname(__DIR__, 2);
 
 if (!is_dir($backupDirectory) && !mkdir($backupDirectory, 0700, true) && !is_dir($backupDirectory)) {
     throw new RuntimeException('No se pudo crear el directorio privado de respaldos.');
@@ -78,8 +79,10 @@ try {
     $pdo->prepare(
         "UPDATE backup_runs SET finished_at = NOW(), status = 'verified', size_bytes = ?, sha256 = ?, drive_file_id = ?, encryption = 'aes-256-gcm', validation_status = 'restore_ready', manifest_sha256 = ? WHERE id = ?"
     )->execute([filesize($path), $hash, $driveFileId, hash('sha256', backup_manifest($filename, $backupClass, $hash)), $runId]);
+    $assetRun = create_assets_backup($config, $pdo, $accountRoot, $backupDirectory, $backupClass);
+    prune_drive_backups($config);
     remove_old_backups($backupDirectory, (int) ($config['backup']['local_retention_days'] ?? 30));
-    $message = "Respaldo verificado y enviado a Drive: $filename\n";
+    $message = "Respaldo verificado y enviado a Drive: $filename; archivos: " . $assetRun['filename'] . "\n";
     if (PHP_SAPI === 'cli') fwrite(STDOUT, $message); else echo $message;
 } catch (Throwable $error) {
     $pdo->prepare(
@@ -110,6 +113,27 @@ function ensure_backup_schema(PDO $pdo): void
             error_message VARCHAR(1000) NULL,
             INDEX idx_backup_runs_started (started_at),
             INDEX idx_backup_runs_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+}
+
+function ensure_backup_asset_schema(PDO $pdo): void
+{
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS backup_asset_runs (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            finished_at DATETIME NULL,
+            status VARCHAR(30) NOT NULL,
+            filename VARCHAR(255) NOT NULL,
+            backup_class VARCHAR(16) NULL,
+            size_bytes BIGINT UNSIGNED NULL,
+            sha256 CHAR(64) NULL,
+            drive_file_id VARCHAR(255) NULL,
+            validation_status VARCHAR(40) NULL,
+            error_message VARCHAR(1000) NULL,
+            INDEX idx_backup_asset_runs_started (started_at),
+            INDEX idx_backup_asset_runs_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
 }
@@ -221,27 +245,9 @@ function verify_backup(string $path): void
 function upload_to_drive(array $config, string $path): string
 {
     $drive = $config['backup']['drive'] ?? [];
-    foreach (['client_id', 'client_secret', 'refresh_token', 'folder_id'] as $key) {
-        if (empty($drive[$key])) throw new RuntimeException("Google Drive no está configurado: falta $key.");
-    }
+    $accessToken = google_drive_access_token($drive);
+    if (empty($drive['folder_id'])) throw new RuntimeException('Google Drive no está configurado: falta folder_id.');
     if (!function_exists('curl_init')) throw new RuntimeException('La extensión cURL no está disponible.');
-    $tokenRequest = curl_init('https://oauth2.googleapis.com/token');
-    curl_setopt_array($tokenRequest, [
-        CURLOPT_POST => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POSTFIELDS => http_build_query([
-            'client_id' => $drive['client_id'],
-            'client_secret' => $drive['client_secret'],
-            'refresh_token' => $drive['refresh_token'],
-            'grant_type' => 'refresh_token',
-        ]),
-    ]);
-    $tokenBody = curl_exec($tokenRequest);
-    $tokenStatus = (int) curl_getinfo($tokenRequest, CURLINFO_RESPONSE_CODE);
-    curl_close($tokenRequest);
-    $tokenData = json_decode((string) $tokenBody, true);
-    if ($tokenStatus !== 200 || empty($tokenData['access_token'])) throw new RuntimeException('Drive rechazó la autorización.');
-
     $metadata = json_encode(['name' => basename($path), 'parents' => [$drive['folder_id']]], JSON_UNESCAPED_SLASHES);
     $start = curl_init('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id');
     curl_setopt_array($start, [
@@ -249,9 +255,9 @@ function upload_to_drive(array $config, string $path): string
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HEADER => true,
         CURLOPT_HTTPHEADER => [
-            'Authorization: Bearer ' . $tokenData['access_token'],
+            'Authorization: Bearer ' . $accessToken,
             'Content-Type: application/json; charset=UTF-8',
-            'X-Upload-Content-Type: application/gzip',
+            'X-Upload-Content-Type: application/octet-stream',
             'X-Upload-Content-Length: ' . filesize($path),
         ],
         CURLOPT_POSTFIELDS => $metadata,
@@ -273,7 +279,7 @@ function upload_to_drive(array $config, string $path): string
         CURLOPT_UPLOAD => true,
         CURLOPT_INFILE => $file,
         CURLOPT_INFILESIZE => filesize($path),
-        CURLOPT_HTTPHEADER => ['Content-Type: application/gzip'],
+        CURLOPT_HTTPHEADER => ['Content-Type: application/octet-stream'],
     ]);
     $uploadBody = curl_exec($upload);
     $uploadStatus = (int) curl_getinfo($upload, CURLINFO_RESPONSE_CODE);
@@ -282,6 +288,118 @@ function upload_to_drive(array $config, string $path): string
     $uploaded = json_decode((string) $uploadBody, true);
     if (!in_array($uploadStatus, [200, 201], true) || empty($uploaded['id'])) throw new RuntimeException('Drive no confirmó la carga del respaldo.');
     return (string) $uploaded['id'];
+}
+
+function google_drive_access_token(array $drive): string
+{
+    foreach (['client_id', 'client_secret', 'refresh_token'] as $key) if (empty($drive[$key])) throw new RuntimeException("Google Drive no está configurado: falta $key.");
+    if (!function_exists('curl_init')) throw new RuntimeException('La extensión cURL no está disponible.');
+    $request = curl_init('https://oauth2.googleapis.com/token');
+    curl_setopt_array($request, [
+        CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POSTFIELDS => http_build_query(['client_id' => $drive['client_id'], 'client_secret' => $drive['client_secret'], 'refresh_token' => $drive['refresh_token'], 'grant_type' => 'refresh_token']),
+    ]);
+    $body = curl_exec($request); $status = (int) curl_getinfo($request, CURLINFO_RESPONSE_CODE); curl_close($request);
+    $data = json_decode((string) $body, true);
+    if ($status !== 200 || empty($data['access_token'])) throw new RuntimeException('Drive rechazó la autorización.');
+    return (string) $data['access_token'];
+}
+
+/** Respaldos separados de adjuntos y configuraciones: se cifran antes de salir del servidor. */
+function create_assets_backup(array $config, PDO $pdo, string $root, string $directory, string $class): array
+{
+    ensure_backup_asset_schema($pdo);
+    if (!class_exists('ZipArchive')) throw new RuntimeException('La extensión ZIP es necesaria para respaldar archivos y configuración.');
+    $filename = 'lartisan-assets-' . date('Ymd-His') . '-' . $class . '.zip.enc';
+    $path = $directory . '/' . $filename;
+    $plainPath = $path . '.work';
+    $startedAt = date('Y-m-d H:i:s');
+    $insert = $pdo->prepare("INSERT INTO backup_asset_runs (started_at, status, filename, backup_class) VALUES (?, 'running', ?, ?)");
+    $insert->execute([$startedAt, $filename, $class]);
+    $runId = (int) $pdo->lastInsertId();
+    try {
+        $archive = new ZipArchive();
+        if ($archive->open($plainPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) throw new RuntimeException('No se pudo crear el respaldo de archivos.');
+        $paths = $config['backup']['asset_paths'] ?? [
+            'public_html/documents', 'public_html/images', 'public_html/carga', 'public_html/capacitacion-media',
+            'lartisan-backup-config.php', 'lartisan-arca-config.php', 'lartisan-cash-sheet-config.php',
+        ];
+        foreach ($paths as $relative) add_backup_path($archive, $root, (string) $relative);
+        $archive->addFromString('manifest.json', json_encode(['created_at' => date(DATE_ATOM), 'environment' => 'production', 'class' => $class], JSON_UNESCAPED_SLASHES));
+        $archive->close();
+        if (!is_file($plainPath) || filesize($plainPath) < 22) throw new RuntimeException('El respaldo de archivos está incompleto.');
+        encrypt_backup($plainPath, $path, backup_encryption_key($config));
+        @unlink($plainPath);
+        verify_encrypted_assets_backup($path, backup_encryption_key($config));
+        $hash = hash_file('sha256', $path);
+        $driveFileId = upload_to_drive($config, $path);
+        $pdo->prepare("UPDATE backup_asset_runs SET finished_at = NOW(), status = 'verified', size_bytes = ?, sha256 = ?, drive_file_id = ?, validation_status = 'restore_ready' WHERE id = ?")
+            ->execute([filesize($path), $hash, $driveFileId, $runId]);
+        return ['filename' => $filename, 'sha256' => $hash];
+    } catch (Throwable $error) {
+        @unlink($plainPath);
+        $pdo->prepare("UPDATE backup_asset_runs SET finished_at = NOW(), status = 'failed', error_message = ? WHERE id = ?")
+            ->execute([substr($error->getMessage(), 0, 1000), $runId]);
+        throw $error;
+    }
+}
+
+function add_backup_path(ZipArchive $archive, string $root, string $relative): void
+{
+    $relative = ltrim(str_replace('\\', '/', $relative), '/');
+    if ($relative === '' || strpos($relative, '..') !== false || $relative === 'lartisan-backup-encryption.php') return;
+    $path = $root . '/' . $relative;
+    if (is_file($path)) { $archive->addFile($path, $relative); return; }
+    if (!is_dir($path)) return;
+    $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS));
+    foreach ($iterator as $file) {
+        if (!$file->isFile() || $file->isLink()) continue;
+        $absolute = $file->getPathname();
+        $archive->addFile($absolute, $relative . '/' . substr(str_replace('\\', '/', $absolute), strlen(str_replace('\\', '/', $path)) + 1));
+    }
+}
+
+function verify_encrypted_assets_backup(string $path, string $key): void
+{
+    $plain = decrypt_backup($path, $key);
+    $tmp = tempnam(sys_get_temp_dir(), 'lartisan-assets-check-');
+    if ($tmp === false) throw new RuntimeException('No se pudo validar el respaldo de archivos.');
+    try {
+        file_put_contents($tmp, $plain, LOCK_EX);
+        $archive = new ZipArchive();
+        if ($archive->open($tmp) !== true || $archive->locateName('manifest.json') === false) throw new RuntimeException('El respaldo de archivos no se puede restaurar.');
+        $archive->close();
+    } finally { @unlink($tmp); }
+}
+
+function prune_drive_backups(array $config): void
+{
+    $drive = $config['backup']['drive'] ?? [];
+    if (empty($drive['folder_id'])) throw new RuntimeException('No se puede aplicar retención externa: falta folder_id de Drive.');
+    $token = google_drive_access_token($drive);
+    $query = "'" . str_replace("'", "\\'", (string) $drive['folder_id']) . "' in parents and trashed = false";
+    $url = 'https://www.googleapis.com/drive/v3/files?' . http_build_query(['q' => $query, 'fields' => 'nextPageToken,files(id,name,createdTime)', 'pageSize' => 1000]);
+    $files = [];
+    do {
+        $request = curl_init($url);
+        curl_setopt_array($request, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $token]]);
+        $body = curl_exec($request); $status = (int) curl_getinfo($request, CURLINFO_RESPONSE_CODE); curl_close($request);
+        $data = json_decode((string) $body, true);
+        if ($status !== 200 || !is_array($data)) throw new RuntimeException('Drive no permitió consultar la retención de respaldos.');
+        $files = array_merge($files, is_array($data['files'] ?? null) ? $data['files'] : []);
+        $url = empty($data['nextPageToken']) ? '' : 'https://www.googleapis.com/drive/v3/files?' . http_build_query(['q' => $query, 'fields' => 'nextPageToken,files(id,name,createdTime)', 'pageSize' => 1000, 'pageToken' => $data['nextPageToken']]);
+    } while ($url !== '');
+    $limits = ['daily' => 30, 'weekly' => 92, 'monthly' => 366];
+    foreach ($files as $file) {
+        $name = (string) ($file['name'] ?? '');
+        if (!preg_match('/^lartisan(?:-assets)?-\\d{8}-\\d{6}-(daily|weekly|monthly)\\.(?:sql\\.gz|zip)\\.enc$/', $name, $match)) continue;
+        $created = strtotime((string) ($file['createdTime'] ?? ''));
+        if ($created === false || $created >= time() - $limits[$match[1]] * 86400) continue;
+        $delete = curl_init('https://www.googleapis.com/drive/v3/files/' . rawurlencode((string) $file['id']));
+        curl_setopt_array($delete, [CURLOPT_CUSTOMREQUEST => 'DELETE', CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $token]]);
+        $status = (int) curl_getinfo($delete, CURLINFO_RESPONSE_CODE); curl_close($delete);
+        if (!in_array($status, [204, 404], true)) throw new RuntimeException('Drive no confirmó la retención externa de respaldos.');
+    }
 }
 
 function latest_backup(string $directory): string
@@ -295,7 +413,8 @@ function latest_backup(string $directory): string
 function remove_old_backups(string $directory, int $days): void
 {
     $limit = time() - max(1, $days) * 86400;
-    foreach (glob($directory . '/lartisan-*.sql.gz.enc') ?: [] as $file) {
+    $files = array_merge(glob($directory . '/lartisan-*.sql.gz.enc') ?: [], glob($directory . '/lartisan-assets-*.zip.enc') ?: []);
+    foreach ($files as $file) {
         if (filemtime($file) < $limit) @unlink($file);
     }
 }

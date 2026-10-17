@@ -1330,6 +1330,28 @@ function active_monitoring_alerts(PDO $pdo): array
         $age = $pdo->query("SELECT TIMESTAMPDIFF(HOUR, finished_at, NOW()) FROM backup_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
         if ($age === false || (int) $age > 26) $alerts[] = 'Pasaron más de 26 horas sin un respaldo externo diario verificado.';
     }
+    if (!table_exists($pdo, 'backup_asset_runs')) {
+        $alerts[] = 'No existe un respaldo separado de archivos y configuración crítica.';
+    } else {
+        $lastAssets = $pdo->query("SELECT status, finished_at, validation_status FROM backup_asset_runs ORDER BY id DESC LIMIT 1")->fetch();
+        if (!$lastAssets || ($lastAssets['status'] ?? '') !== 'verified' || ($lastAssets['validation_status'] ?? '') !== 'restore_ready') {
+            $alerts[] = 'El último respaldo de archivos y configuración no quedó verificado.';
+        } else {
+            $assetAge = $pdo->query("SELECT TIMESTAMPDIFF(HOUR, finished_at, NOW()) FROM backup_asset_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
+            if ($assetAge === false || (int) $assetAge > 26) $alerts[] = 'Pasaron más de 26 horas sin un respaldo verificado de archivos y configuración.';
+        }
+    }
+    if (!table_exists($pdo, 'backup_restore_tests')) {
+        $alerts[] = 'No existe una prueba mensual registrada de restauración aislada.';
+    } else {
+        $lastRestoreTest = $pdo->query("SELECT status, finished_at FROM backup_restore_tests ORDER BY id DESC LIMIT 1")->fetch();
+        if (!$lastRestoreTest || ($lastRestoreTest['status'] ?? '') !== 'verified') {
+            $alerts[] = 'La última prueba de restauración aislada no quedó verificada.';
+        } else {
+            $restoreAge = $pdo->query("SELECT TIMESTAMPDIFF(DAY, finished_at, NOW()) FROM backup_restore_tests WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
+            if ($restoreAge === false || (int) $restoreAge > 31) $alerts[] = 'Pasaron más de 31 días sin una prueba de restauración aislada verificada.';
+        }
+    }
     if ($freeBytes !== false && $freeBytes < 512 * 1024 * 1024) $alerts[] = 'El servidor tiene menos de 512 MB libres.';
     return $alerts;
 }

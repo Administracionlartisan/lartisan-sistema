@@ -36,6 +36,13 @@ return [
     ],
     'backup' => [
         'local_retention_days' => 30,
+        // Incluye adjuntos y configuraciones de recuperación, siempre cifrados.
+        // La clave de cifrado va en lartisan-backup-encryption.php fuera del webroot.
+        'asset_paths' => ['public_html/documents', 'public_html/images', 'public_html/carga', 'public_html/capacitacion-media', 'lartisan-backup-config.php', 'lartisan-arca-config.php', 'lartisan-cash-sheet-config.php'],
+        'restore_test' => [
+            // Base MySQL separada y aislada. Nunca usar las credenciales de producción aquí.
+            'database' => ['host' => '', 'name' => '', 'user' => '', 'password' => ''],
+        ],
         'drive' => [
             'client_id' => 'CONFIGURAR_EN_EL_SERVIDOR',
             'client_secret' => 'CONFIGURAR_EN_EL_SERVIDOR',
