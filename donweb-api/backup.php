@@ -33,10 +33,11 @@ if (!is_dir($backupDirectory) && !mkdir($backupDirectory, 0700, true) && !is_dir
 }
 
 ensure_backup_schema($pdo);
+ensure_backup_monitoring_schema($pdo);
 
 if ($command === 'verify') {
     $file = $argv[2] ?? latest_backup($backupDirectory);
-    verify_backup($file);
+    verify_encrypted_backup($file, backup_encryption_key($config));
     fwrite(STDOUT, "Respaldo verificado: $file\n");
     exit(0);
 }
@@ -47,20 +48,25 @@ if ($command !== 'run') {
 }
 
 $startedAt = date('Y-m-d H:i:s');
-$filename = 'lartisan-' . date('Ymd-His') . '.sql.gz';
+$backupClass = backup_class(new DateTimeImmutable('now'));
+$filename = 'lartisan-' . date('Ymd-His') . '-' . $backupClass . '.sql.gz.enc';
 $path = $backupDirectory . '/' . $filename;
-$run = $pdo->prepare("INSERT INTO backup_runs (started_at, status, filename) VALUES (?, 'running', ?)");
-$run->execute([$startedAt, $filename]);
+$run = $pdo->prepare("INSERT INTO backup_runs (started_at, status, filename, backup_class) VALUES (?, 'running', ?, ?)");
+$run->execute([$startedAt, $filename, $backupClass]);
 $runId = (int) $pdo->lastInsertId();
 
 try {
-    create_sql_backup($pdo, $path);
-    verify_backup($path);
+    $plainPath = $path . '.work';
+    create_sql_backup($pdo, $plainPath);
+    verify_backup($plainPath);
+    encrypt_backup($plainPath, $path, backup_encryption_key($config));
+    @unlink($plainPath);
+    verify_encrypted_backup($path, backup_encryption_key($config));
     $hash = hash_file('sha256', $path);
     $driveFileId = upload_to_drive($config, $path);
     $pdo->prepare(
-        "UPDATE backup_runs SET finished_at = NOW(), status = 'verified', size_bytes = ?, sha256 = ?, drive_file_id = ? WHERE id = ?"
-    )->execute([filesize($path), $hash, $driveFileId, $runId]);
+        "UPDATE backup_runs SET finished_at = NOW(), status = 'verified', size_bytes = ?, sha256 = ?, drive_file_id = ?, encryption = 'aes-256-gcm', validation_status = 'restore_ready', manifest_sha256 = ? WHERE id = ?"
+    )->execute([filesize($path), $hash, $driveFileId, hash('sha256', backup_manifest($filename, $backupClass, $hash)), $runId]);
     remove_old_backups($backupDirectory, (int) ($config['backup']['local_retention_days'] ?? 30));
     $message = "Respaldo verificado y enviado a Drive: $filename\n";
     if (PHP_SAPI === 'cli') fwrite(STDOUT, $message); else echo $message;
@@ -85,12 +91,67 @@ function ensure_backup_schema(PDO $pdo): void
             filename VARCHAR(255) NOT NULL,
             size_bytes BIGINT UNSIGNED NULL,
             sha256 CHAR(64) NULL,
+            encryption VARCHAR(40) NULL,
+            validation_status VARCHAR(40) NULL,
+            manifest_sha256 CHAR(64) NULL,
+            backup_class VARCHAR(16) NULL,
             drive_file_id VARCHAR(255) NULL,
             error_message VARCHAR(1000) NULL,
             INDEX idx_backup_runs_started (started_at),
             INDEX idx_backup_runs_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+}
+
+function backup_class(DateTimeImmutable $now): string
+{
+    if ($now->format('d') === '01') return 'monthly';
+    if ($now->format('N') === '7') return 'weekly';
+    return 'daily';
+}
+
+function backup_encryption_key(array $config): string
+{
+    $encoded = (string) ($config['backup']['encryption_key_base64'] ?? '');
+    $key = $encoded === '' ? false : base64_decode($encoded, true);
+    if (!is_string($key) || strlen($key) !== 32) throw new RuntimeException('No hay una clave válida de cifrado de respaldos en la configuración privada.');
+    if (!function_exists('openssl_encrypt')) throw new RuntimeException('El servidor no dispone de OpenSSL para cifrar respaldos.');
+    return $key;
+}
+
+function encrypt_backup(string $plainPath, string $encryptedPath, string $key): void
+{
+    $plain = file_get_contents($plainPath);
+    if ($plain === false) throw new RuntimeException('No se pudo leer el respaldo para cifrarlo.');
+    $iv = random_bytes(12); $tag = '';
+    $cipher = openssl_encrypt($plain, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+    if ($cipher === false || strlen($tag) !== 16) throw new RuntimeException('Falló el cifrado autenticado del respaldo.');
+    $written = file_put_contents($encryptedPath, "LARTISANENC1" . $iv . $tag . $cipher, LOCK_EX);
+    if ($written === false) throw new RuntimeException('No se pudo guardar el respaldo cifrado.');
+    @chmod($encryptedPath, 0600);
+}
+
+function decrypt_backup(string $encryptedPath, string $key): string
+{
+    $raw = file_get_contents($encryptedPath);
+    if ($raw === false || substr($raw, 0, 11) !== 'LARTISANENC1' || strlen($raw) < 39) throw new RuntimeException('El respaldo cifrado está incompleto o no es válido.');
+    $plain = openssl_decrypt(substr($raw, 39), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, substr($raw, 11, 12), substr($raw, 23, 16));
+    if ($plain === false) throw new RuntimeException('No se pudo validar la autenticidad del respaldo cifrado.');
+    return $plain;
+}
+
+function verify_encrypted_backup(string $path, string $key): void
+{
+    $plain = decrypt_backup($path, $key);
+    $tmp = tempnam(sys_get_temp_dir(), 'lartisan-restore-check-');
+    if ($tmp === false) throw new RuntimeException('No se pudo crear el entorno temporal de validación.');
+    try { file_put_contents($tmp, $plain, LOCK_EX); verify_backup($tmp); }
+    finally { @unlink($tmp); }
+}
+
+function backup_manifest(string $filename, string $class, string $hash): string
+{
+    return json_encode(['filename' => $filename, 'class' => $class, 'sha256' => $hash, 'environment' => 'production', 'format' => 'sql.gz.aes-256-gcm'], JSON_UNESCAPED_SLASHES);
 }
 
 function create_sql_backup(PDO $pdo, string $path): void
@@ -214,7 +275,7 @@ function upload_to_drive(array $config, string $path): string
 
 function latest_backup(string $directory): string
 {
-    $files = glob($directory . '/lartisan-*.sql.gz') ?: [];
+    $files = glob($directory . '/lartisan-*.sql.gz.enc') ?: [];
     usort($files, static fn (string $a, string $b): int => filemtime($b) <=> filemtime($a));
     if (!$files) throw new RuntimeException('No hay respaldos para verificar.');
     return $files[0];
@@ -223,7 +284,7 @@ function latest_backup(string $directory): string
 function remove_old_backups(string $directory, int $days): void
 {
     $limit = time() - max(1, $days) * 86400;
-    foreach (glob($directory . '/lartisan-*.sql.gz') ?: [] as $file) {
+    foreach (glob($directory . '/lartisan-*.sql.gz.enc') ?: [] as $file) {
         if (filemtime($file) < $limit) @unlink($file);
     }
 }

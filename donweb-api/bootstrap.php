@@ -1294,6 +1294,21 @@ function ensure_monitoring_notification_schema(PDO $pdo): void
     }
 }
 
+/** Campos agregados sin interrumpir instalaciones que ya tenían backup_runs. */
+function ensure_backup_monitoring_schema(PDO $pdo): void
+{
+    if (!table_exists($pdo, 'backup_runs')) return;
+    $columns = $pdo->query('SHOW COLUMNS FROM backup_runs')->fetchAll(PDO::FETCH_COLUMN);
+    foreach ([
+        'encryption' => "VARCHAR(40) NULL AFTER sha256",
+        'validation_status' => "VARCHAR(40) NULL AFTER encryption",
+        'backup_class' => "VARCHAR(16) NULL AFTER filename",
+        'manifest_sha256' => "CHAR(64) NULL AFTER validation_status",
+    ] as $name => $definition) {
+        if (!in_array($name, $columns, true)) $pdo->exec("ALTER TABLE backup_runs ADD COLUMN $name $definition");
+    }
+}
+
 function active_monitoring_alerts(PDO $pdo): array
 {
     ensure_pnl_sync_schema($pdo);
@@ -1302,11 +1317,19 @@ function active_monitoring_alerts(PDO $pdo): array
     $failedPnl = (int) $pdo->query("SELECT COUNT(*) FROM pnl_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
     $failedExpenses = (int) $pdo->query("SELECT COUNT(*) FROM expense_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
     $failedMrp = (int) $pdo->query("SELECT COUNT(*) FROM mrp_sync_runs WHERE status = 'failed' AND started_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
-    $lastBackup = table_exists($pdo, 'backup_runs') ? $pdo->query('SELECT finished_at, status FROM backup_runs ORDER BY id DESC LIMIT 1')->fetch() : null;
+    ensure_backup_monitoring_schema($pdo);
+    $lastBackup = table_exists($pdo, 'backup_runs') ? $pdo->query('SELECT finished_at, status, encryption, validation_status, error_message FROM backup_runs ORDER BY id DESC LIMIT 1')->fetch() : null;
     $freeBytes = function_exists('disk_free_space') ? @disk_free_space(__DIR__) : false;
     $alerts = [];
     if (($failedPnl + $failedExpenses + $failedMrp) > 0) $alerts[] = 'Hubo sincronizaciones fallidas en las últimas 24 horas.';
-    if (!$lastBackup || ($lastBackup['status'] ?? '') !== 'verified') $alerts[] = 'No hay un respaldo externo verificado.';
+    if (!$lastBackup || ($lastBackup['status'] ?? '') !== 'verified') {
+        $alerts[] = 'El último respaldo externo no quedó verificado. Revisar la ejecución y reintentar.';
+    } elseif (($lastBackup['encryption'] ?? '') !== 'aes-256-gcm' || ($lastBackup['validation_status'] ?? '') !== 'restore_ready') {
+        $alerts[] = 'El último respaldo externo no cumple el cifrado o la validación de recuperación exigidos.';
+    } else {
+        $age = $pdo->query("SELECT TIMESTAMPDIFF(HOUR, finished_at, NOW()) FROM backup_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetchColumn();
+        if ($age === false || (int) $age > 26) $alerts[] = 'Pasaron más de 26 horas sin un respaldo externo diario verificado.';
+    }
     if ($freeBytes !== false && $freeBytes < 512 * 1024 * 1024) $alerts[] = 'El servidor tiene menos de 512 MB libres.';
     return $alerts;
 }

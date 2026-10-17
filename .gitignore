@@ -42,6 +42,8 @@ next-env.d.ts
 # private server configuration and generated release archives
 /donweb-api/config.local.php
 /donweb-api/*.local.php
+/lartisan-backups/
+*.sql.gz.enc
 /*.zip
 /*.tar.gz
 /*.tgz
