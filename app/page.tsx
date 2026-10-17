@@ -1583,18 +1583,31 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
     const handleOffline = () => setConnectionMode("Contingencia");
+    // La cola es persistente por equipo. Al volver a la pestaña, reintenta las
+    // mismas solicitudes idempotentes aunque el navegador no haya disparado
+    // un evento `online` (por ejemplo, tras una suspensión o un cambio de red).
+    // Así una vendedora no depende de recordar una recarga forzada.
+    const resumePendingWrites = () => {
+      if (!navigator.onLine) return;
+      void getOutbox()?.then(async (outbox) => {
+        await outbox.unblockAll();
+        await flushPendingWrites();
+      }).catch(() => undefined);
+    };
     const handleOnline = () => {
       setConnectionMode("En línea");
       // Una respuesta anterior pudo haber marcado la cola como bloqueada justo
       // antes de un corte. Al volver la red se reintenta la misma solicitud
       // idempotente, sin crear ni cobrar una venta adicional.
-      void getOutbox()?.then(async (outbox) => {
-        await outbox.unblockAll();
-        await flushPendingWrites();
-      }).catch(() => setMessage("La conexión volvió, pero todavía hay operaciones pendientes. Tocá Sincronizar."));
+      resumePendingWrites();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") resumePendingWrites();
     };
     window.addEventListener("offline", handleOffline);
     window.addEventListener("online", handleOnline);
+    window.addEventListener("focus", resumePendingWrites);
+    document.addEventListener("visibilitychange", handleVisibility);
     const initialTimer = window.setTimeout(() => {
       refreshPendingCount();
       if (!navigator.onLine) handleOffline();
@@ -1602,17 +1615,21 @@ export default function Home() {
         // Una recarga forzada debe reanudar también una cola que una versión
         // anterior dejó bloqueada. No se inventa una operación: se reenvía su
         // requestId original y el servidor la reconoce como idempotente.
-        void getOutbox()?.then(async (outbox) => {
-          await outbox.unblockAll();
-          await flushPendingWrites();
-        }).catch(() => undefined);
+        resumePendingWrites();
       }
     }, 0);
     // Un corte breve no siempre dispara el evento "online": se reintenta solo.
     const retryTimer = window.setInterval(() => {
-      if (navigator.onLine) flushPendingWrites().catch(() => undefined);
+      resumePendingWrites();
     }, 20000);
-    return () => { window.clearTimeout(initialTimer); window.clearInterval(retryTimer); window.removeEventListener("offline", handleOffline); window.removeEventListener("online", handleOnline); };
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(retryTimer);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("focus", resumePendingWrites);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   // La cola se reanuda al autenticar o cuando vuelve Internet.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
