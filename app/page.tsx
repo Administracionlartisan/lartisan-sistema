@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
 import AiHelpChat from "./components/AiHelpChat";
 import ReportNavigation from "./components/ReportNavigation";
 import { ADMIN_REPORTS, canOpenReport } from "./data/reportGuide";
@@ -162,6 +163,9 @@ export default function Home() {
     [salesHistoryLoading, setSalesHistoryLoading] = useState(false),
     [salesHistoryError, setSalesHistoryError] = useState(""),
     [receiptSale, setReceiptSale] = useState<Sale | null>(null),
+    [fiscalReceipt, setFiscalReceipt] = useState<{ pointOfSale: number; voucherType: number; voucherNumber: number; cae: string; caeExpiresOn?: string; net: number; vat: number; total: number; customerName: string; customerDocumentType: string; customerDocumentNumber?: string; customerTaxCondition?: string; invoiceType: string; qrUrl: string } | null>(null),
+    [fiscalReceiptQr, setFiscalReceiptQr] = useState(""),
+    [fiscalReceiptChecking, setFiscalReceiptChecking] = useState(false),
     [saleSearch, setSaleSearch] = useState(""),
     [paymentCorrectionSaleId, setPaymentCorrectionSaleId] = useState<string | null>(null),
     [paymentCorrectionMethod, setPaymentCorrectionMethod] = useState("Efectivo"),
@@ -3615,6 +3619,45 @@ export default function Home() {
     window.print();
     window.setTimeout(cleanup, 1000);
   };
+  useEffect(() => {
+    if (!receiptSale) {
+      setFiscalReceipt(null);
+      setFiscalReceiptQr("");
+      setFiscalReceiptChecking(false);
+      return;
+    }
+    const controller = new AbortController();
+    setFiscalReceipt(null);
+    setFiscalReceiptQr("");
+    const expectsFiscal = ["Factura A", "Factura B", "Factura B electrónica"].includes(receiptSale.invoiceType);
+    setFiscalReceiptChecking(expectsFiscal);
+    let attempts = 0;
+    const loadFiscalReceipt = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/fiscal/sale-document?saleReference=${encodeURIComponent(receiptSale.id)}`, {
+          credentials: "include", cache: "no-store", signal: controller.signal,
+        });
+        if (response.ok) {
+          const data = await response.json() as { document?: typeof fiscalReceipt };
+          const document = data.document || null;
+          if (document && !controller.signal.aborted) {
+            setFiscalReceipt(document);
+            const image = await QRCode.toDataURL(document.qrUrl, { errorCorrectionLevel: "M", margin: 1, width: 180 });
+            if (!controller.signal.aborted) setFiscalReceiptQr(image);
+            setFiscalReceiptChecking(false);
+            return;
+          }
+        }
+      } catch {
+        // El ticket interno queda disponible si la validación no logra respuesta.
+      }
+      attempts += 1;
+      if (!controller.signal.aborted && expectsFiscal && attempts < 12) window.setTimeout(() => void loadFiscalReceipt(), 700);
+      else if (!controller.signal.aborted) setFiscalReceiptChecking(false);
+    };
+    void loadFiscalReceipt();
+    return () => controller.abort();
+  }, [receiptSale?.id]);
   /** Envía siempre la misma identidad: reintentar nunca puede crear otro ajuste. */
   const syncPostCloseCancellation = async (adjustment: PostCloseCancellationAdjustment) => {
     if (syncingAdjustmentIds.current.has(adjustment.id)) return;
@@ -9334,16 +9377,39 @@ export default function Home() {
       {receiptSale && (
         <div className="receipt-modal fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Vista previa del ticket">
           <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl">
-            <pre className="receipt-print-area mx-auto w-full max-w-[80mm] whitespace-pre-wrap bg-white p-3 font-mono text-[12px] leading-[1.35] text-black">
-              {buildThermalReceipt(
-                receiptSale,
-                payments.filter((payment) => payment.saleId === receiptSale.id),
-                user.name,
-              )}
-            </pre>
+            {fiscalReceiptChecking ? (
+              <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-8 text-center font-mono text-sm text-black">
+                Validando factura fiscal con ARCA…
+              </div>
+            ) : fiscalReceipt ? (
+              <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-3 font-mono text-[12px] leading-[1.35] text-black">
+                <pre className="whitespace-pre-wrap">{[
+                  "", "L'ARTISAN", "FACTURA ELECTRÓNICA", fiscalReceipt.invoiceType.toUpperCase(),
+                  "ORIGINAL", "--------------------------------", `Punto de venta: ${String(fiscalReceipt.pointOfSale).padStart(5, "0")}`,
+                  `Comprobante: ${String(fiscalReceipt.voucherNumber).padStart(8, "0")}`,
+                  `Cliente: ${fiscalReceipt.customerName}`,
+                  fiscalReceipt.customerDocumentNumber ? `${fiscalReceipt.customerDocumentType}: ${fiscalReceipt.customerDocumentNumber}` : "Consumidor final",
+                  "--------------------------------",
+                  ...receiptSale.items.map((item) => `1 x ${item.name}`),
+                  "--------------------------------", `Neto: ${money.format(fiscalReceipt.net)}`,
+                  `IVA: ${money.format(fiscalReceipt.vat)}`, `TOTAL: ${money.format(fiscalReceipt.total)}`,
+                  "--------------------------------", `CAE: ${fiscalReceipt.cae}`,
+                  `Vto. CAE: ${fiscalReceipt.caeExpiresOn || "—"}`, "",
+                ].join("\n")}</pre>
+                {fiscalReceiptQr ? <img src={fiscalReceiptQr} alt="Código QR fiscal ARCA" className="mx-auto mt-2 h-[36mm] w-[36mm]" /> : <p className="mt-2 text-center text-xs">Generando QR fiscal…</p>}
+              </div>
+            ) : (
+              <pre className="receipt-print-area mx-auto w-full max-w-[80mm] whitespace-pre-wrap bg-white p-3 font-mono text-[12px] leading-[1.35] text-black">
+                {buildThermalReceipt(
+                  receiptSale,
+                  payments.filter((payment) => payment.saleId === receiptSale.id),
+                  user.name,
+                )}
+              </pre>
+            )}
             <div className="no-print mt-4 grid grid-cols-2 gap-2">
               <button onClick={() => setReceiptSale(null)} className="rounded border px-4 py-3 font-bold">Cerrar</button>
-              <button onClick={printReceipt} className="rounded bg-[#183a67] px-4 py-3 font-bold text-white">Imprimir ticket</button>
+              <button onClick={printReceipt} disabled={fiscalReceiptChecking || Boolean(fiscalReceipt && !fiscalReceiptQr)} className="rounded bg-[#183a67] px-4 py-3 font-bold text-white disabled:opacity-50">{fiscalReceipt ? "Imprimir factura fiscal" : fiscalReceiptChecking ? "Validando ARCA…" : "Imprimir ticket"}</button>
             </div>
           </div>
         </div>

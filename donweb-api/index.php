@@ -582,6 +582,52 @@ if ($method === 'GET' && $route === 'admin/arca/fiscal-documents') {
     json_response(['ok' => true, 'documents' => $rows]);
 }
 
+// Representación fiscal para reimpresión desde el local. Sólo entrega datos de
+// un comprobante que ARCA ya autorizó y únicamente a usuarios del mismo local.
+// Nunca solicita un CAE ni revela configuración privada del servidor.
+if ($method === 'GET' && $route === 'fiscal/sale-document') {
+    $fiscalUser = require_user($pdo);
+    $saleReference = trim((string) ($_GET['saleReference'] ?? ''));
+    if (!preg_match('/^[a-f0-9-]{36}$/i', $saleReference)) {
+        json_response(['ok' => false, 'error' => 'Referencia de venta inválida.'], 422);
+    }
+    ensure_arca_wsfe_schema($pdo);
+    $statement = $pdo->prepare("SELECT d.site_name,d.point_of_sale,d.voucher_type,d.voucher_number,d.cae,d.cae_expires_on,d.amount_total,d.amount_net,d.amount_vat,d.customer_name,d.customer_document_type,d.customer_document_number,d.customer_tax_condition,d.created_at,s.occurred_at,s.invoice_type FROM arca_fiscal_documents d INNER JOIN lartisan_sales s ON HEX(s.id)=HEX(d.sale_reference) WHERE HEX(d.sale_reference)=HEX(?) AND d.status='authorized' LIMIT 1");
+    $statement->execute([$saleReference]);
+    $document = $statement->fetch();
+    if (!$document || !user_can_access_site($fiscalUser, (string) $document['site_name'])) {
+        json_response(['ok' => false, 'error' => 'No hay un comprobante fiscal autorizado para esta venta.'], 404);
+    }
+    $receiverType = (string) $document['customer_document_type'];
+    $qrPayload = [
+        'ver' => 1,
+        'fecha' => substr((string) $document['occurred_at'], 0, 10),
+        'cuit' => (int) preg_replace('/\D+/', '', (string) (($config['arca']['cuit'] ?? ''))),
+        'ptoVta' => (int) $document['point_of_sale'],
+        'tipoCmp' => (int) $document['voucher_type'],
+        'nroCmp' => (int) $document['voucher_number'],
+        'importe' => (float) $document['amount_total'],
+        'moneda' => 'PES',
+        'ctz' => 1,
+        'tipoDocRec' => $receiverType === 'CUIT' ? 80 : ($receiverType === 'DNI' ? 96 : 99),
+        'nroDocRec' => $receiverType === 'Consumidor final' ? 0 : (int) preg_replace('/\D+/', '', (string) $document['customer_document_number']),
+        'tipoCodAut' => 'E',
+        'codAut' => (int) $document['cae'],
+    ];
+    $encoded = base64_encode((string) json_encode($qrPayload, JSON_UNESCAPED_SLASHES));
+    json_response(['ok' => true, 'document' => [
+        'site' => $document['site_name'], 'pointOfSale' => (int) $document['point_of_sale'],
+        'voucherType' => (int) $document['voucher_type'], 'voucherNumber' => (int) $document['voucher_number'],
+        'cae' => (string) $document['cae'], 'caeExpiresOn' => $document['cae_expires_on'],
+        'total' => (float) $document['amount_total'], 'net' => (float) $document['amount_net'], 'vat' => (float) $document['amount_vat'],
+        'customerName' => $document['customer_name'] ?: 'Consumidor final',
+        'customerDocumentType' => $receiverType, 'customerDocumentNumber' => $document['customer_document_number'],
+        'customerTaxCondition' => $document['customer_tax_condition'],
+        'invoiceType' => $document['invoice_type'],
+        'qrUrl' => 'https://www.afip.gob.ar/fe/qr/?p=' . rawurlencode($encoded),
+    ]]);
+}
+
 if ($method === 'GET' && $route === 'admin/arca/eligible-sales') {
     require_user($pdo, ['administracion']);
     try {
