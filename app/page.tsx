@@ -295,6 +295,21 @@ export default function Home() {
       ]),
     ),
   );
+  // Administración edita una copia separada. Así ningún límite cambia en los
+  // locales hasta que se presiona explícitamente "Guardar cambios".
+  const [limitDraftsBySite, setLimitDraftsBySite] = useState<
+    Record<string, OperationalLimits>
+  >(() =>
+    Object.fromEntries(
+      SITES.map((local) => [
+        local,
+        { maxDiscount: 10, maxExpense: 100000, maxCashDifference: 0 },
+      ]),
+    ),
+  );
+  const [limitsHaveUnsavedChanges, setLimitsHaveUnsavedChanges] = useState(false);
+  const [limitsSaveStatus, setLimitsSaveStatus] = useState("Sin cambios pendientes.");
+  const limitDraftsInitialized = useRef(false);
   const [connectionMode, setConnectionMode] = useState<"En línea" | "Contingencia">("En línea");
   const [pendingSync, setPendingSync] = useState(0);
   // Se muestra separado del mensaje general para que una venta posterior no
@@ -504,17 +519,22 @@ export default function Home() {
     field: K,
     value: OperationalLimits[K],
   ) => {
-    setLimitsBySite((items) => ({
+    setLimitDraftsBySite((items) => ({
       ...items,
       [local]: { ...items[local], [field]: value },
     }));
+    setLimitsHaveUnsavedChanges(true);
+    setLimitsSaveStatus("Cambios sin guardar.");
+  };
+  const saveOperationalLimits = () => {
+    if (!limitsHaveUnsavedChanges) return;
+    setLimitsBySite(limitDraftsBySite);
     operationalEventRef.current = {
       action: "Límites operativos actualizados",
-      detail: `${local} · ${field} actualizado por Administración.`,
+      detail: "Límites guardados explícitamente por Administración.",
     };
-    // Los límites también son estado operativo: sin este cambio de versión el
-    // campo se veía modificado en Administración, pero no se encolaba ni se
-    // enviaba al servidor para que lo recibiera el local.
+    setLimitsHaveUnsavedChanges(false);
+    setLimitsSaveStatus("Guardando cambios en la base de datos…");
     setOperationalVersion((version) => version + 1);
   };
   const applyAuthenticatedUser = (profile: ApiUser) => {
@@ -1124,7 +1144,15 @@ export default function Home() {
       // Administración recibe todos los límites; cada local solo los propios.
       // Se combinan sobre los valores por defecto para no dejar un local sin límites.
       const receivedLimits = Object.assign({}, ...entries.map(([, entry]) => entry.state.limitsBySite ?? {})) as Record<string, OperationalLimits>;
-      if (Object.keys(receivedLimits).length) setLimitsBySite((current) => ({ ...current, ...receivedLimits }));
+      if (Object.keys(receivedLimits).length) {
+        setLimitsBySite((current) => ({ ...current, ...receivedLimits }));
+        // La primera lectura establece el formulario. Luego se conserva el
+        // borrador de Administración hasta que decida guardarlo o descartarlo.
+        if (!limitDraftsInitialized.current) {
+          setLimitDraftsBySite((current) => ({ ...current, ...receivedLimits }));
+          limitDraftsInitialized.current = true;
+        }
+      }
       if (configuration?.schedules) setSchedules(configuration.schedules);
       if (configuration?.monthlyTargets) {
         setMonthlyTargets((targets) => ({ ...targets, ...configuration.monthlyTargets }));
@@ -1467,6 +1495,9 @@ export default function Home() {
         }
         if (result.kind === "rejected") {
           await outbox.block(local, result.message);
+          if (write.event.action === "Límites operativos actualizados") {
+            setLimitsSaveStatus(`No se guardaron los cambios: ${result.message}`);
+          }
           setSyncFailure(`La API rechazó una operación de ${local}: ${result.message}`);
           setMessage(`No se pudo guardar en ${local}: ${result.message} Las operaciones siguen guardadas en este equipo; avisá a Administración antes de cerrar la sesión.`);
           break;
@@ -1477,6 +1508,9 @@ export default function Home() {
         lastPersistedSnapshot.current[local] = JSON.stringify(write.state);
         lastAcknowledged.current[local] = { stateJson: lastPersistedSnapshot.current[local], merged: Boolean(result.merged) };
         if (result.merged) reloadAfterDrain.current = true;
+        if (write.event.action === "Límites operativos actualizados") {
+          setLimitsSaveStatus("Cambios guardados y confirmados en la base de datos.");
+        }
         const pendingReceipt = pendingReceiptRef.current;
         if (pendingReceipt && pendingReceipt.site === local && write.state.sales?.some((sale) => sale.id === pendingReceipt.id)) {
           pendingReceiptRef.current = null;
@@ -7336,7 +7370,7 @@ export default function Home() {
                             type="number"
                             min="0"
                             max="100"
-                            value={limitsBySite[local].maxDiscount}
+                            value={limitDraftsBySite[local].maxDiscount}
                             onChange={(event) => updateOperationalLimit(local, "maxDiscount", Math.min(100, Math.max(0, Number(event.target.value) || 0)))}
                             className="w-24 rounded border p-2 text-center"
                           /> %
@@ -7345,7 +7379,7 @@ export default function Home() {
                           <input
                             type="number"
                             min="0"
-                            value={limitsBySite[local].maxExpense}
+                            value={limitDraftsBySite[local].maxExpense}
                             onChange={(event) => updateOperationalLimit(local, "maxExpense", Math.max(0, Number(event.target.value) || 0))}
                             className="w-32 rounded border p-2 text-center"
                           />
@@ -7354,7 +7388,7 @@ export default function Home() {
                           <input
                             type="number"
                             min="0"
-                            value={limitsBySite[local].maxCashDifference}
+                            value={limitDraftsBySite[local].maxCashDifference}
                             onChange={(event) => updateOperationalLimit(local, "maxCashDifference", Math.max(0, Number(event.target.value) || 0))}
                             className="w-32 rounded border p-2 text-center"
                           />
@@ -7364,8 +7398,21 @@ export default function Home() {
                   </tbody>
                 </table>
               </div>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={saveOperationalLimits}
+                  disabled={!limitsHaveUnsavedChanges}
+                  className="rounded-lg bg-[#173f73] px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Guardar cambios
+                </button>
+                <span className={limitsHaveUnsavedChanges ? "text-sm font-semibold text-amber-700" : "text-sm font-semibold text-emerald-700"}>
+                  {limitsSaveStatus}
+                </span>
+              </div>
               <p className="mt-4 rounded border border-[#e7c26a] bg-[#fff5d8] p-4 text-sm">
-                Estos controles son exclusivos de Administración. Cada cambio deberá conservarse en la auditoría al conectar la base de datos.
+                Estos controles son exclusivos de Administración. Los cambios no se aplican a los locales hasta presionar “Guardar cambios”; luego quedan auditados y confirmados por la base de datos.
               </p>
             </>
           ) : tab === "Catálogo y precios" && user.role === "administracion" ? (
