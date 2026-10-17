@@ -4574,7 +4574,7 @@ export default function Home() {
                 <label className="text-sm font-bold">Buscar<input value={salesHistorySearch} onChange={(event) => setSalesHistorySearch(event.target.value)} placeholder="Cliente, comprobante, medio u operación" className="mt-1 block w-full rounded-lg border bg-white p-2" /></label>
                 <div className="self-end flex gap-2">
                   <button type="button" onClick={() => { setSalesHistoryFrom(dateKey(new Date())); setSalesHistoryTo(dateKey(new Date())); setSalesHistorySearch(""); }} className="rounded-lg border px-4 py-2 font-bold hover:bg-slate-50">Hoy</button>
-                  <button type="button" onClick={() => { setSalesHistoryFrom("2020-01-01"); setSalesHistoryTo(dateKey(new Date())); setSalesHistorySearch(""); }} className="rounded-lg border border-[#183a67] px-4 py-2 font-bold text-[#183a67] hover:bg-[#eef2f6]">Todas</button>
+                  <button type="button" onClick={() => { const today = new Date(); const firstAllowedDay = new Date(today); firstAllowedDay.setDate(today.getDate() - 365); setSalesHistoryFrom(dateKey(firstAllowedDay)); setSalesHistoryTo(dateKey(today)); setSalesHistorySearch(""); }} className="rounded-lg border border-[#183a67] px-4 py-2 font-bold text-[#183a67] hover:bg-[#eef2f6]" title="Muestra el máximo rango disponible: últimos 366 días">Todas</button>
                 </div>
               </div>
               {salesHistoryError && <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-800">{salesHistoryError}</div>}
