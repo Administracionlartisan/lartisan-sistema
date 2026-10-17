@@ -92,6 +92,15 @@ test("Relevos: las ventas y la caja del local se actualizan sin cambiar de usuar
   assert.match(page, /Actualizar ventas y caja/);
 });
 
+test("Relevos: una cola bloqueada no oculta la caja vigente del local", () => {
+  // El rechazo queda guardado para auditoría, pero una vendedora no puede ver
+  // su estado local rechazado en lugar de la caja que otro turno abrió y la
+  // API confirmó para el mismo local.
+  assert.match(page, /const pendingSites = \(outbox\?\.sites\(\) \?\? \[\]\)\.filter\(\(local\) => \{/);
+  assert.match(page, /queue\?\.writes\.length && !queue\.blocked/);
+  assert.match(page, /Una cola bloqueada fue rechazada definitivamente/);
+});
+
 test("Acceso: el relevo puede volver al inicio con el botón Cambiar usuario", () => {
   assert.match(page, /Cambiar usuario/);
   assert.match(page, /onClick=\{logout\}/);

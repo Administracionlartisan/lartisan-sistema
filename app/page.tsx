@@ -969,7 +969,14 @@ export default function Home() {
         setMessage("Se confirmó la apertura antigua ya cerrada en el servidor. No se creó ni modificó ningún cobro.");
       }
     }
-    const pendingSites = outbox?.sites() ?? [];
+    // Una cola bloqueada fue rechazada definitivamente por el servidor. Se
+    // conserva íntegra para que Administración pueda revisarla, pero no puede
+    // reemplazar el estado confirmado del local: hacerlo ocultaba una caja
+    // abierta por otra persona y dejaba al relevo sin poder cobrar.
+    const pendingSites = (outbox?.sites() ?? []).filter((local) => {
+      const queue = outbox?.get(local);
+      return Boolean(queue?.writes.length && !queue.blocked);
+    });
     const entries = [
       ...Object.entries(data.states || {}).filter(([local]) => !pendingSites.includes(local)),
       ...pendingSites.flatMap((local) => {
