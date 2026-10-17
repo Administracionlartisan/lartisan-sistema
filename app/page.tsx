@@ -1585,14 +1585,28 @@ export default function Home() {
     const handleOffline = () => setConnectionMode("Contingencia");
     const handleOnline = () => {
       setConnectionMode("En línea");
-      flushPendingWrites().catch(() => setMessage("La conexión volvió, pero todavía hay operaciones pendientes. Tocá Sincronizar."));
+      // Una respuesta anterior pudo haber marcado la cola como bloqueada justo
+      // antes de un corte. Al volver la red se reintenta la misma solicitud
+      // idempotente, sin crear ni cobrar una venta adicional.
+      void getOutbox()?.then(async (outbox) => {
+        await outbox.unblockAll();
+        await flushPendingWrites();
+      }).catch(() => setMessage("La conexión volvió, pero todavía hay operaciones pendientes. Tocá Sincronizar."));
     };
     window.addEventListener("offline", handleOffline);
     window.addEventListener("online", handleOnline);
     const initialTimer = window.setTimeout(() => {
       refreshPendingCount();
       if (!navigator.onLine) handleOffline();
-      else flushPendingWrites().catch(() => undefined);
+      else {
+        // Una recarga forzada debe reanudar también una cola que una versión
+        // anterior dejó bloqueada. No se inventa una operación: se reenvía su
+        // requestId original y el servidor la reconoce como idempotente.
+        void getOutbox()?.then(async (outbox) => {
+          await outbox.unblockAll();
+          await flushPendingWrites();
+        }).catch(() => undefined);
+      }
     }, 0);
     // Un corte breve no siempre dispara el evento "online": se reintenta solo.
     const retryTimer = window.setInterval(() => {
