@@ -248,9 +248,12 @@ if ($method === 'POST' && $route === 'attendance/clock') {
     if (!user_can_access_site($user, $site) || !in_array($kind, ['Entrada', 'Salida'], true)) json_response(['ok' => false, 'error' => 'Fichaje inválido o local no autorizado.'], 422);
     $geo = is_array($body['geolocation'] ?? null) ? $body['geolocation'] : [];
     $trustedDevice = attendance_authorized_device($pdo, $site, is_array($body['deviceAuth'] ?? null) ? $body['deviceAuth'] : []);
-    $evaluation = $trustedDevice
-        ? ['ok' => true, 'reason' => 'Equipo autorizado', 'device' => $trustedDevice]
-        : presence_evaluate($pdo, $site, $geo);
+    $mobileRequest = attendance_request_is_mobile();
+    $evaluation = !$mobileRequest
+        ? ['ok' => true, 'reason' => 'Equipo de escritorio']
+        : ($trustedDevice
+            ? ['ok' => true, 'reason' => 'Equipo autorizado', 'device' => $trustedDevice]
+            : presence_evaluate($pdo, $site, $geo));
     $evidence = ['reason' => $evaluation['reason'], 'distanceMeters' => isset($evaluation['distance']) ? round((float) $evaluation['distance'], 1) : null, 'accuracyMeters' => isset($evaluation['accuracy']) ? round((float) $evaluation['accuracy'], 1) : null, 'capturedAt' => $geo['capturedAt'] ?? null];
     $pdo->beginTransaction();
     try {
@@ -260,10 +263,12 @@ if ($method === 'POST' && $route === 'attendance/clock') {
             audit($pdo, (int) $user['id'], 'attendance_exception_requested', $site . ' · ' . $kind . ' · ' . $evaluation['reason']);
             $pdo->commit(); json_response(['ok' => false, 'exception' => true, 'exceptionId' => $id, 'reason' => $evaluation['reason'], 'message' => 'El fichaje requiere autorización de Supervisión.']);
         }
-        $record = attendance_append_to_locked_state($pdo, $site, $user, $kind, $trustedDevice
-            ? ['presenceStatus' => 'Equipo autorizado', 'attendanceDeviceId' => (string) $trustedDevice['id']]
-            : ['presenceStatus' => 'Dentro de zona', 'distanceMeters' => $evidence['distanceMeters'], 'accuracyMeters' => $evidence['accuracyMeters'], 'locationCapturedAt' => $evidence['capturedAt']]);
-        audit($pdo, (int) $user['id'], $trustedDevice ? 'attendance_clocked_with_authorized_device' : 'attendance_clocked_with_geofence', $site . ' · ' . $kind);
+        $record = attendance_append_to_locked_state($pdo, $site, $user, $kind, !$mobileRequest
+            ? ['presenceStatus' => 'Equipo de escritorio']
+            : ($trustedDevice
+                ? ['presenceStatus' => 'Equipo autorizado', 'attendanceDeviceId' => (string) $trustedDevice['id']]
+                : ['presenceStatus' => 'Dentro de zona', 'distanceMeters' => $evidence['distanceMeters'], 'accuracyMeters' => $evidence['accuracyMeters'], 'locationCapturedAt' => $evidence['capturedAt']]));
+        audit($pdo, (int) $user['id'], !$mobileRequest ? 'attendance_clocked_with_desktop' : ($trustedDevice ? 'attendance_clocked_with_authorized_device' : 'attendance_clocked_with_geofence'), $site . ' · ' . $kind);
         $pdo->commit(); json_response(['ok' => true, 'record' => $record]);
     } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
 }

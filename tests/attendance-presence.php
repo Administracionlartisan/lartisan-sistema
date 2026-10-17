@@ -6,6 +6,10 @@ function check_presence(string $label, bool $value): void { if (!$value) throw n
 
 check_presence('distancia cero', presence_distance_meters(-34.6037, -58.3816, -34.6037, -58.3816) < 0.01);
 check_presence('distancia geográfica positiva', presence_distance_meters(-34.6037, -58.3816, -34.6047, -58.3816) > 100);
+$_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
+check_presence('computadora no requiere geocerca', !attendance_request_is_mobile());
+$_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (Linux; Android 14; Mobile)';
+check_presence('celular conserva geocerca', attendance_request_is_mobile());
 $user = ['full_name' => 'Vendedora de prueba'];
 $closed = ['cashOpen' => false, 'activeShift' => null, 'shiftLog' => []];
 $opening = ['cashOpen' => true, 'activeShift' => ['id' => 'shift-a', 'site' => 'Recoleta', 'openedBy' => 'Vendedora de prueba'], 'shiftLog' => [['id' => 'shift-a', 'site' => 'Recoleta', 'openedBy' => 'Vendedora de prueba']]];

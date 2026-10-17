@@ -128,6 +128,17 @@ function attendance_authorized_device(PDO $pdo, string $site, array $device): ?a
     return $row && hash_equals((string) $row['token_hash'], hash('sha256', $token)) ? $row : null;
 }
 
+/**
+ * Las computadoras fijas de los locales fichan con la sesión personal sin
+ * geocerca ni aprobación. Los dispositivos móviles conservan la validación
+ * de presencia para evitar que el fichaje se haga fuera del local.
+ */
+function attendance_request_is_mobile(): bool
+{
+    $agent = strtolower((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''));
+    return (bool) preg_match('/android|iphone|ipad|ipod|windows phone|mobile/', $agent);
+}
+
 function presence_evaluate(PDO $pdo, string $site, array $geo): array
 {
     $settings = presence_settings($pdo, $site);

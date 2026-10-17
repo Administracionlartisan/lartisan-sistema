@@ -4254,9 +4254,10 @@ export default function Home() {
 
   const markAttendance = async (kind: AttendanceRecord["kind"]) => {
     if (!user) return;
-    const usingDevice = attendanceDevice?.status === "Aprobado";
-    setClock(usingDevice ? "Validando equipo autorizado del local…" : "Solicitando ubicación para validar presencia…");
-    const position = !usingDevice && window.isSecureContext && navigator.geolocation
+    const mobileBrowser = /android|iphone|ipad|ipod|windows phone|mobile/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const usingDevice = mobileBrowser && attendanceDevice?.status === "Aprobado";
+    setClock(mobileBrowser ? (usingDevice ? "Validando equipo autorizado del local…" : "Solicitando ubicación para validar presencia…") : "Validando sesión desde computadora del local…");
+    const position = mobileBrowser && !usingDevice && window.isSecureContext && navigator.geolocation
       ? await new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })).catch(() => null)
       : null;
     const geolocation = position ? { latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy, capturedAt: new Date(position.timestamp).toISOString() } : { capturedAt: new Date().toISOString() };
@@ -4269,7 +4270,7 @@ export default function Home() {
         return;
       }
       if (data.record) setAttendanceRecords((items) => [data.record!, ...items.filter((item) => item.id !== data.record!.id)]);
-      setClock(`${kind} validada ${usingDevice ? "por equipo autorizado" : "por geocerca"} a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
+      setClock(`${kind} validada ${mobileBrowser ? (usingDevice ? "por equipo autorizado" : "por geocerca") : "desde computadora"} a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}.`);
       setAttendanceReminder(null);
     } catch {
       setClock(""); setMessage("No se pudo validar la ubicación. No se registró el fichaje; solicitá una excepción a Administración.");
@@ -5887,7 +5888,7 @@ export default function Home() {
                     </button>
                   </div>
                   <div className="mt-3 rounded border border-[#183a67]/20 bg-[#eef2f6] p-3 text-sm">
-                    {attendanceDevice?.status === "Aprobado" ? <p><b>Equipo autorizado:</b> {attendanceDevice.label}. En esta computadora el fichaje valida el equipo del local y tu sesión personal.</p> : attendanceDevice?.status === "Pendiente" ? <p><b>Equipo pendiente de autorización:</b> {attendanceDevice.label}. Betzi o Andrea deben aprobarlo desde Supervisión → Asistencia antes de usarlo para fichar.</p> : <><p><b>¿Es la computadora fija del local?</b> Podés solicitar su autorización una sola vez; no reemplaza tu sesión personal.</p><button type="button" onClick={() => void requestAttendanceDevice()} className="mt-2 rounded border border-[#183a67] bg-white px-3 py-2 text-sm font-bold">Autorizar esta computadora del local</button></>}
+                    <p><b>Desde computadora:</b> el fichaje valida la sesión personal y no solicita ubicación ni autorización. Desde celular se valida la geocerca del local.</p>
                   </div>
                   {clock && (
                     <p className="mt-3 rounded bg-[#eef5ef] p-3 text-sm">
