@@ -13,6 +13,17 @@ if (is_file($privateBackupConfigPath)) {
     $config['backup'] = array_replace_recursive($config['backup'] ?? [], $privateBackupConfig);
 }
 
+// La clave de cifrado se separa de la integración Drive para poder rotarla sin
+// abrir ni reescribir credenciales existentes. Vive fuera de public_html.
+$privateEncryptionConfigPath = dirname(__DIR__, 2) . '/lartisan-backup-encryption.php';
+if (is_file($privateEncryptionConfigPath)) {
+    $privateEncryptionConfig = require $privateEncryptionConfigPath;
+    if (!is_array($privateEncryptionConfig)) {
+        throw new RuntimeException('La configuración privada de cifrado no es válida.');
+    }
+    $config['backup'] = array_replace_recursive($config['backup'] ?? [], $privateEncryptionConfig);
+}
+
 if (PHP_SAPI !== 'cli') {
     $providedKey = (string) ($_SERVER['HTTP_X_BACKUP_KEY'] ?? '');
     $expectedKey = (string) ($config['backup']['trigger_key'] ?? '');
