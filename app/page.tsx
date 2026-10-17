@@ -1094,6 +1094,18 @@ export default function Home() {
     }
     setOperationalReady(true);
   };
+  // Las operaciones son compartidas por local. Durante un relevo, la persona
+  // que quedó con la pantalla abierta debe recibir las ventas y la caja que
+  // registró el turno anterior, sin tener que cerrar sesión ni arriesgar datos
+  // locales: loadOperationalData conserva los locales que siguen en la cola.
+  const refreshOperationalData = async () => {
+    try {
+      await loadOperationalData();
+      setMessage(`Ventas y caja de ${site} actualizadas.`);
+    } catch {
+      setMessage("No se pudieron actualizar las operaciones guardadas. Verificá la conexión e intentá nuevamente.");
+    }
+  };
   useEffect(() => {
     if (!user) return;
     const timer = window.setTimeout(() => {
@@ -1103,6 +1115,19 @@ export default function Home() {
     }, 0);
     return () => window.clearTimeout(timer);
   // Cargar nuevamente solo cuando cambia la identidad autenticada.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+  useEffect(() => {
+    if (!user) return;
+    // Una pantalla de caja puede quedar abierta durante todo el día. La
+    // actualización periódica incorpora los cobros de otras vendedoras del
+    // mismo local; los pendientes propios quedan protegidos por la cola.
+    const timer = window.setInterval(() => {
+      if (!navigator.onLine) return;
+      void loadOperationalData().catch(() => undefined);
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  // La recarga se instala por sesión; la función lee siempre la cola vigente.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
   useEffect(() => {
@@ -4755,6 +4780,11 @@ export default function Home() {
                 h="Nueva venta"
                 p="Productos, descuentos, comprobante interno y cobro."
               />
+              <div className="mb-4 flex justify-end">
+                <button type="button" onClick={() => void refreshOperationalData()} className="rounded-lg border border-[#183a67] px-4 py-2 text-sm font-bold text-[#183a67] hover:bg-[#eef2f6]">
+                  Actualizar ventas y caja
+                </button>
+              </div>
               {!cashIsOpen && (
                 <div className="mb-5 rounded-xl border border-[#e7c26a] bg-[#fff5d8] p-4 text-sm">
                   <b>Caja cerrada.</b> Abrí la caja desde el módulo Caja antes
@@ -5252,6 +5282,11 @@ export default function Home() {
                 h="Cierre de caja"
                 p="Los cobros se acumulan automáticamente desde las ventas."
               />
+              <div className="mb-4 flex justify-end">
+                <button type="button" onClick={() => void refreshOperationalData()} className="rounded-lg border border-[#183a67] px-4 py-2 text-sm font-bold text-[#183a67] hover:bg-[#eef2f6]">
+                  Actualizar ventas y caja
+                </button>
+              </div>
               <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
                 <div className="rounded-2xl border bg-white p-5">
                   <h2 className="font-bold">Cobros del día</h2>

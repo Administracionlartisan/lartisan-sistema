@@ -83,6 +83,15 @@ test("Caja: el turno cerrado se envía como null y la apertura usa la fecha ISO"
   assert.match(bootstrap, /iso_datetime\(\$session\['openedAtISO'\] \?\? null\)/);
 });
 
+test("Relevos: las ventas y la caja del local se actualizan sin cambiar de usuario", () => {
+  // La caja es del local, no de quien abrió la pantalla. Sin esta recarga la
+  // responsable del segundo turno podía cerrar con una vista anterior.
+  assert.match(page, /const refreshOperationalData = async \(\)/);
+  assert.match(page, /Ventas y caja de \$\{site\} actualizadas/);
+  assert.match(page, /window\.setInterval\([\s\S]*?loadOperationalData\(\)[\s\S]*?30_000/);
+  assert.match(page, /Actualizar ventas y caja/);
+});
+
 test("Límites: cada local recibe los suyos y la interfaz los combina", () => {
   assert.match(bootstrap, /\$ownLimits/, "operational_snapshot_for_user debe conservar los límites del propio local");
   assert.match(page, /setLimitsBySite\(\(current\) => \(\{ \.\.\.current, \.\.\.receivedLimits \}\)\)/);
