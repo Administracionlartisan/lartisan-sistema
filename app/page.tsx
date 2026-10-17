@@ -4572,7 +4572,10 @@ export default function Home() {
                 <label className="text-sm font-bold">Desde<input type="date" value={salesHistoryFrom} max={salesHistoryTo} onChange={(event) => setSalesHistoryFrom(event.target.value)} className="mt-1 block w-full rounded-lg border bg-white p-2" /></label>
                 <label className="text-sm font-bold">Hasta<input type="date" value={salesHistoryTo} min={salesHistoryFrom} onChange={(event) => setSalesHistoryTo(event.target.value)} className="mt-1 block w-full rounded-lg border bg-white p-2" /></label>
                 <label className="text-sm font-bold">Buscar<input value={salesHistorySearch} onChange={(event) => setSalesHistorySearch(event.target.value)} placeholder="Cliente, comprobante, medio u operación" className="mt-1 block w-full rounded-lg border bg-white p-2" /></label>
-                <button type="button" onClick={() => { setSalesHistoryFrom(dateKey(new Date())); setSalesHistoryTo(dateKey(new Date())); setSalesHistorySearch(""); }} className="self-end rounded-lg border px-4 py-2 font-bold hover:bg-slate-50">Hoy</button>
+                <div className="self-end flex gap-2">
+                  <button type="button" onClick={() => { setSalesHistoryFrom(dateKey(new Date())); setSalesHistoryTo(dateKey(new Date())); setSalesHistorySearch(""); }} className="rounded-lg border px-4 py-2 font-bold hover:bg-slate-50">Hoy</button>
+                  <button type="button" onClick={() => { setSalesHistoryFrom("2020-01-01"); setSalesHistoryTo(dateKey(new Date())); setSalesHistorySearch(""); }} className="rounded-lg border border-[#183a67] px-4 py-2 font-bold text-[#183a67] hover:bg-[#eef2f6]">Todas</button>
+                </div>
               </div>
               {salesHistoryError && <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-800">{salesHistoryError}</div>}
               {salesHistoryLoading ? <div className="rounded-2xl border bg-white p-6 text-sm">Cargando ventas guardadas…</div> : (
