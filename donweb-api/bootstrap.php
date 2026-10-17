@@ -16,6 +16,17 @@ if (!is_file($configPath)) {
 
 $config = require $configPath;
 
+// Ventas y Administración son los únicos clientes web de producción. Se
+// incorporan aquí para que una configuración local antigua no deje a las
+// vendedoras leyendo datos pero sin poder confirmar cobros por CORS.
+// No se aceptan orígenes dinámicos ni se amplía el acceso a dominios ajenos.
+$requiredApplicationOrigins = [
+    'https://ventas.lartisantaller.com',
+    'https://admin.lartisantaller.com',
+];
+$configuredOrigins = is_array($config['allowed_origins'] ?? null) ? $config['allowed_origins'] : [];
+$config['allowed_origins'] = array_values(array_unique(array_merge($configuredOrigins, $requiredApplicationOrigins)));
+
 // El hosting todavía usa PHP 7.4. Estas funciones estándar se incorporaron en
 // PHP 8; se definen de forma compatible para que el mismo código funcione en
 // ambos entornos sin alterar datos operativos.
