@@ -92,6 +92,12 @@ test("Relevos: las ventas y la caja del local se actualizan sin cambiar de usuar
   assert.match(page, /Actualizar ventas y caja/);
 });
 
+test("Acceso: el relevo puede volver al inicio con el botón Cambiar usuario", () => {
+  assert.match(page, /Cambiar usuario/);
+  assert.match(page, /onClick=\{logout\}/);
+  assert.match(page, /auth\/logout/);
+});
+
 test("Límites: cada local recibe los suyos y la interfaz los combina", () => {
   assert.match(bootstrap, /\$ownLimits/, "operational_snapshot_for_user debe conservar los límites del propio local");
   assert.match(page, /setLimitsBySite\(\(current\) => \(\{ \.\.\.current, \.\.\.receivedLimits \}\)\)/);

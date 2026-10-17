@@ -4541,12 +4541,12 @@ export default function Home() {
             {connectionMode === "En línea" ? "● En línea" : "● Contingencia"}
           </span>
           <button onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen} aria-controls="menu-principal" className="rounded border px-3 py-2 font-bold lg:hidden">Menú</button>
-          <span>
-          {user.name} ·{" "}
-          <button onClick={logout} className="underline">
-            Salir
-          </button>
-          </span>
+          <div className="flex items-center gap-2">
+            <span>{user.name}</span>
+            <button onClick={logout} className="rounded border border-[#183a67] px-2 py-1 text-xs font-bold text-[#183a67] hover:bg-[#eef2f6]" title="Cierra esta sesión y permite que otra persona ingrese con su propia clave">
+              Cambiar usuario
+            </button>
+          </div>
         </div>
       </header>
       <div className="grid lg:grid-cols-[230px_1fr]">
