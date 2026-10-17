@@ -304,6 +304,10 @@ export default function Home() {
   const [fiscalSales, setFiscalSales] = useState<Array<{ id: string; site: string; occurred_at: string; net_amount: number; invoice_type: string; customer_name: string; document_id?: number; fiscal_status?: string; voucher_number?: number; cae?: string }>>([]);
   const [fiscalBusy, setFiscalBusy] = useState<string | null>(null);
   const [fiscalMessage, setFiscalMessage] = useState("");
+  const [creditNoteSale, setCreditNoteSale] = useState<(typeof fiscalSales)[number] | null>(null);
+  const [creditNoteAmount, setCreditNoteAmount] = useState("");
+  const [creditNoteReason, setCreditNoteReason] = useState("");
+  const [creditNoteConfirmed, setCreditNoteConfirmed] = useState(false);
   const [persistedReportSales, setPersistedReportSales] = useState<Sale[] | null>(null);
   const [persistedReportPayments, setPersistedReportPayments] = useState<Payment[]>([]);
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRow[]>([]);
@@ -885,19 +889,31 @@ export default function Home() {
     } catch (error) { setFiscalMessage(error instanceof Error ? error.message : "No se pudo emitir el comprobante."); }
     finally { setFiscalBusy(null); }
   };
-  const prepareCreditNote = async (sale: typeof fiscalSales[number]) => {
+  const openCreditNote = (sale: typeof fiscalSales[number]) => {
     if (!sale.document_id || sale.fiscal_status !== "authorized") return;
-    const amountText = window.prompt("Importe total de la nota de crédito (IVA incluido):", String(sale.net_amount)); if (amountText === null) return;
-    const reason = window.prompt("Motivo de la nota de crédito fiscal:"); if (!reason) return;
+    setCreditNoteSale(sale);
+    setCreditNoteAmount(String(sale.net_amount));
+    setCreditNoteReason("");
+    setCreditNoteConfirmed(false);
+    setFiscalMessage("");
+  };
+  const prepareCreditNote = async () => {
+    const sale = creditNoteSale;
+    const amount = Number(creditNoteAmount.replace(",", "."));
+    const reason = creditNoteReason.trim();
+    if (!sale?.document_id || sale.fiscal_status !== "authorized") return;
+    if (!Number.isFinite(amount) || amount <= 0) { setFiscalMessage("Indicá un importe válido para la nota de crédito."); return; }
+    if (!reason) { setFiscalMessage("Indicá el motivo de la nota de crédito."); return; }
+    if (!creditNoteConfirmed) { setFiscalMessage("Confirmá que entendés que ARCA emitirá un comprobante fiscal irreversible."); return; }
     setFiscalBusy(sale.id); setFiscalMessage("");
     try {
-      const prepared = await fetch(`${API_BASE}/admin/arca/fiscal-documents/credit-note/prepare`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceDocumentId: sale.document_id, amount: Number(amountText.replace(",", ".")), reason }) });
+      const prepared = await fetch(`${API_BASE}/admin/arca/fiscal-documents/credit-note/prepare`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceDocumentId: sale.document_id, amount, reason }) });
       const data = (await prepared.json()) as { document?: { id?: number }; error?: string };
       if (!prepared.ok || !data.document?.id) throw new Error(data.error || "No se pudo preparar la nota de crédito.");
-      if (!window.confirm(`Vas a solicitar a ARCA el CAE de una nota de crédito por ${amountText}. ¿Confirmás la emisión?`)) { setFiscalMessage("Nota de crédito preparada; no se informó a ARCA."); return; }
       const issued = await fetch(`${API_BASE}/admin/arca/fiscal-documents/issue`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentId: data.document.id }) });
       const issuedData = (await issued.json()) as { document?: { cae?: string; voucher_number?: number }; error?: string };
       if (!issued.ok || !issuedData.document?.cae) throw new Error(issuedData.error || "ARCA no autorizó la nota de crédito.");
+      setCreditNoteSale(null);
       setFiscalMessage(`Nota de crédito autorizada: CAE ${issuedData.document.cae} · comprobante ${String(issuedData.document.voucher_number).padStart(8, "0")}.`); await loadFiscalSales();
     } catch (error) { setFiscalMessage(error instanceof Error ? error.message : "No se pudo emitir la nota de crédito."); }
     finally { setFiscalBusy(null); }
@@ -7005,13 +7021,25 @@ export default function Home() {
                       <button onClick={() => void loadFiscalSales()} className="rounded border px-3 py-1.5 text-sm font-bold">Actualizar cola</button>
                     </div>
                     {fiscalMessage && <p className="mt-3 rounded bg-[#f8fafc] p-3 text-sm text-slate-700">{fiscalMessage}</p>}
+                    {creditNoteSale && (
+                      <div className="mt-3 rounded border-2 border-[#183a67] bg-[#f8fafc] p-4">
+                        <h3 className="font-bold">Emitir nota de crédito ARCA</h3>
+                        <p className="mt-1 text-sm text-slate-700">{creditNoteSale.site} · {creditNoteSale.invoice_type} · {money.format(creditNoteSale.net_amount)}. Esta acción genera un comprobante fiscal asociado a la factura original.</p>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <label className="text-sm font-bold">Importe total (IVA incluido)<input value={creditNoteAmount} onChange={(event) => setCreditNoteAmount(event.target.value)} inputMode="decimal" className="mt-1 block w-full rounded border p-2 font-normal" /></label>
+                          <label className="text-sm font-bold">Motivo<input value={creditNoteReason} onChange={(event) => setCreditNoteReason(event.target.value)} maxLength={500} placeholder="Ej.: Anulación de operación de prueba" className="mt-1 block w-full rounded border p-2 font-normal" /></label>
+                        </div>
+                        <label className="mt-3 flex items-start gap-2 text-sm"><input type="checkbox" checked={creditNoteConfirmed} onChange={(event) => setCreditNoteConfirmed(event.target.checked)} className="mt-1" />Confirmo la emisión fiscal irreversible de esta nota de crédito en ARCA.</label>
+                        <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => setCreditNoteSale(null)} disabled={fiscalBusy === creditNoteSale.id} className="rounded border px-3 py-2 text-sm font-bold">Cancelar</button><button type="button" onClick={() => void prepareCreditNote()} disabled={fiscalBusy === creditNoteSale.id || !creditNoteConfirmed} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{fiscalBusy === creditNoteSale.id ? "Solicitando CAE…" : "Emitir nota de crédito con CAE"}</button></div>
+                      </div>
+                    )}
                     <div className="mt-3 max-h-80 overflow-auto rounded border">
                       {fiscalSales.length === 0 ? <p className="p-3 text-sm text-slate-600">No hay ventas A/B pendientes en los últimos registros sincronizados.</p> : fiscalSales.map((sale) => (
                         <div key={sale.id} className="flex flex-wrap items-center justify-between gap-3 border-b p-3 last:border-b-0">
                           <div className="text-sm"><b>{sale.site} · {sale.invoice_type}</b><br /><span>{sale.customer_name || "Consumidor final"} · {money.format(sale.net_amount)} · {new Date(sale.occurred_at).toLocaleString("es-AR")}</span><br /><span className="text-xs text-slate-500">{sale.fiscal_status === "authorized" ? `Autorizada · CAE ${sale.cae || ""}` : sale.fiscal_status === "requires_reconciliation" ? "Requiere conciliación: no reintentar" : sale.fiscal_status === "issuing" ? "Emisión en curso" : "Pendiente de emisión"}</span></div>
                           <div className="flex flex-wrap gap-2">
                             {sale.fiscal_status !== "authorized" && sale.fiscal_status !== "issuing" && sale.fiscal_status !== "requires_reconciliation" && <button disabled={fiscalBusy === sale.id} onClick={() => void issueFiscalSale(sale)} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{fiscalBusy === sale.id ? "Procesando…" : "Emitir con CAE"}</button>}
-                            {sale.fiscal_status === "authorized" && <button disabled={fiscalBusy === sale.id} onClick={() => void prepareCreditNote(sale)} className="rounded border px-3 py-2 text-sm font-bold disabled:opacity-50">Nota de crédito</button>}
+                            {sale.fiscal_status === "authorized" && <button disabled={fiscalBusy === sale.id} onClick={() => openCreditNote(sale)} className="rounded border px-3 py-2 text-sm font-bold disabled:opacity-50">Nota de crédito</button>}
                           </div>
                         </div>
                       ))}
