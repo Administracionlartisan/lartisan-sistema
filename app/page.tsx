@@ -3633,6 +3633,19 @@ export default function Home() {
     setFiscalReceiptChecking(expectsFiscal);
     let attempts = 0;
     const loadFiscalReceipt = async () => {
+      if (attempts === 0 && expectsFiscal) {
+        try {
+          await fetch(`${API_BASE}/fiscal/sale-document/issue`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ saleReference: receiptSale.id }),
+            signal: controller.signal,
+          });
+        } catch {
+          // La consulta posterior conserva el estado real del comprobante.
+        }
+      }
       try {
         const response = await fetch(`${API_BASE}/fiscal/sale-document?saleReference=${encodeURIComponent(receiptSale.id)}`, {
           credentials: "include", cache: "no-store", signal: controller.signal,

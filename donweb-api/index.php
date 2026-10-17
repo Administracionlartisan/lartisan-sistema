@@ -628,6 +628,39 @@ if ($method === 'GET' && $route === 'fiscal/sale-document') {
     ]]);
 }
 
+// Emisión inmediata desde Ventas. La venta ya debe existir y pertenecer a un
+// local habilitado para la sesión; el servidor reconstruye el comprobante y
+// nunca acepta importes ni datos fiscales enviados por el navegador.
+if ($method === 'POST' && $route === 'fiscal/sale-document/issue') {
+    $fiscalUser = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    if (!in_array($_SERVER['HTTP_ORIGIN'] ?? '', $config['allowed_origins'], true)) {
+        json_response(['ok' => false, 'error' => 'Origen no autorizado.'], 403);
+    }
+    try {
+        ensure_normalized_operations_schema($pdo);
+        require_once __DIR__ . '/arca_fiscal_queue.php';
+        $input = request_body();
+        $saleReference = trim((string) ($input['saleReference'] ?? ''));
+        if (!preg_match('/^[a-f0-9-]{36}$/i', $saleReference)) {
+            throw new InvalidArgumentException('La referencia de venta es inválida.');
+        }
+        $saleQuery = $pdo->prepare('SELECT site FROM lartisan_sales WHERE id=? LIMIT 1');
+        $saleQuery->execute([$saleReference]);
+        $sale = $saleQuery->fetch();
+        if (!$sale || !user_can_access_site($fiscalUser, (string) $sale['site'])) {
+            json_response(['ok' => false, 'error' => 'No tenés acceso a la venta indicada.'], 403);
+        }
+        $document = arca_prepare_fiscal_document($pdo, $config, (int) $fiscalUser['id'], ['saleReference' => $saleReference]);
+        $issued = arca_issue_fiscal_document($pdo, $config, (int) $fiscalUser['id'], (int) $document['id']);
+        audit($pdo, (int) $fiscalUser['id'], 'arca_fiscal_document_auto_authorized', $saleReference);
+        json_response(['ok' => true, 'status' => $issued['status'] ?? null]);
+    } catch (InvalidArgumentException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    } catch (RuntimeException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    }
+}
+
 if ($method === 'GET' && $route === 'admin/arca/eligible-sales') {
     require_user($pdo, ['administracion']);
     try {
