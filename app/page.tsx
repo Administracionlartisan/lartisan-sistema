@@ -297,6 +297,9 @@ export default function Home() {
   );
   const [connectionMode, setConnectionMode] = useState<"En línea" | "Contingencia">("En línea");
   const [pendingSync, setPendingSync] = useState(0);
+  // Se muestra separado del mensaje general para que una venta posterior no
+  // oculte el motivo por el que una operación anterior no llegó a la API.
+  const [syncFailure, setSyncFailure] = useState("");
   const [backupFrequency, setBackupFrequency] = useState("Dos veces por semana · lunes y jueves 21:00");
   const [retentionYears, setRetentionYears] = useState(7);
   const [backupStatus, setBackupStatus] = useState("El estado del respaldo se verifica automáticamente desde el servidor.");
@@ -1368,6 +1371,8 @@ export default function Home() {
   const sendPendingWrite = async (write: PendingOperationalWrite): Promise<SendResult> => {
     const body = JSON.stringify(write);
     let response: Response;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 25000);
     try {
       // POST /sync evita las reglas de algunos hosting compartidos que bloquean
       // PUT o la ruta /operations antes de que la operación llegue a la API.
@@ -1382,10 +1387,18 @@ export default function Home() {
         // La bandeja persistente y requestId idempotente ya protegen un cierre
         // o corte: el próximo inicio reintenta sin duplicar la operación.
         keepalive: false,
+        signal: controller.signal,
         body,
       });
     } catch (error) {
-      return { kind: "retry", message: error instanceof Error ? error.message : "No se pudo contactar a la API." };
+      return {
+        kind: "retry",
+        message: error instanceof DOMException && error.name === "AbortError"
+          ? "La API no respondió en 25 segundos."
+          : error instanceof Error ? error.message : "No se pudo contactar a la API.",
+      };
+    } finally {
+      window.clearTimeout(timeout);
     }
     if (response.ok) {
       const data = (await response.json().catch(() => ({}))) as { revision?: number; merged?: boolean };
@@ -1425,20 +1438,24 @@ export default function Home() {
         const result = await sendPendingWrite(exactBase ? { ...write, baseRevision: serverRevision.current[local] ?? write.baseRevision } : write);
         lastResult = result.kind;
         if (result.kind === "retry") {
+          setSyncFailure(`Pendiente de sincronización en ${local}: ${result.message || "sin respuesta de la API"}`);
           setMessage(`La operación quedó pendiente en este equipo. ${result.message || "Se reintentará sola."} No repitas el cobro.`);
           break;
         }
         if (result.kind === "session") {
+          setSyncFailure(`Sesión vencida al guardar una operación de ${local}.`);
           setMessage("Tu sesión venció. Volvé a ingresar: las operaciones pendientes siguen guardadas en este equipo y se enviarán.");
           break;
         }
         if (result.kind === "rejected") {
           await outbox.block(local, result.message);
+          setSyncFailure(`La API rechazó una operación de ${local}: ${result.message}`);
           setMessage(`No se pudo guardar en ${local}: ${result.message} Las operaciones siguen guardadas en este equipo; avisá a Administración antes de cerrar la sesión.`);
           break;
         }
         await outbox.acknowledge(local, write.requestId);
         if (typeof result.revision === "number") serverRevision.current[local] = result.revision;
+        setSyncFailure("");
         lastPersistedSnapshot.current[local] = JSON.stringify(write.state);
         lastAcknowledged.current[local] = { stateJson: lastPersistedSnapshot.current[local], merged: Boolean(result.merged) };
         if (result.merged) reloadAfterDrain.current = true;
@@ -1589,16 +1606,18 @@ export default function Home() {
     // Así una vendedora no depende de recordar una recarga forzada.
     const resumePendingWrites = () => {
       if (!navigator.onLine) return;
-      void getOutbox()?.then(async (outbox) => {
-        await outbox.unblockAll();
+      void getOutbox()?.then(async () => {
+        // Los rechazos definitivos (por ejemplo, permiso de local) no se
+        // desbloquean a ciegas cada 20 segundos: conservar el diagnóstico
+        // evita que la vendedora siga cobrando sin saber que la API rechaza.
         await flushPendingWrites();
       }).catch(() => undefined);
     };
     const handleOnline = () => {
       setConnectionMode("En línea");
-      // Una respuesta anterior pudo haber marcado la cola como bloqueada justo
-      // antes de un corte. Al volver la red se reintenta la misma solicitud
-      // idempotente, sin crear ni cobrar una venta adicional.
+      // Las colas transitorias se reintentan solas; un rechazo definitivo se
+      // conserva visible hasta que Administración lo revise o la usuaria use
+      // el botón explícito de sincronización.
       resumePendingWrites();
     };
     const handleVisibility = () => {
@@ -3716,12 +3735,19 @@ export default function Home() {
     window.print();
     window.setTimeout(cleanup, 1000);
   };
+  // La emisión fiscal sincroniza el comprobante externo con el recibo visible.
+  // Sus estados se limpian deliberadamente al cambiar de recibo.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!receiptSale) {
-      setFiscalReceipt(null);
-      setFiscalReceiptQr("");
-      setFiscalReceiptChecking(false);
-      return;
+      // Dejar que React cierre el render actual antes de limpiar el comprobante
+      // anterior; evita una actualización de estado encadenada dentro del efecto.
+      const reset = window.setTimeout(() => {
+        setFiscalReceipt(null);
+        setFiscalReceiptQr("");
+        setFiscalReceiptChecking(false);
+      }, 0);
+      return () => window.clearTimeout(reset);
     }
     const controller = new AbortController();
     setFiscalReceipt(null);
@@ -3768,6 +3794,7 @@ export default function Home() {
     void loadFiscalReceipt();
     return () => controller.abort();
   }, [receiptSale?.id]);
+  /* eslint-enable react-hooks/set-state-in-effect */
   /** Envía siempre la misma identidad: reintentar nunca puede crear otro ajuste. */
   const syncPostCloseCancellation = async (adjustment: PostCloseCancellationAdjustment) => {
     if (syncingAdjustmentIds.current.has(adjustment.id)) return;
@@ -4659,6 +4686,9 @@ export default function Home() {
             {catalog.error ? `Catálogo: ${catalog.error}` : "Cargando catálogo central…"}
             {catalog.error && <button onClick={() => void catalog.reload()} className="ml-3 font-bold underline">Reintentar</button>}
           </div>}
+          {syncFailure && <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-900">
+            <b>Atención de sincronización.</b> {syncFailure} Las operaciones siguen guardadas en este equipo. No repitas el cobro; usá “Sincronizar pendientes” desde Tareas tras corregir la causa.
+          </div>}
           {message && <div role="status" aria-live="polite" className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm font-semibold shadow-sm"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="shrink-0 underline">Cerrar</button></div>}
           {tab === "Capacitación" ? (
             <SalesTrainingPanel role={user.role} admin={user.role === "administracion"} />
@@ -4756,6 +4786,7 @@ export default function Home() {
                         ? `${pendingSync} operación(es) de contingencia pendientes de sincronizar.`
                         : "Sin operaciones pendientes de sincronización."}
                   </p>
+                  {syncFailure && <p className="mt-2 text-sm font-semibold text-red-700">La cola fue detenida para evitar reintentos ciegos: revisá el aviso de sincronización antes de seguir cobrando.</p>}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button

@@ -294,14 +294,15 @@ if ($method === 'GET' && $route === 'attendance/devices/status') {
 }
 
 // Las excepciones de presencia se revisan en Supervisión. La habilitación
-// "Personal" identifica a las supervisoras responsables (hoy Betzi y Andrea)
+// "Personal" identifica al perfil de supervisión responsable, sin depender
+// de nombres de personas concretas.
 // sin convertir a Administración en aprobadora de sus propios fichajes.
 function can_resolve_attendance_exceptions(array $user): bool
 {
     return ($user['role'] ?? '') === 'supervisora' && user_can_report($user, 'Personal');
 }
 
-// Solo las supervisoras habilitadas para Personal (Betzi y Andrea actualmente)
+// Solo las supervisoras habilitadas para Personal mediante permisos explícitos.
 // pueden confiar o revocar una computadora fija. Administración conserva la
 // auditoría, pero no reemplaza la validación operativa del local.
 if ($method === 'GET' && $route === 'attendance/devices/review') {
