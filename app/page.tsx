@@ -499,6 +499,24 @@ export default function Home() {
   const setCounted = (value: number) => updateCashField("counted", value);
   const setEnvelope = (value: number) => updateCashField("envelope", value);
   const setClosed = (value: boolean) => updateCashField("closed", value);
+  const updateOperationalLimit = <K extends keyof OperationalLimits>(
+    local: string,
+    field: K,
+    value: OperationalLimits[K],
+  ) => {
+    setLimitsBySite((items) => ({
+      ...items,
+      [local]: { ...items[local], [field]: value },
+    }));
+    operationalEventRef.current = {
+      action: "Límites operativos actualizados",
+      detail: `${local} · ${field} actualizado por Administración.`,
+    };
+    // Los límites también son estado operativo: sin este cambio de versión el
+    // campo se veía modificado en Administración, pero no se encolaba ni se
+    // enviaba al servidor para que lo recibiera el local.
+    setOperationalVersion((version) => version + 1);
+  };
   const applyAuthenticatedUser = (profile: ApiUser) => {
     const next = managedUserFromApi(profile);
     if (portal === "admin" && !["administracion", "compras"].includes(next.role)) {
@@ -7319,10 +7337,7 @@ export default function Home() {
                             min="0"
                             max="100"
                             value={limitsBySite[local].maxDiscount}
-                            onChange={(event) => setLimitsBySite((items) => ({
-                              ...items,
-                              [local]: { ...items[local], maxDiscount: Math.min(100, Math.max(0, Number(event.target.value) || 0)) },
-                            }))}
+                            onChange={(event) => updateOperationalLimit(local, "maxDiscount", Math.min(100, Math.max(0, Number(event.target.value) || 0)))}
                             className="w-24 rounded border p-2 text-center"
                           /> %
                         </td>
@@ -7331,10 +7346,7 @@ export default function Home() {
                             type="number"
                             min="0"
                             value={limitsBySite[local].maxExpense}
-                            onChange={(event) => setLimitsBySite((items) => ({
-                              ...items,
-                              [local]: { ...items[local], maxExpense: Math.max(0, Number(event.target.value) || 0) },
-                            }))}
+                            onChange={(event) => updateOperationalLimit(local, "maxExpense", Math.max(0, Number(event.target.value) || 0))}
                             className="w-32 rounded border p-2 text-center"
                           />
                         </td>
@@ -7343,10 +7355,7 @@ export default function Home() {
                             type="number"
                             min="0"
                             value={limitsBySite[local].maxCashDifference}
-                            onChange={(event) => setLimitsBySite((items) => ({
-                              ...items,
-                              [local]: { ...items[local], maxCashDifference: Math.max(0, Number(event.target.value) || 0) },
-                            }))}
+                            onChange={(event) => updateOperationalLimit(local, "maxCashDifference", Math.max(0, Number(event.target.value) || 0))}
                             className="w-32 rounded border p-2 text-center"
                           />
                         </td>
