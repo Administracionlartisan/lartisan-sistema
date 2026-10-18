@@ -132,6 +132,8 @@ export default function Home() {
     [pedidoScannerValue, setPedidoScannerValue] = useState(""),
     [cart, setCart] = useState<Product[]>([]),
     [discount, setDiscount] = useState(0),
+    [discountMode, setDiscountMode] = useState<"percentage" | "amount">("percentage"),
+    [fixedDiscount, setFixedDiscount] = useState(0),
     [isPromotion, setIsPromotion] = useState(false),
     [promotion, setPromotion] = useState(""),
     [payment, setPayment] = useState("Efectivo"),
@@ -1749,8 +1751,17 @@ export default function Home() {
         sum + p.price * Math.min(q, invitedQuantities[p.id] ?? 0),
       0,
     );
-  const discountableTotal = total - invitationTotal;
-  const discountAmount = Math.round((discountableTotal * discount) / 100);
+  const discountableTotal = Math.max(0, total - invitationTotal);
+  const requestedDiscountAmount = discountMode === "amount"
+    ? Math.round(Math.max(0, fixedDiscount))
+    : Math.round((discountableTotal * Math.max(0, discount)) / 100);
+  // Un descuento fijo nunca puede superar lo que queda por cobrar. El límite
+  // operativo sigue aplicándose como porcentaje equivalente, sin importar cómo
+  // lo haya ingresado la vendedora.
+  const discountAmount = Math.min(discountableTotal, requestedDiscountAmount);
+  const effectiveDiscountPercent = discountableTotal > 0
+    ? (discountAmount * 100) / discountableTotal
+    : 0;
   const net = discountableTotal - discountAmount;
   const splitPaymentTotal = splitPayments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const activeShift = activeShiftBySite[site];
@@ -3455,7 +3466,7 @@ export default function Home() {
       customer,
       customerId: selectedCustomerId || undefined,
       items: [...cart],
-      discount,
+      discount: effectiveDiscountPercent,
       promotion: isPromotion ? promotion : undefined,
       payment,
       invoiceType,
@@ -3470,6 +3481,8 @@ export default function Home() {
     setSavedOrders((items) => [order, ...items]);
     setCart([]);
     setDiscount(0);
+    setDiscountMode("percentage");
+    setFixedDiscount(0);
     setIsPromotion(false);
     setPromotion("");
     setInvitedQuantities({});
@@ -3480,6 +3493,8 @@ export default function Home() {
     setCart(order.items);
     setCustomer(order.customer);
     setDiscount(order.discount);
+    setDiscountMode("percentage");
+    setFixedDiscount(0);
     setIsPromotion(Boolean(order.promotion));
     setPromotion(order.promotion || "");
     setPayment(order.payment);
@@ -3677,9 +3692,9 @@ export default function Home() {
     );
     if (!currentPayments.length || Math.round(currentPayments.reduce((sum, item) => sum + item.amount, 0)) !== net)
       return setMessage("El total de los medios de pago debe coincidir con el total de la venta.");
-    if (discount > siteLimits.maxDiscount)
+    if (effectiveDiscountPercent > siteLimits.maxDiscount + 0.0001)
       return setMessage(
-        `El descuento supera el máximo autorizado de ${siteLimits.maxDiscount}% para ${site}.`,
+        `El descuento equivale a ${effectiveDiscountPercent.toFixed(2)}% y supera el máximo autorizado de ${siteLimits.maxDiscount}% para ${site}.`,
       );
     if (invoiceType === "Factura A") {
       if (customer.trim().length < 3) return setMessage("Factura A requiere razón social.");
@@ -3771,6 +3786,8 @@ export default function Home() {
     );
     setCart([]);
     setDiscount(0);
+    setDiscountMode("percentage");
+    setFixedDiscount(0);
     setIsPromotion(false);
     setPromotion("");
     setInvitedQuantities({});
@@ -5107,7 +5124,11 @@ export default function Home() {
                             const nextPromotion = event.target.value;
                             setPromotion(nextPromotion);
                             const selected = SALE_PROMOTIONS.find((item) => item.name === nextPromotion);
-                            if (selected?.discount !== undefined) setDiscount(selected.discount);
+                            if (selected?.discount !== undefined) {
+                              setDiscountMode("percentage");
+                              setFixedDiscount(0);
+                              setDiscount(selected.discount);
+                            }
                             if (selected?.method && !splitPayment) setPayment(selected.method);
                           }}
                           className="mt-1 w-full rounded border bg-white p-2 font-normal"
@@ -5125,15 +5146,36 @@ export default function Home() {
                       </p>
                     )}
                   </div>
-                  <label className="mt-3 block text-sm font-bold">Descuento (%)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={discount}
-                    onChange={(e) => setDiscount(Number(e.target.value))}
-                    className="mt-1 w-full rounded border p-2"
-                  />
+                  <fieldset className="mt-3">
+                    <legend className="text-sm font-bold">Descuento</legend>
+                    <div className="mt-1 flex gap-4 text-sm font-bold">
+                      <label className="flex items-center gap-2"><input type="radio" name="discount-mode" checked={discountMode === "percentage"} onChange={() => setDiscountMode("percentage")} /> Porcentaje</label>
+                      <label className="flex items-center gap-2"><input type="radio" name="discount-mode" checked={discountMode === "amount"} onChange={() => setDiscountMode("amount")} /> Importe en pesos</label>
+                    </div>
+                    {discountMode === "percentage" ? (
+                      <input
+                        aria-label="Descuento en porcentaje"
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={discount}
+                        onChange={(e) => setDiscount(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                        className="mt-2 w-full rounded border p-2"
+                      />
+                    ) : (
+                      <input
+                        aria-label="Descuento en pesos"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={fixedDiscount || ""}
+                        onChange={(e) => setFixedDiscount(Math.max(0, Number(e.target.value) || 0))}
+                        placeholder="Ej.: 500"
+                        className="mt-2 w-full rounded border p-2"
+                      />
+                    )}
+                    <p className="mt-1 text-xs text-slate-500">Máximo autorizado: {siteLimits.maxDiscount}% del importe descontable.</p>
+                  </fieldset>
                   <p className="mt-2 text-sm">
                     Bruto {money.format(total)} · Descuento {money.format(discountAmount)}
                   </p>
@@ -9680,7 +9722,7 @@ export default function Home() {
           hasActiveShift: Boolean(activeShift),
           cartItems: cart.length,
           customer,
-          discount,
+          discount: effectiveDiscountPercent,
           maxDiscount: siteLimits.maxDiscount,
           splitPayment,
           splitPaymentTotal: splitPayments.filter((payment) => payment.amount > 0).reduce((sum, payment) => sum + payment.amount, 0),
