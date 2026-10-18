@@ -60,7 +60,7 @@ export const GUIDE_UPDATES = [
     date: "28/09/2026",
     title: "Ticket interno y factura fiscal",
     detail:
-      "El ticket térmico registra la venta para el cliente, pero no reemplaza una factura fiscal. La Factura B se usa para consumidor final; la Factura A requiere razón social, CUIT de 11 dígitos, condición Responsable Inscripto y domicilio fiscal. La emisión del CAE se controla desde Administración.",
+      "El Ticket registra la venta para el cliente, pero no reemplaza una factura fiscal. La Factura B fiscal se usa para consumidor final; la Factura A requiere razón social, CUIT de 11 dígitos, condición Responsable Inscripto y domicilio fiscal. La emisión del CAE se controla desde Administración.",
   },
   {
     date: "28/09/2026",

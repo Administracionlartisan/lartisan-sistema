@@ -5,8 +5,8 @@ declare(strict_types=1);
  * cliente, punto y número. Si ARCA no confirma, no se reintenta a ciegas. */
 function arca_fiscal_document_type(string $invoiceType): int {
     if ($invoiceType === 'Factura A') return 1;
-    if ($invoiceType === 'Factura B' || $invoiceType === 'Factura B electrónica') return 6;
-    throw new InvalidArgumentException('El tipo de comprobante debe ser Factura A o Factura B.');
+    if ($invoiceType === 'Factura B' || $invoiceType === 'Factura B electrónica' || $invoiceType === 'Factura B fiscal') return 6;
+        throw new InvalidArgumentException('El tipo de comprobante debe ser Factura A o Factura B fiscal.');
 }
 function arca_fiscal_amounts(float $total): array {
     $cents = (int) round($total * 100); if ($cents < 1) throw new InvalidArgumentException('El comprobante debe tener un importe mayor a cero.');

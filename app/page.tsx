@@ -143,7 +143,7 @@ export default function Home() {
     [saleChannel, setSaleChannel] = useState<"Mostrador" | "Online">(
       "Mostrador",
     ),
-    [invoiceType, setInvoiceType] = useState<Sale["invoiceType"]>("Factura B"),
+    [invoiceType, setInvoiceType] = useState<Sale["invoiceType"]>("Factura B fiscal"),
     [customer, setCustomer] = useState("Consumidor final"),
     [customerDocumentType, setCustomerDocumentType] = useState<NonNullable<Sale["customerDocumentType"]>>("Consumidor final"),
     [customerDocumentNumber, setCustomerDocumentNumber] = useState(""),
@@ -3804,7 +3804,7 @@ export default function Home() {
     const controller = new AbortController();
     setFiscalReceipt(null);
     setFiscalReceiptQr("");
-    const expectsFiscal = ["Factura A", "Factura B", "Factura B electrónica"].includes(receiptSale.invoiceType);
+    const expectsFiscal = ["Factura A", "Factura B", "Factura B electrónica", "Factura B fiscal"].includes(receiptSale.invoiceType);
     setFiscalReceiptChecking(expectsFiscal);
     let attempts = 0;
     const loadFiscalReceipt = async () => {
@@ -5215,10 +5215,9 @@ export default function Home() {
                       }
                       className="mt-1 w-full rounded border p-2 font-normal"
                     >
-                      <option>Factura B</option>
-                      <option>Factura B electrónica</option>
+                      <option>Factura B fiscal</option>
                       <option>Factura A</option>
-                      <option>Remito interno</option>
+                      <option>Ticket</option>
                     </select>
                   </label>
                   <label className="mt-3 block text-sm font-bold">
@@ -5350,10 +5349,9 @@ export default function Home() {
                                 }
                                 className="rounded border p-1 disabled:opacity-60"
                               >
-                                <option>Factura B</option>
-                                <option>Factura B electrónica</option>
+                                <option>Factura B fiscal</option>
                                 <option>Factura A</option>
-                                <option>Remito interno</option>
+                                <option>Ticket</option>
                               </select>
                               {sale.status === "activa" && (
                               <button type="button"

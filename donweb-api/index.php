@@ -678,7 +678,7 @@ if ($method === 'GET' && $route === 'admin/arca/eligible-sales') {
         if (!$cutover) json_response(['ok' => true, 'sales' => [], 'cutoverRequired' => true]);
         // HEX evita comparar textos con collations históricas distintas entre las
         // tablas importadas y las tablas fiscales nuevas.
-        $statement = $pdo->prepare("SELECT s.id,s.site,s.occurred_at,s.net_amount,s.invoice_type,s.customer_name,s.status,d.id AS document_id,d.status AS fiscal_status,d.voucher_number,d.cae FROM lartisan_sales s LEFT JOIN arca_fiscal_documents d ON HEX(d.sale_reference) = HEX(s.id) WHERE s.status='activa' AND s.occurred_at >= ? AND s.invoice_type IN ('Factura A','Factura B','Factura B electrónica') ORDER BY s.occurred_at DESC LIMIT 50");
+        $statement = $pdo->prepare("SELECT s.id,s.site,s.occurred_at,s.net_amount,s.invoice_type,s.customer_name,s.status,d.id AS document_id,d.status AS fiscal_status,d.voucher_number,d.cae FROM lartisan_sales s LEFT JOIN arca_fiscal_documents d ON HEX(d.sale_reference) = HEX(s.id) WHERE s.status='activa' AND s.occurred_at >= ? AND s.invoice_type IN ('Factura A','Factura B','Factura B electrónica','Factura B fiscal') ORDER BY s.occurred_at DESC LIMIT 50");
         $statement->execute([$cutover]);
         json_response(['ok' => true, 'sales' => $statement->fetchAll(), 'cutover' => $cutover]);
     } catch (Throwable $error) {
@@ -2077,7 +2077,7 @@ if ($method === 'GET' && $route === 'admin/report-sales') {
         $sales[] = [
             'id' => $row['id'], 'site' => $row['site'], 'createdAt' => $row['occurred_at'], 'createdAtISO' => str_replace(' ', 'T', (string) $row['occurred_at']),
             'items' => $items, 'gross' => (float) $row['gross_amount'], 'discount' => (float) $row['discount_amount'], 'net' => (float) $row['net_amount'],
-            'method' => $row['payment_method'] ?: 'Sin informar', 'invoiceType' => $row['invoice_type'] ?: 'Remito interno', 'customer' => $row['customer_name'] ?: 'Consumidor final',
+            'method' => $row['payment_method'] ?: 'Sin informar', 'invoiceType' => $row['invoice_type'] ?: 'Ticket', 'customer' => $row['customer_name'] ?: 'Consumidor final',
             'invitation' => (bool) $row['invitation'], 'channel' => $row['channel'] ?: 'Mostrador', 'status' => $row['status'] ?: 'activa',
         ];
     }
@@ -2122,7 +2122,7 @@ if ($method === 'GET' && $route === 'sales/history') {
         $sales[] = [
             'id' => $row['id'], 'site' => $row['site'], 'createdAt' => $row['occurred_at'], 'createdAtISO' => str_replace(' ', 'T', (string) $row['occurred_at']),
             'items' => $items, 'gross' => (float) $row['gross_amount'], 'discount' => (float) $row['discount_amount'], 'net' => (float) $row['net_amount'],
-            'method' => $row['payment_method'] ?: 'Sin informar', 'invoiceType' => $row['invoice_type'] ?: 'Remito interno', 'customer' => $row['customer_name'] ?: 'Consumidor final',
+            'method' => $row['payment_method'] ?: 'Sin informar', 'invoiceType' => $row['invoice_type'] ?: 'Ticket', 'customer' => $row['customer_name'] ?: 'Consumidor final',
             'invitation' => (bool) $row['invitation'], 'channel' => $row['channel'] ?: 'Mostrador', 'status' => $row['status'] ?: 'activa',
         ];
     }
@@ -2147,7 +2147,7 @@ if ($method === 'POST' && $route === 'admin/history/import') {
                 if (!in_array($siteName, operational_sites(), true) || !$at || $net < 0) { $rejected++; continue; }
                 $saleId = preg_match('/^[a-f0-9-]{36}$/i', (string) ($row['operacion'] ?? '')) ? (string) $row['operacion'] : $uuid($batchHash . '|' . $index);
                 $gross = historical_number($row['bruto'] ?? $net); $discount = historical_number($row['descuento'] ?? max(0, $gross - $net)); $methodName = trim((string) ($row['medio_pago'] ?? 'Sin informar'));
-                $insert->execute([$saleId, $siteName, $at, $gross, $discount, $net, $methodName, (string) ($row['comprobante'] ?? 'Remito interno'), (string) ($row['cliente'] ?? 'Consumidor final'), (string) ($row['canal'] ?? 'Mostrador'), (string) ($row['estado'] ?? 'activa'), $admin['id']]);
+                $insert->execute([$saleId, $siteName, $at, $gross, $discount, $net, $methodName, (string) ($row['comprobante'] ?? 'Ticket'), (string) ($row['cliente'] ?? 'Consumidor final'), (string) ($row['canal'] ?? 'Mostrador'), (string) ($row['estado'] ?? 'activa'), $admin['id']]);
                 $paymentInsert->execute([$saleId, $methodName, $net]); $imported++;
             }
         } else {

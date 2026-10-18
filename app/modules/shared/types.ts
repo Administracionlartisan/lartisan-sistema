@@ -48,7 +48,7 @@ export type Sale = {
   promotion?: string;
   net: number;
   method: string;
-  invoiceType: "Factura B" | "Factura B electrónica" | "Factura A" | "Remito interno";
+  invoiceType: "Factura B" | "Factura B electrónica" | "Factura B fiscal" | "Factura A" | "Remito interno" | "Ticket";
   customer: string;
   customerId?: string;
   customerDocumentType?: "Consumidor final" | "DNI" | "CUIT";
