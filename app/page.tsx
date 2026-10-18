@@ -175,6 +175,7 @@ export default function Home() {
     [saleSearch, setSaleSearch] = useState(""),
     [paymentCorrectionSaleId, setPaymentCorrectionSaleId] = useState<string | null>(null),
     [paymentCorrectionMethod, setPaymentCorrectionMethod] = useState("Efectivo"),
+    [paymentCorrectionReason, setPaymentCorrectionReason] = useState(""),
     [audit, setAudit] = useState<AuditEvent[]>([]),
     [syncStatus, setSyncStatus] = useState("Sin cierre enviado"),
     [testOperatingDate, setTestOperatingDate] = useState<{ active: boolean; site?: string; businessDate?: string; label?: string; enabledAt?: string }>({ active: false }),
@@ -4145,10 +4146,10 @@ export default function Home() {
   const changeSalePayment = (sale: Sale, method: string) => {
     if (!can("cobrar"))
       return setMessage("Tu usuario no tiene permiso para corregir medios de pago.");
-    if (!cashIsOpen)
-      return setMessage("La corrección debe hacerse con la caja del local abierta, antes del cierre.");
     if (sale.site !== site || sale.status !== "activa")
       return setMessage("Solo podés corregir ventas activas del local seleccionado.");
+    if (!paymentCorrectionReason.trim())
+      return setMessage("Indicá el motivo de la corrección para conservar la auditoría.");
     const originalPayments = payments.filter((item) => item.saleId === sale.id);
     if (!originalPayments.length)
       return setMessage("No se encontraron cobros asociados a esta venta. Pedí revisión a Administración.");
@@ -4182,15 +4183,17 @@ export default function Home() {
         cashImpact: nextCash - previousCash,
         paymentMethod: method,
         reference: sale.id,
-        detail: `${sale.method} a ${method}`,
+        shiftId: originalPayments[0].shiftId,
+        detail: `${sale.method} a ${method} · Motivo: ${paymentCorrectionReason.trim()}`,
       });
     recordAudit(
       "Forma de cobro modificada",
-      `${sale.id.slice(0, 8)} · ${sale.method} a ${method}`,
+      `${sale.id.slice(0, 8)} · ${sale.method} a ${method} · Motivo: ${paymentCorrectionReason.trim()}`,
     );
     setPaymentCorrectionSaleId(null);
+    setPaymentCorrectionReason("");
     setPendingSync((value) => value + 1);
-    setMessage(`Medio de pago corregido: ${sale.method} a ${method}. El total, los productos y el stock no cambiaron.`);
+    setMessage(`Medio de pago corregido y auditado: ${sale.method} a ${method}. El total, los productos y el stock no cambiaron${cashIsOpen ? "." : "; el cierre histórico no se modificó."}`);
   };
   const changeSaleInvoice = (
     sale: Sale,
@@ -5363,7 +5366,7 @@ export default function Home() {
                       ))}
                     <div className="mt-4 border-t pt-4">
                       <p className="text-sm font-bold">Buscar venta, corregir medio de pago o anular</p>
-                      <p className="mt-1 text-xs text-slate-500">La anulación pide motivo, revierte el cobro y el stock, y conserva el registro con usuaria, fecha y hora.</p>
+                      <p className="mt-1 text-xs text-slate-500">Nunca repitas una venta para corregirla. Medio equivocado: corregí el medio y el motivo. Venta duplicada: anulá una con motivo. La anulación revierte cobro y stock, y ambas acciones quedan auditadas.</p>
                       <input
                         value={saleSearch}
                         onChange={(event) => setSaleSearch(event.target.value)}
@@ -5391,8 +5394,8 @@ export default function Home() {
                                 <button
                                   onClick={() => {
                                     if (!can("cobrar")) return setMessage("Tu usuario no tiene permiso para corregir medios de pago.");
-                                    if (!cashIsOpen) return setMessage("Abrí la caja antes de corregir un medio de pago.");
                                     setPaymentCorrectionMethod(payments.find((item) => item.saleId === sale.id)?.method || sale.method);
+                                    setPaymentCorrectionReason("");
                                     setPaymentCorrectionSaleId(sale.id);
                                   }}
                                   className="rounded border px-2 py-1 font-bold text-[#183a67]"
@@ -5456,7 +5459,10 @@ export default function Home() {
                               {methods.map((method) => <option key={method}>{method}</option>)}
                             </select>
                           </label>
-                          <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, se registra el ajuste correspondiente en caja y la auditoría.</p>
+                          <label className="mt-2 block font-bold">Motivo de la corrección
+                            <input value={paymentCorrectionReason} onChange={(event) => setPaymentCorrectionReason(event.target.value)} placeholder="Ej.: se cobró con tarjeta y se registró efectivo" className="mt-1 w-full rounded border p-2 font-normal" />
+                          </label>
+                          <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, el movimiento queda vinculado al turno original. Si ese turno ya cerró, el cierre histórico no se reabre ni se altera.</p>
                           <div className="mt-3 flex gap-2">
                             <button onClick={() => changeSalePayment(sale, paymentCorrectionMethod)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
                             <button onClick={() => setPaymentCorrectionSaleId(null)} className="rounded border px-3 py-2 font-bold">Cancelar</button>
