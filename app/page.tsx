@@ -338,6 +338,8 @@ export default function Home() {
   const [auditUserFilter, setAuditUserFilter] = useState("");
   const [auditActionFilter, setAuditActionFilter] = useState("");
   const [cashHistory, setCashHistory] = useState<CashHistoryRow[]>([]);
+  const [siteCashClosures, setSiteCashClosures] = useState<CashHistoryRow[]>([]);
+  const [siteCashClosuresLoading, setSiteCashClosuresLoading] = useState(false);
   const [historyImportKind, setHistoryImportKind] = useState<"sales" | "cash">("sales");
   const [historyImporting, setHistoryImporting] = useState(false);
   const [aiSupportRequests, setAiSupportRequests] = useState<AiSupportRequest[]>([]);
@@ -1263,6 +1265,25 @@ export default function Home() {
     }
     return () => { active = false; };
   }, [user?.id, user?.role, tab, adminReport, reportFrom, reportTo, reportSite, auditUserFilter, auditActionFilter, operationalVersion]);
+
+  // Cada persona de Ventas puede revisar los arqueos ya cerrados de su propio
+  // local. Es una lectura desde la API: nunca depende del navegador que hizo el
+  // cierre y no ofrece acciones para modificar la historia de Caja.
+  useEffect(() => {
+    if (!user || tab !== "Caja") return;
+    let active = true;
+    const today = dateKey(operationalNow());
+    setSiteCashClosuresLoading(true);
+    fetch(`${API_BASE}/cash/history?${new URLSearchParams({ site, from: today, to: today })}`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json() as { sessions?: CashHistoryRow[]; error?: string };
+        if (!response.ok) throw new Error(data.error || "No se pudieron cargar los cierres.");
+        if (active) setSiteCashClosures(data.sessions || []);
+      })
+      .catch(() => { if (active) setSiteCashClosures([]); })
+      .finally(() => { if (active) setSiteCashClosuresLoading(false); });
+    return () => { active = false; };
+  }, [user?.id, tab, site, operationalVersion]);
 
   useEffect(() => {
     if (user?.role !== "administracion" || tab !== "Administración" || adminReport !== "Personal") return;
@@ -5517,6 +5538,22 @@ export default function Home() {
                       ) : (
                         <p className="p-3 text-sm text-slate-500">El libro mayor comenzará al abrir la caja.</p>
                       )}
+                    </div>
+                  </div>
+                  <div className="mt-6 border-t pt-4">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <b>Cierres confirmados de hoy</b>
+                      <span className="text-xs text-slate-500">Solo consulta</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">Sirven para conciliar el lote de tarjetas entre turnos. No modifican la caja actual ni permiten reabrir un cierre.</p>
+                    <div className="mt-3 overflow-auto rounded border">
+                      {siteCashClosuresLoading ? <p className="p-3 text-sm text-slate-500">Cargando cierres…</p>
+                        : siteCashClosures.length ? (
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-[#eef2f6] text-[#183a67]"><tr><th className="p-2">Abrió</th><th className="p-2">Cerró</th><th className="p-2 text-right">Esperado</th><th className="p-2 text-right">Contado</th><th className="p-2 text-right">Diferencia</th></tr></thead>
+                            <tbody>{siteCashClosures.map((closure) => <tr key={closure.id} className="border-t"><td className="p-2"><b>{closure.openedBy || "—"}</b><span className="block text-slate-500">{closure.openedAt || "—"}</span></td><td className="p-2"><b>{closure.closedBy || "—"}</b><span className="block text-slate-500">{closure.closedAt || "—"}</span></td><td className="p-2 text-right">{closure.expectedCash == null ? "—" : money.format(closure.expectedCash)}</td><td className="p-2 text-right">{closure.countedCash == null ? "—" : money.format(closure.countedCash)}</td><td className={`p-2 text-right font-bold ${(closure.differenceAmount || 0) === 0 ? "text-green-700" : "text-amber-700"}`}>{closure.differenceAmount == null ? "—" : money.format(closure.differenceAmount)}</td></tr>)}</tbody>
+                          </table>
+                        ) : <p className="p-3 text-sm text-slate-500">Todavía no hay otros cierres confirmados hoy en este local.</p>}
                     </div>
                   </div>
                   <div className="mt-6 border-t pt-4">

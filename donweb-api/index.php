@@ -2067,6 +2067,40 @@ if ($method === 'GET' && $route === 'admin/cash-history') {
     ], $statement->fetchAll())]);
 }
 
+// Consulta operativa de cierres ya confirmados. A diferencia del informe de
+// Administración, Ventas sólo puede consultar su propio local autorizado y no
+// recibe ninguna acción para editar, reabrir o borrar un arqueo histórico.
+if ($method === 'GET' && $route === 'cash/history') {
+    $viewer = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    ensure_normalized_operations_schema($pdo);
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : date('Y-m-d');
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? '')) ? (string) $_GET['to'] : $from;
+    if ($to < $from || (new DateTimeImmutable($from))->diff(new DateTimeImmutable($to))->days > 31) {
+        json_response(['ok' => false, 'error' => 'Elegí un rango válido de hasta 31 días.'], 422);
+    }
+    $site = trim((string) ($_GET['site'] ?? ''));
+    if ($site === '') $site = assigned_locations($viewer)[0] ?? '';
+    if ($site === '' || !user_can_access_site($viewer, $site)) {
+        json_response(['ok' => false, 'error' => 'No tenés acceso a los cierres de ese local.'], 403);
+    }
+    $statement = $pdo->prepare(
+        'SELECT id, site, opened_at, opened_by, initial_fund, closed_at, closed_by, expected_cash, counted_cash, difference_amount, envelope_amount
+         FROM lartisan_cash_sessions
+         WHERE site = ? AND closed_at IS NOT NULL AND closed_at >= ? AND closed_at < DATE_ADD(?, INTERVAL 1 DAY)
+         ORDER BY closed_at DESC LIMIT 100'
+    );
+    $statement->execute([$site, $from, $to]);
+    $sessions = array_map(static fn (array $row): array => [
+        'id' => $row['id'], 'site' => $row['site'], 'openedAt' => $row['opened_at'], 'openedBy' => $row['opened_by'],
+        'initialFund' => (float) $row['initial_fund'], 'closedAt' => $row['closed_at'], 'closedBy' => $row['closed_by'],
+        'expectedCash' => $row['expected_cash'] === null ? null : (float) $row['expected_cash'],
+        'countedCash' => $row['counted_cash'] === null ? null : (float) $row['counted_cash'],
+        'differenceAmount' => $row['difference_amount'] === null ? null : (float) $row['difference_amount'],
+        'envelopeAmount' => $row['envelope_amount'] === null ? null : (float) $row['envelope_amount'],
+    ], $statement->fetchAll());
+    json_response(['ok' => true, 'site' => $site, 'sessions' => $sessions]);
+}
+
 if ($method === 'GET' && $route === 'admin/report-sales') {
     require_user($pdo, ['administracion']);
     ensure_normalized_operations_schema($pdo);
