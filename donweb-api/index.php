@@ -1861,7 +1861,30 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         // El registro del local está bloqueado con FOR UPDATE. Esta validación
         // convierte la política de una única caja/responsable en una garantía
         // del servidor y no en una mera condición de la pantalla.
-        enforce_strict_cash_snapshot($previousState, $state, $user, $site);
+        try {
+            enforce_strict_cash_snapshot($previousState, $state, $user, $site);
+        } catch (RuntimeException $cashValidationError) {
+            // Las versiones previas podían dejar en la cola un cierre sin el
+            // registro de arqueo. No permitimos que ese cierre incompleto
+            // modifique Caja, pero tampoco dejamos ventas ya cobradas, stock u
+            // otras operaciones atrapadas indefinidamente en el equipo.
+            // Conservamos la caja vigente del servidor y auditamos la
+            // recuperación. Cualquier otra violación de la política de Caja
+            // continúa siendo rechazada de forma estricta.
+            if ($cashValidationError->getMessage() !== 'El cierre completo debe registrar arqueo y responsable saliente antes de abrir otra caja.') {
+                throw $cashValidationError;
+            }
+            foreach (['cashOpen', 'activeShift', 'shiftLog'] as $cashField) {
+                if (array_key_exists($cashField, $previousState)) $state[$cashField] = $previousState[$cashField];
+                else unset($state[$cashField]);
+            }
+            audit(
+                $pdo,
+                (int) $user['id'],
+                'cash_snapshot_preserved',
+                $site . ' · se conservó la caja vigente para recuperar operaciones pendientes; se rechazó un cierre histórico sin arqueo',
+            );
+        }
         // El historial completo vive en las tablas normalizadas y en
         // operation_archive; el estado del local conserva solo lo reciente y lo
         // abierto para que cada envío no crezca sin límite.
