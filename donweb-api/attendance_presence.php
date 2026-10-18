@@ -196,3 +196,46 @@ function enforce_strict_cash_snapshot(array $previous, array $next, array $user,
         if (!$closed) throw new RuntimeException('El cierre completo debe registrar arqueo y responsable saliente antes de abrir otra caja.');
     }
 }
+
+/**
+ * When an old browser attempts to close a different, already superseded shift,
+ * the caller keeps the current cash state so other queued work can still be
+ * synchronized.  That recovery must also discard the closing entries created
+ * by the stale shift: otherwise its envelope or closing balance is written to
+ * the current local's journal even though the close itself was rejected.
+ *
+ * New sales that belong to the actual active shift are intentionally kept.
+ */
+function preserve_current_cash_after_rejected_stale_close(array $previous, array $candidate): array
+{
+    $active = is_array($previous['activeShift'] ?? null) ? $previous['activeShift'] : null;
+    $activeId = (string) ($active['id'] ?? '');
+
+    foreach (['cashOpen', 'activeShift', 'shiftLog'] as $field) {
+        if (array_key_exists($field, $previous)) $candidate[$field] = $previous[$field];
+        else unset($candidate[$field]);
+    }
+
+    $knownLedger = [];
+    foreach (is_array($previous['cashLedger'] ?? null) ? $previous['cashLedger'] : [] as $entry) {
+        if (is_array($entry) && isset($entry['id']) && is_scalar($entry['id'])) $knownLedger[(string) $entry['id']] = true;
+    }
+    $candidate['cashLedger'] = array_values(array_filter(
+        is_array($candidate['cashLedger'] ?? null) ? $candidate['cashLedger'] : [],
+        static function ($entry) use ($knownLedger, $activeId): bool {
+            if (!is_array($entry) || !isset($entry['id']) || !is_scalar($entry['id'])) return false;
+            $id = (string) $entry['id'];
+            if (isset($knownLedger[$id])) return true;
+            // A new journal entry is trustworthy only when it was recorded
+            // against the shift the server still has open.
+            return $activeId !== '' && (string) ($entry['shiftId'] ?? '') === $activeId;
+        }
+    ));
+
+    // An envelope belongs to a valid closing operation. It has no shift id in
+    // older snapshots, so retaining a newly added one would be ambiguous.
+    if (array_key_exists('envelopeRecords', $previous)) $candidate['envelopeRecords'] = $previous['envelopeRecords'];
+    else unset($candidate['envelopeRecords']);
+
+    return $candidate;
+}

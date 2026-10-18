@@ -17,3 +17,25 @@ enforce_strict_cash_snapshot($closed, $opening, $user, 'Recoleta'); check_presen
 try { enforce_strict_cash_snapshot($opening, ['cashOpen' => true, 'activeShift' => ['id' => 'shift-b', 'site' => 'Recoleta', 'openedBy' => 'Otra'], 'shiftLog' => []], $user, 'Recoleta'); throw new RuntimeException('permitió relevo abierto'); } catch (RuntimeException $expected) { check_presence('bloquea relevo con caja abierta', str_contains($expected->getMessage(), 'cierre completo')); }
 try { enforce_strict_cash_snapshot($closed, ['cashOpen' => true, 'activeShift' => ['id' => 'shift-b', 'site' => 'Recoleta', 'openedBy' => 'Otra'], 'shiftLog' => []], $user, 'Recoleta'); throw new RuntimeException('permitió suplantar responsable'); } catch (RuntimeException $expected) { check_presence('bloquea responsable distinta', str_contains($expected->getMessage(), 'responsable')); }
 try { enforce_strict_cash_snapshot($opening, ['cashOpen' => false, 'activeShift' => null, 'shiftLog' => []], $user, 'Recoleta'); throw new RuntimeException('permitió cierre sin arqueo'); } catch (RuntimeException $expected) { check_presence('exige cierre completo', str_contains($expected->getMessage(), 'arqueo')); }
+
+$currentCash = [
+    'cashOpen' => true,
+    'activeShift' => ['id' => 'turno-vigente', 'site' => 'Recoleta', 'openedBy' => 'Vendedora de prueba'],
+    'shiftLog' => [['id' => 'turno-anterior', 'closedAtISO' => '2026-10-16T18:00:00.000Z']],
+    'cashLedger' => [['id' => 'apertura-vigente', 'shiftId' => 'turno-vigente']],
+    'envelopeRecords' => [['id' => 'sobre-anterior', 'status' => 'En Caja Mayor']],
+];
+$staleClose = [
+    'cashOpen' => false,
+    'activeShift' => null,
+    'shiftLog' => array_merge($currentCash['shiftLog'], [['id' => 'turno-antiguo', 'closedAtISO' => '2026-10-17T18:00:00.000Z']]),
+    'cashLedger' => array_merge($currentCash['cashLedger'], [
+        ['id' => 'venta-vigente', 'shiftId' => 'turno-vigente'],
+        ['id' => 'cierre-obsoleto', 'shiftId' => 'turno-antiguo'],
+    ]),
+    'envelopeRecords' => array_merge($currentCash['envelopeRecords'], [['id' => 'sobre-obsoleto', 'status' => 'En Caja Mayor']]),
+];
+$recovered = preserve_current_cash_after_rejected_stale_close($currentCash, $staleClose);
+check_presence('recupera caja vigente ante cierre obsoleto', $recovered['cashOpen'] === true && ($recovered['activeShift']['id'] ?? '') === 'turno-vigente');
+check_presence('conserva venta del turno vigente', array_column($recovered['cashLedger'], 'id') === ['apertura-vigente', 'venta-vigente']);
+check_presence('descarta sobre de cierre obsoleto', array_column($recovered['envelopeRecords'], 'id') === ['sobre-anterior']);

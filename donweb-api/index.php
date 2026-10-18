@@ -1874,15 +1874,12 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             if ($cashValidationError->getMessage() !== 'El cierre completo debe registrar arqueo y responsable saliente antes de abrir otra caja.') {
                 throw $cashValidationError;
             }
-            foreach (['cashOpen', 'activeShift', 'shiftLog'] as $cashField) {
-                if (array_key_exists($cashField, $previousState)) $state[$cashField] = $previousState[$cashField];
-                else unset($state[$cashField]);
-            }
+            $state = preserve_current_cash_after_rejected_stale_close($previousState, $state);
             audit(
                 $pdo,
                 (int) $user['id'],
                 'cash_snapshot_preserved',
-                $site . ' · se conservó la caja vigente para recuperar operaciones pendientes; se rechazó un cierre histórico sin arqueo',
+                $site . ' · se conservó la caja vigente y se descartaron asientos de un cierre histórico rechazado; se recuperaron operaciones pendientes',
             );
         }
         // El historial completo vive en las tablas normalizadas y en
