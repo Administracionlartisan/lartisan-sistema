@@ -143,7 +143,7 @@ export default function Home() {
     [saleChannel, setSaleChannel] = useState<"Mostrador" | "Online">(
       "Mostrador",
     ),
-    [invoiceType, setInvoiceType] = useState<Sale["invoiceType"]>("Factura B fiscal"),
+    [invoiceType, setInvoiceType] = useState<Sale["invoiceType"]>("Ticket"),
     [customer, setCustomer] = useState("Consumidor final"),
     [customerDocumentType, setCustomerDocumentType] = useState<NonNullable<Sale["customerDocumentType"]>>("Consumidor final"),
     [customerDocumentNumber, setCustomerDocumentNumber] = useState(""),
