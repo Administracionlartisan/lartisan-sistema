@@ -363,6 +363,10 @@ export default function Home() {
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(
     null,
   );
+  const [centralOrderStatusFilter, setCentralOrderStatusFilter] = useState<
+    "Todos" | StockRequest["status"]
+  >("Todos");
+  const [centralOrderSearch, setCentralOrderSearch] = useState("");
   const [receivingRequestId, setReceivingRequestId] = useState<string | null>(null);
   const [receivedScanCounts, setReceivedScanCounts] = useState<Record<number, number>>({});
   const [receivingScanNotice, setReceivingScanNotice] = useState("");
@@ -2218,6 +2222,21 @@ export default function Home() {
   const selectedRequest = stockRequests.find(
     (request) => request.id === selectedRequestId,
   );
+  const centralOrderRequests = useMemo(() => {
+    const search = centralOrderSearch.trim().toLocaleLowerCase("es-AR");
+    return stockRequests
+      .filter((request) =>
+        (centralOrderStatusFilter === "Todos" || request.status === centralOrderStatusFilter) &&
+        (!search || `${request.site} ${request.requestedBy}`.toLocaleLowerCase("es-AR").includes(search)),
+      )
+      .map((request, index) => ({ request, index }))
+      .sort((a, b) => {
+        const aDelivered = a.request.status === "Entregado" ? 1 : 0;
+        const bDelivered = b.request.status === "Entregado" ? 1 : 0;
+        return aDelivered - bDelivered || a.index - b.index;
+      })
+      .map(({ request }) => request);
+  }, [centralOrderSearch, centralOrderStatusFilter, stockRequests]);
   const reportSites = configuredSites.filter(
     (local) => reportSite === "Todos los locales" || local === reportSite,
   );
@@ -6502,10 +6521,38 @@ export default function Home() {
                     <p className="mt-1 text-sm text-slate-500">
                       Seleccioná un pedido para ver el detalle y descargarlo.
                     </p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+                      <label className="text-sm font-bold text-[#183a67]">
+                        Buscar cliente o local
+                        <input
+                          type="search"
+                          value={centralOrderSearch}
+                          onChange={(event) => setCentralOrderSearch(event.target.value)}
+                          placeholder="Ej.: Maure o Anni Lai Muñoz"
+                          className="mt-1 w-full rounded border p-2 font-normal text-slate-900"
+                        />
+                      </label>
+                      <label className="text-sm font-bold text-[#183a67]">
+                        Estado
+                        <select
+                          value={centralOrderStatusFilter}
+                          onChange={(event) => setCentralOrderStatusFilter(event.target.value as "Todos" | StockRequest["status"])}
+                          className="mt-1 w-full rounded border p-2 font-normal text-slate-900"
+                        >
+                          <option value="Todos">Todos los estados</option>
+                          <option>Pendiente</option>
+                          <option>En preparación</option>
+                          <option>Despachado</option>
+                          <option>Despachado parcial</option>
+                          <option>Entregado</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Los pedidos entregados siempre se muestran al final.</p>
                   </div>
                   {stockRequests.length ? (
                     <div className="divide-y">
-                      {stockRequests.map((request) => (
+                      {centralOrderRequests.map((request) => (
                         <button
                           key={request.id}
                           onClick={() => setSelectedRequestId(request.id)}
@@ -6529,6 +6576,9 @@ export default function Home() {
                           </p>
                         </button>
                       ))}
+                      {!centralOrderRequests.length && (
+                        <p className="p-5 text-sm text-slate-500">No hay pedidos que coincidan con la búsqueda o el estado elegido.</p>
+                      )}
                     </div>
                   ) : (
                     <p className="p-5 text-sm text-slate-500">
