@@ -1,0 +1,686 @@
+"use client";
+
+import {
+  ChangeEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { API_BASE } from "../shared/constants";
+import { ChatOutbox } from "./chatOutbox";
+
+type Contact = { id: string; name: string; role: string; site?: string | null };
+type Thread = {
+  id: string;
+  kind: string;
+  title: string;
+  site?: string | null;
+  createdAt: string;
+  lastAt?: string | null;
+  unread: number;
+};
+type Attachment = { id: string; name: string; mime: string; size: number };
+type Message = {
+  id: string;
+  clientId: string;
+  body: string;
+  createdAt: string;
+  editedAt?: string | null;
+  deletedAt?: string | null;
+  deliveredCount: number;
+  readCount: number;
+  own: boolean;
+  sender: { id: string; name: string; role: string };
+  attachments: Attachment[];
+};
+type Preferences = { sound: boolean; desktop: boolean; push: boolean };
+type PushConfig = { available: boolean; publicKey?: string | null };
+
+const readable = (date?: string | null) =>
+  date
+    ? new Intl.DateTimeFormat("es-AR", {
+        dateStyle: "short",
+        timeStyle: "short",
+      }).format(new Date(date))
+    : "—";
+const fileSize = (bytes: number) =>
+  `${(bytes / 1024 / 1024).toLocaleString("es-AR", { maximumFractionDigits: 1 })} MB`;
+const allowed = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+]);
+const pushKey = (value: string) => {
+  const padded = `${value}${"=".repeat((4 - (value.length % 4)) % 4)}`.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(padded);
+  return Uint8Array.from(raw, (item) => item.charCodeAt(0));
+};
+const readFile = (file: File) =>
+  new Promise<{ name: string; mime: string; data: string }>(
+    (resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("No se pudo leer el adjunto."));
+      reader.onload = () =>
+        resolve({
+          name: file.name,
+          mime: file.type,
+          data: String(reader.result),
+        });
+      reader.readAsDataURL(file);
+    },
+  );
+
+export default function InternalChatPanel({ userId, floating = false, onClose }: { userId: string; floating?: boolean; onClose?: () => void }) {
+  const [threads, setThreads] = useState<Thread[]>([]),
+    [contacts, setContacts] = useState<Contact[]>([]),
+    [selected, setSelected] = useState<string | null>(null),
+    [messages, setMessages] = useState<Message[]>([]),
+    [query, setQuery] = useState(""),
+    [search, setSearch] = useState(""),
+    [draft, setDraft] = useState(""),
+    [files, setFiles] = useState<
+      Array<{ name: string; mime: string; data: string }>
+    >([]),
+    [preferences, setPreferences] = useState<Preferences>({
+      sound: true,
+      desktop: false,
+      push: false,
+    }),
+    [pushConfig, setPushConfig] = useState<PushConfig>({ available: false }),
+    [pushBusy, setPushBusy] = useState(false),
+    [notice, setNotice] = useState(""),
+    [loading, setLoading] = useState(true),
+    [sending, setSending] = useState(false),
+    [lastUnread, setLastUnread] = useState(0);
+  const audioContext = useRef<AudioContext | null>(null);
+  const outbox = useRef<ChatOutbox | null>(null);
+  const selectedThread =
+    threads.find((thread) => thread.id === selected) ?? null;
+  // Los grupos de sistema se identifican por tipo y local. Esto protege la UI
+  // frente a instalaciones anteriores que hubieran creado dos filas de grupo
+  // antes de que el servidor aplicara la migración de normalización.
+  const canonicalThreads = useMemo(() => {
+    const seen = new Set<string>();
+    return threads.filter((thread) => {
+      const key =
+        thread.kind === "local" || thread.kind === "operativo"
+          ? `${thread.kind}:${thread.site || ""}`
+          : thread.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [threads]);
+  const visibleThreads = useMemo(
+    () =>
+      canonicalThreads.filter((thread) =>
+        `${thread.title} ${thread.site || ""}`
+          .toLowerCase()
+          .includes(query.trim().toLowerCase()),
+      ),
+    [canonicalThreads, query],
+  );
+  const threadContext = (thread?: Thread | null) => {
+    if (!thread) return "";
+    if (thread.site) return thread.site;
+    return thread.kind.startsWith("direct:")
+      ? "Chat individual"
+      : "Grupo operativo";
+  };
+  const request = useCallback(async (path: string, init?: RequestInit) => {
+    const response = await fetch(`${API_BASE}/${path}`, {
+      credentials: "include",
+      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+      ...init,
+    });
+    const body = (await response.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+    if (!response.ok)
+      throw new Error(
+        String(body.error || "No se pudo completar la operación."),
+      );
+    return body;
+  }, []);
+  const playNotice = useCallback(() => {
+    if (!preferences.sound) return;
+    try {
+      const Ctx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!Ctx) return;
+      const context = audioContext.current ?? new Ctx();
+      audioContext.current = context;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = 760;
+      gain.gain.setValueAtTime(0.035, context.currentTime);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.09);
+    } catch {
+      /* El aviso visual sigue disponible. */
+    }
+  }, [preferences.sound]);
+  const loadThreads = useCallback(
+    async (announce = false) => {
+      const data = (await request("chat/threads")) as { threads?: Thread[] };
+      const next = data.threads ?? [];
+      const unread = next.reduce((total, thread) => total + thread.unread, 0);
+      if (announce && unread > lastUnread) {
+        playNotice();
+        if (
+          preferences.desktop &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        )
+          new Notification("L'ARTISAN · Chat interno", {
+            body: "Tenés mensajes operativos nuevos.",
+          });
+      }
+      setLastUnread(unread);
+      setThreads(next);
+      setSelected((current) =>
+        current && next.some((thread) => thread.id === current)
+          ? current
+          : (next[0]?.id ?? null),
+      );
+    },
+    [lastUnread, playNotice, preferences.desktop, request],
+  );
+  const loadMessages = useCallback(
+    async (threadId: string, text = "") => {
+      const data = (await request(
+        `chat/messages?thread=${encodeURIComponent(threadId)}&q=${encodeURIComponent(text)}`,
+      )) as { messages?: Message[] };
+      setMessages(data.messages ?? []);
+      await request("chat/read", {
+        method: "POST",
+        body: JSON.stringify({ threadId }),
+      });
+    },
+    [request],
+  );
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => { void Promise.all([request("chat/bootstrap"), loadThreads()])
+      .then(([bootstrap]) => {
+        if (!active) return;
+        const data = bootstrap as {
+          contacts?: Contact[];
+          settings?: Preferences;
+          push?: PushConfig;
+        };
+        setContacts(data.contacts ?? []);
+        setPreferences(data.settings ?? { sound: true, desktop: false, push: false });
+        setPushConfig(data.push ?? { available: false });
+      })
+      .catch(
+        (error) =>
+          active &&
+          setNotice(
+            error instanceof Error
+              ? error.message
+              : "No se pudo cargar el chat.",
+          ),
+      )
+      .finally(() => active && setLoading(false)); }, 0);
+    return () => {
+      active = false; window.clearTimeout(timer);
+    };
+  }, [loadThreads, request]);
+  useEffect(() => {
+    void ChatOutbox.open(userId).then((value) => {
+      outbox.current = value;
+    });
+  }, [userId]);
+  useEffect(() => {
+    if (!selected) return;
+    const timer = window.setTimeout(() => {
+      void loadMessages(selected, search).catch((error) =>
+        setNotice(error instanceof Error ? error.message : "No se pudo cargar la conversación."),
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadMessages, search, selected]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadThreads(true).catch(() => undefined);
+      if (selected) void loadMessages(selected, search).catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [loadMessages, loadThreads, search, selected]);
+  const savePreferences = async (next: Preferences) => {
+    setPreferences(next);
+    try {
+      await request("chat/settings", {
+        method: "POST",
+        body: JSON.stringify(next),
+      });
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "No se pudo guardar la preferencia.",
+      );
+    }
+  };
+  const enableDesktop = async () => {
+    if (!("Notification" in window))
+      return setNotice(
+        "Este navegador no admite notificaciones de escritorio. El aviso visual seguirá activo.",
+      );
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted")
+      return setNotice(
+        "No se concedió el permiso de escritorio. El aviso visual y el sonido permanecen disponibles.",
+      );
+    await savePreferences({ ...preferences, desktop: true });
+  };
+  const togglePush = async () => {
+    if (!pushConfig.available || !pushConfig.publicKey || !("serviceWorker" in navigator) || !("PushManager" in window))
+      return setNotice("Este navegador no admite avisos push. Podés seguir usando los avisos visibles y el sonido dentro del sistema.");
+    setPushBusy(true); setNotice("");
+    try {
+      const registration = await navigator.serviceWorker.register("/chat-push-sw.js", { scope: "/" });
+      if (preferences.push) {
+        const subscription = await registration.pushManager.getSubscription();
+        if (subscription) {
+          await request("chat/push/unsubscribe", { method: "POST", body: JSON.stringify({ subscription: subscription.toJSON() }) });
+          await subscription.unsubscribe();
+        }
+        await savePreferences({ ...preferences, push: false });
+        setNotice("Los avisos push se desactivaron para este dispositivo.");
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") return setNotice("No se concedió el permiso de notificaciones. Podés activarlo más tarde desde el navegador.");
+      const subscription = (await registration.pushManager.getSubscription()) ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKey(pushConfig.publicKey) });
+      await request("chat/push/subscribe", { method: "POST", body: JSON.stringify({ subscription: subscription.toJSON() }) });
+      await savePreferences({ ...preferences, push: true });
+      setNotice("Listo: este dispositivo recibirá avisos de Chat Interno incluso con la aplicación cerrada.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "No se pudieron activar los avisos push.");
+    } finally { setPushBusy(false); }
+  };
+  const startDirect = async (contact: Contact) => {
+    try {
+      const data = (await request("chat/direct", {
+        method: "POST",
+        body: JSON.stringify({ recipientId: contact.id }),
+      })) as { thread: Thread };
+      await loadThreads();
+      setSelected(data.thread.id);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "No se pudo abrir la conversación.",
+      );
+    }
+  };
+  const modifyMessage = async (message: Message, action: "edit" | "delete") => {
+    if (!selected) return;
+    const next =
+      action === "edit"
+        ? window.prompt("Editar mensaje", message.body)
+        : window.confirm(
+              "¿Eliminar este mensaje? El historial conservará la trazabilidad.",
+            )
+          ? ""
+          : null;
+    if (next === null) return;
+    try {
+      await request(`chat/messages/${message.id}/${action}`, {
+        method: "POST",
+        body: JSON.stringify(action === "edit" ? { body: next } : {}),
+      });
+      await loadMessages(selected, search);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "No se pudo actualizar el mensaje.",
+      );
+    }
+  };
+  const addFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const chosen = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (chosen.length + files.length > 3)
+      return setNotice("Podés adjuntar hasta tres archivos por mensaje.");
+    if (
+      chosen.some(
+        (file) => !allowed.has(file.type) || file.size > 4 * 1024 * 1024,
+      )
+    )
+      return setNotice("Sólo se permiten JPG, PNG, WEBP o PDF de hasta 4 MB.");
+    try {
+      const prepared = await Promise.all(chosen.map(readFile));
+      setFiles((current) => [...current, ...prepared]);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "No se pudieron preparar los adjuntos.",
+      );
+    }
+  };
+  const pendingClientId = useRef<string | null>(null);
+  const send = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selected || sending) return;
+    const body = draft.trim();
+    if (!body && !files.length)
+      return setNotice(
+        "Escribí un mensaje o adjuntá un archivo antes de enviarlo.",
+      );
+    const text = body || "Adjunto";
+    const saved = outbox.current?.find(selected, text);
+    const clientId =
+      pendingClientId.current ?? saved?.clientId ?? crypto.randomUUID();
+    pendingClientId.current = clientId;
+    setSending(true);
+    setNotice("");
+    try {
+      if (!saved)
+        await outbox.current?.put({
+          threadId: selected,
+          clientId,
+          body: text,
+          attachments: files,
+        });
+      await request("chat/messages", {
+        method: "POST",
+        body: JSON.stringify({
+          threadId: selected,
+          clientId,
+          body: text,
+          attachments: saved?.attachments ?? files,
+        }),
+      });
+      await outbox.current?.remove(clientId);
+      pendingClientId.current = null;
+      setDraft("");
+      setFiles([]);
+      await Promise.all([loadMessages(selected), loadThreads()]);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "El mensaje quedó pendiente de reintento con la misma identidad.",
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+  if (loading)
+    return (
+      <section className="rounded-2xl border bg-white p-5">
+        Cargando Chat Interno…
+      </section>
+    );
+  return (
+    <section className={floating ? "flex h-full min-h-0 flex-col bg-[#f7f3eb]" : "mx-auto max-w-7xl"}>
+      <div className={`${floating ? "flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3" : "mb-5 flex flex-wrap items-start justify-between gap-3"}`}>
+        <div>
+          {!floating && <p className="font-bold text-[#ec3a35]">COMUNICACIÓN OPERATIVA</p>}
+          <h1 className={floating ? "text-lg font-black" : "text-3xl font-black"}>Chat interno</h1>
+          {!floating && <p className="mt-1 text-sm text-slate-600">
+            Canal auditado entre locales, Supervisión y Administración. No
+            compartas contraseñas, claves ni datos bancarios.
+          </p>}
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <label className="rounded-lg border bg-white px-2.5 py-1.5" title="Activar o silenciar el sonido de mensajes">
+            <input
+              type="checkbox"
+              checked={preferences.sound}
+              onChange={(event) =>
+                void savePreferences({
+                  ...preferences,
+                  sound: event.target.checked,
+                })
+              }
+            />{" "}
+            Sonido
+          </label>
+          {preferences.desktop ? (
+            <label className="rounded-lg border bg-white px-2.5 py-1.5">
+              <input
+                type="checkbox"
+                checked={preferences.desktop}
+                onChange={(event) =>
+                  void savePreferences({
+                    ...preferences,
+                    desktop: event.target.checked,
+                  })
+                }
+              />{" "}
+              Escritorio
+            </label>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void enableDesktop()}
+              className="rounded-lg border bg-white px-2.5 py-1.5 font-bold"
+            >
+              Activar avisos de escritorio
+            </button>
+          )}
+          {pushConfig.available && (
+            <button type="button" disabled={pushBusy} onClick={() => void togglePush()} className={`rounded-lg border px-2.5 py-1.5 font-bold ${preferences.push ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "bg-white"}`}>
+              {pushBusy ? "Configurando…" : preferences.push ? "Avisos push activos" : "Activar avisos en celular"}
+            </button>
+          )}
+          {floating && onClose && <button type="button" onClick={onClose} aria-label="Cerrar chat" className="rounded-lg px-2.5 py-1 text-xl leading-none text-slate-500 transition hover:bg-slate-100 hover:text-[#183a67]">×</button>}
+        </div>
+      </div>
+      {notice && (
+        <p className="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
+          {notice}
+        </p>
+      )}
+      <div className={`${floating ? "min-h-0 flex-1 grid" : "grid min-h-[620px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_45px_-28px_rgba(15,41,77,0.55)]"} overflow-hidden border-slate-200 bg-white ${floating ? "grid-cols-[112px_1fr] sm:grid-cols-[185px_1fr]" : "lg:grid-cols-[320px_1fr]"}`}>
+        <aside className="border-b bg-gradient-to-b from-slate-50 to-white p-2.5 sm:p-3 lg:border-b-0 lg:border-r lg:border-slate-200">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Buscar conversación o local"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm shadow-sm outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:ring-4 focus:ring-[#183a67]/10"
+          />
+          <div className="mt-3 max-h-72 space-y-1 overflow-auto">
+            {visibleThreads.map((thread) => (
+              <button
+                key={thread.id}
+                type="button"
+                onClick={() => setSelected(thread.id)}
+                className={`group w-full rounded-2xl border p-3 text-left transition-all duration-200 ${
+                  selected === thread.id
+                    ? "border-[#183a67] bg-[#183a67] text-white shadow-lg shadow-[#183a67]/20"
+                    : "border-transparent bg-white/70 hover:-translate-y-px hover:border-slate-200 hover:bg-white hover:shadow-md"
+                }`}
+              >
+                <div className="flex justify-between gap-2">
+                  <b className="text-xs sm:text-sm">{thread.title}</b>
+                  {thread.unread > 0 && (
+                  <span className="rounded-full bg-[#ec3a35] px-2 py-0.5 text-xs font-bold text-white shadow-sm">
+                      {thread.unread}
+                    </span>
+                  )}
+                </div>
+                <small className={`mt-1 hidden text-[11px] sm:block ${selected === thread.id ? "text-blue-100" : "text-slate-500"}`}>
+                  {threadContext(thread)} · {readable(thread.lastAt)}
+                </small>
+              </button>
+            ))}
+          </div>
+          <details className="mt-4 border-t pt-3">
+            <summary className="cursor-pointer font-bold">
+              Nuevo chat individual
+            </summary>
+            <div className="mt-2 space-y-1">
+              {contacts.map((contact) => (
+                <button
+                  key={contact.id}
+                  type="button"
+                  onClick={() => void startDirect(contact)}
+                  className="block w-full rounded-xl border border-slate-200 bg-white p-2.5 text-left text-sm transition hover:border-[#183a67]/30 hover:shadow-sm"
+                >
+                  <b>{contact.name}</b>
+                  <span className="ml-1 text-slate-500">
+                    · {contact.role}
+                    {contact.site ? ` · ${contact.site}` : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </details>
+        </aside>
+        <div className="flex min-h-0 flex-col">
+          <header className="border-b border-slate-200 bg-white p-4">
+            <b className="text-base text-[#183a67]">{selectedThread?.title || "Elegí una conversación"}</b>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {selectedThread?.site
+                ? `Local asociado: ${selectedThread.site}`
+                : selectedThread?.kind.startsWith("direct:")
+                  ? "Chat individual"
+                  : "Grupo transversal"}
+            </p>
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar dentro de esta conversación"
+              className="mt-3 hidden w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:bg-white focus:ring-4 focus:ring-[#183a67]/10 sm:block"
+            />
+          </header>
+          <div className="flex-1 space-y-3 overflow-auto bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef3f8)] p-4 md:p-5">
+            {messages.map((message) => (
+              <article
+                key={message.id}
+                className={`relative max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-md transition-shadow hover:shadow-lg ${
+                  message.own
+                    ? "ml-auto rounded-br-md bg-gradient-to-br from-[#244f86] to-[#183a67] text-white shadow-[#183a67]/20"
+                    : "rounded-bl-md border border-slate-100 bg-white text-slate-800 shadow-slate-300/40"
+                }`}
+              >
+                <div className={`mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs ${message.own ? "text-blue-100" : "text-slate-500"}`}>
+                  <b>{message.own ? "Vos" : message.sender.name}</b>
+                  <span>{message.sender.role}</span>
+                  <span>{readable(message.createdAt)}</span>
+                  {message.editedAt && <span>editado</span>}
+                  {message.own && (
+                    <span>
+                      {message.readCount
+                        ? "Leído"
+                        : message.deliveredCount
+                          ? "Entregado"
+                          : "Enviado"}
+                    </span>
+                  )}
+                </div>
+                <p className="whitespace-pre-wrap break-words">{message.body}</p>
+                {message.attachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className={`mt-3 rounded-xl border p-2.5 ${message.own ? "border-white/20 bg-black/10" : "border-slate-200 bg-slate-50"}`}
+                  >
+                    <a
+                      href={`${API_BASE}/chat/attachments/${file.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-bold underline"
+                    >
+                      {file.name}
+                    </a>
+                    <span className="ml-2 text-xs">
+                      {file.mime} · {fileSize(file.size)}
+                    </span>
+                    {file.mime.startsWith("image/") && (
+                      // El adjunto es un recurso autenticado de la API, no un activo estático optimizable.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`${API_BASE}/chat/attachments/${file.id}`}
+                        alt={`Vista previa segura de ${file.name}`}
+                        className="mt-2 max-h-56 rounded object-contain"
+                      />
+                    )}
+                  </div>
+                ))}
+                {message.own && !message.deletedAt && (
+                  <div className="mt-3 flex gap-2 text-xs font-semibold">
+                    <button
+                      type="button"
+                      className="rounded-lg px-1.5 py-1 underline decoration-white/50 underline-offset-2 transition hover:bg-white/15"
+                      onClick={() => void modifyMessage(message, "edit")}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg px-1.5 py-1 underline decoration-white/50 underline-offset-2 transition hover:bg-white/15"
+                      onClick={() => void modifyMessage(message, "delete")}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                )}
+              </article>
+            ))}
+            {selected && !messages.length && (
+              <p className="text-center text-sm text-slate-500">
+                Todavía no hay mensajes en esta conversación.
+              </p>
+            )}
+          </div>
+          <form onSubmit={send} className="border-t border-slate-200 bg-white p-3 md:p-4">
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              maxLength={4000}
+              placeholder="Escribí un mensaje operativo… (Enter para enviar · Shift+Enter para nueva línea)"
+              disabled={!selected || sending}
+              className="min-h-20 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm shadow-inner outline-none transition placeholder:text-slate-400 focus:border-[#183a67] focus:bg-white focus:ring-4 focus:ring-[#183a67]/10"
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <label className="cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold shadow-sm transition hover:border-[#183a67]/30 hover:shadow">
+                Adjuntar foto o archivo permitido
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => void addFiles(event)}
+                  disabled={!selected || sending}
+                />
+              </label>
+              <span className="text-xs text-slate-500">
+                {files.length
+                  ? files.map((file) => file.name).join(", ")
+                  : "JPG, PNG, WEBP o PDF · máx. 4 MB c/u"}
+              </span>
+              <button
+                disabled={!selected || sending}
+                className="rounded-xl bg-[#183a67] px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-[#183a67]/20 transition hover:-translate-y-px hover:bg-[#102f57] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {sending ? "Enviando…" : "Enviar"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+  );
+}

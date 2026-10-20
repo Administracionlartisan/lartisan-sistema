@@ -1,0 +1,13 @@
+Options -Indexes
+RewriteEngine On
+
+# No exponer configuración ni módulos internos.  No se usa un bloqueo global
+# con excepciones porque algunos Apache del hosting combinan ambos bloques y
+# terminan denegando también index.php, que es la API pública.
+<FilesMatch "^(config\.local\.php|config\.example\.php|bootstrap\.php|assistant\.php|arca_wsfe\.php|arca_fiscal_queue\.php|monitor\.php|mrp_sync\.php|pnl_sync\.php|README\.md|.*\.(?:zip|tar|tar\.gz|tgz|bak|sql))$">
+  Require all denied
+</FilesMatch>
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.+)$ index.php?route=$1 [QSA,L]
