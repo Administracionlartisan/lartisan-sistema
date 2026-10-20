@@ -53,6 +53,17 @@ errores **no vuelvan**. Cada una está protegida por una prueba automática.
   y a las reglas de permisos de `authorize_operational_snapshot()`.
 - **Nunca mandar un campo como `undefined` para borrarlo**: JSON lo omite y el
   servidor conserva el valor viejo. Usar `null` (ver `activeShift`).
+- **Con `baseState`, `/sync` siempre combina** (`merge_operational_snapshot`),
+  aunque la revisión coincida: tras una confirmación combinada el navegador
+  conoce la revisión nueva pero no las ventas de otro equipo, y reemplazar el
+  estado las sacaba del local.
+- **Dentro de la transacción de `/sync` no puede haber DDL** (`CREATE`/`ALTER`):
+  MySQL hace COMMIT implícito, libera el `FOR UPDATE` y el rollback deja de
+  servir. La estructura se crea en la migración inicial de `index.php`.
+- **Un rechazo definitivo responde 422** (`OperationalSyncRejected`): la cola
+  del equipo se detiene y se conserva. Un 500 hace que reintente a ciegas.
+- **El `requestId` se busca después de bloquear el local**: dos envíos
+  paralelos del mismo pedido no se procesan dos veces.
 
 ### Importes, caja y stock
 - **El servidor no confía en los importes del navegador**: `validate_operational_sales`
@@ -64,6 +75,12 @@ errores **no vuelvan**. Cada una está protegida por una prueba automática.
   el stock vigente; nunca asignar el número contado.
 - **El egreso pagado con efectivo** se registra en el libro de caja; no pedir que
   se repita en el cierre.
+- **Relevo acumulado**: un único envío con el cierre (con arqueo) del turno
+  vigente y la apertura propia del siguiente es válido; cualquier otra apertura
+  sobre una caja abierta es un conflicto (422) para conciliar.
+- **Cierre obsoleto rechazado**: se descartan solo sus asientos de cierre
+  (cierre, sobre, gastos y retiros declarados); ventas, egresos y devoluciones
+  del turno anterior se conservan.
 
 ### Permisos
 - **Nunca autorizar por nombre de usuario.** Los permisos se asignan en
@@ -100,6 +117,7 @@ errores **no vuelvan**. Cada una está protegida por una prueba automática.
 | `npm run test:regresion` | Las correcciones de la auditoría |
 | `npm run test:security` | Seguridad, cola de pendientes, permisos |
 | `php tests/*.php` (con `LARTISAN_CONFIG=dev/config.dev.php`) | Reglas del servidor |
+| `npm run test:simulacion-fallas` (entorno local levantado) | Cortes, respuestas perdidas o incompletas, 500, reintentos, cambio de usuario, varios equipos y conflictos de caja; verifica ventas, pagos, stock y caja |
 
 Al corregir un error nuevo, agregá una prueba que falle sin la corrección.
 

@@ -27,7 +27,7 @@ const steps = [
 if (php) {
   for (const file of ["donweb-api/index.php", "donweb-api/bootstrap.php", "donweb-api/arca_fiscal_queue.php", "donweb-api/arca_wsfe.php", "donweb-api/mrp_sync.php", "donweb-api/pnl_sync.php", "donweb-api/cash_sheet_sync.php", "donweb-api/assistant.php", "donweb-api/backup.php", "donweb-api/monitor.php"])
     steps.push([`Sintaxis PHP ${file.split("/")[1]}`, [php, ["-l", file]]]);
-  for (const file of ["tests/operations-retention.php", "tests/sale-validation.php", "tests/timezone.php", "tests/stock-outflow.php"])
+  for (const file of ["tests/operations-retention.php", "tests/sale-validation.php", "tests/timezone.php", "tests/stock-outflow.php", "tests/attendance-presence.php"])
     steps.push([`PHP ${file.split("/")[1]}`, [php, [file]]]);
 }
 

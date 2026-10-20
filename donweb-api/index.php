@@ -1858,6 +1858,12 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
     $syncStage = 'preparar';
     $pdo->beginTransaction();
     try {
+        $revisionStatement = $pdo->prepare('SELECT revision, state_json FROM operation_site_states WHERE site = ? FOR UPDATE');
+        $revisionStatement->execute([$site]);
+        $currentRow = $revisionStatement->fetch();
+        // Después del bloqueo del local: dos envíos del mismo requestId en
+        // paralelo (dos pestañas o un reintento) esperan aquí y el segundo
+        // recibe la confirmación del primero en lugar de reprocesarlo.
         $requestLookup = $pdo->prepare('SELECT revision FROM operation_requests WHERE request_id = ? AND site = ? LIMIT 1');
         $requestLookup->execute([$requestId, $site]);
         $processedRevision = $requestLookup->fetchColumn();
@@ -1865,9 +1871,6 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $pdo->commit();
             json_response(['ok' => true, 'revision' => (int) $processedRevision, 'alreadyProcessed' => true]);
         }
-        $revisionStatement = $pdo->prepare('SELECT revision, state_json FROM operation_site_states WHERE site = ? FOR UPDATE');
-        $revisionStatement->execute([$site]);
-        $currentRow = $revisionStatement->fetch();
         $currentRevision = $currentRow === false ? false : (int) $currentRow['revision'];
         $previousState = $currentRow === false ? [] : (json_decode((string) $currentRow['state_json'], true) ?: []);
         if ($centralOnly && $currentRow === false) {
@@ -1905,13 +1908,16 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         if ($centralOnly) {
             // Los cambios de Central ya se aplicaron sobre el estado vigente.
             $state = $authorizedIncoming;
-        } elseif ($currentRow !== false && (int) $currentRevision !== $baseRevision) {
-            if (!is_array($baseState)) {
-                $pdo->rollBack();
-                json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
-            }
+        } elseif ($currentRow !== false && is_array($baseState)) {
+            // Siempre por diferencias contra la copia base del equipo, aunque
+            // la revisión coincida: tras una confirmación combinada el
+            // navegador conoce la revisión nueva pero no las ventas de otro
+            // equipo, y reemplazar el estado completo las sacaba del local.
             $state = merge_operational_snapshot($baseState, $previousState, $authorizedIncoming);
-            $merged = true;
+            $merged = (int) $currentRevision !== $baseRevision;
+        } elseif ($currentRow !== false && (int) $currentRevision !== $baseRevision) {
+            $pdo->rollBack();
+            json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
         } else {
             $state = $authorizedIncoming;
         }
@@ -2058,6 +2064,9 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         }
         $cashConflict = operational_cash_conflict_response($error, $syncStage);
         if ($cashConflict !== null) json_response($cashConflict, 422);
+        if ($error instanceof OperationalSyncRejected) {
+            json_response(['ok' => false, 'error' => $error->getMessage() . ' Las operaciones siguen guardadas en este equipo: no repitas los cobros y avisá a Administración.'], 422);
+        }
         json_response(['ok' => false, 'error' => 'No se pudo guardar la operación en la etapa ' . $syncStage . '.'], 500);
     }
     $revision = (int) $pdo->query("SELECT revision FROM operation_site_states WHERE site = " . $pdo->quote($site))->fetchColumn();

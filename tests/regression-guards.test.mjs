@@ -161,3 +161,33 @@ test("ARCA: una respuesta sin CAE legible no se marca como rechazada", () => {
 test("MRP: la producción confirmada lee el último MRP verificado", () => {
   for (const [file, source] of Object.entries(php)) assert.doesNotMatch(source, /status='completed'/, `${file}: 'completed' no existe en mrp_sync_runs`);
 });
+
+test("Sync: nada dentro de la transacción de /sync emite DDL ni bloquea la ventana de prueba", () => {
+  const testDate = php["test_operating_date.php"];
+  const active = testDate.match(/function active_test_operating_date[\s\S]*?\n\}/)[0];
+  assert.doesNotMatch(active, /ensure_|CREATE TABLE|ALTER TABLE/, "un DDL dentro de /sync hace COMMIT implícito y libera el FOR UPDATE del local");
+  assert.doesNotMatch(testDate, /UNIQUE KEY uq_test_operating_date_active/, "la clave única impedía desactivar la ventana por segunda vez");
+  assert.match(testDate, /DROP INDEX uq_test_operating_date_active/, "las bases existentes deben perder la clave única");
+});
+
+test("Sync: un rechazo definitivo responde 422 para detener la cola, no 500", () => {
+  assert.match(index, /\$error instanceof OperationalSyncRejected\)[\s\S]{0,300}, 422\);/);
+  const check = php["test_operating_date.php"].match(/function check_test_operating_snapshot[\s\S]*?\n\}/)[0];
+  assert.doesNotMatch(check, /throw new (?!OperationalSyncRejected)/, "la ventana de prueba debe rechazar con OperationalSyncRejected");
+  assert.match(php["attendance_presence.php"], /throw new OperationalSyncRejected\('La caja solo puede ser abierta/);
+});
+
+test("Sync: con copia base siempre se combina; reemplazar sacaba ventas de otro equipo del local", () => {
+  assert.match(index, /elseif \(\$currentRow !== false && is_array\(\$baseState\)\) \{[\s\S]{0,700}merge_operational_snapshot\(\$baseState, \$previousState, \$authorizedIncoming\)/);
+});
+
+test("Sync: el requestId se busca después de bloquear el local", () => {
+  const sync = index.slice(index.indexOf("$isSyncOperationWrite = "));
+  assert.ok(sync.indexOf("FOR UPDATE") < sync.indexOf("FROM operation_requests WHERE request_id"), "dos envíos paralelos del mismo requestId deben esperar el bloqueo y recibir la confirmación del primero");
+});
+
+test("Caja: relevo acumulado aceptado y cierre obsoleto sin perder cobros", () => {
+  const cash = php["attendance_presence.php"];
+  assert.match(cash, /\$completedHandover = \$validOpening\(\) && shift_closed_in_snapshot/);
+  assert.match(cash, /'Cierre de caja', 'Sobre enviado a Caja Mayor', 'Gastos declarados al cierre', 'Retiros declarados al cierre'/);
+});

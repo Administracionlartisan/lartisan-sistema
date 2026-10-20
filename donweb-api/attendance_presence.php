@@ -177,6 +177,13 @@ function attendance_append_to_locked_state(PDO $pdo, string $site, array $user, 
     return $record;
 }
 
+/** A definitive /sync rejection: retrying cannot succeed until someone
+ * reconciles, so the API answers 422 (the browser keeps and halts its queue)
+ * instead of 500 (the browser retries blindly). Its message is user-safe. */
+final class OperationalSyncRejected extends RuntimeException
+{
+}
+
 /** A cash conflict needs human reconciliation, not endless retries as HTTP 500. */
 function operational_cash_conflict_response(Throwable $error, string $stage): ?array
 {
@@ -186,23 +193,37 @@ function operational_cash_conflict_response(Throwable $error, string $stage): ?a
     return ['ok' => false, 'error' => 'Hay un conflicto entre la caja pendiente y la caja actual. Las operaciones siguen en este equipo; no repitas los cobros y avisá a Administración para conciliarlas.'];
 }
 
+function shift_closed_in_snapshot(array $snapshot, string $shiftId): bool
+{
+    foreach (is_array($snapshot['shiftLog'] ?? null) ? $snapshot['shiftLog'] : [] as $item) {
+        if (is_array($item) && ($item['id'] ?? '') === $shiftId && (!empty($item['closedAtISO']) || !empty($item['closedAt']))) return true;
+    }
+    return false;
+}
+
 function enforce_strict_cash_snapshot(array $previous, array $next, array $user, string $site): void
 {
     $wasOpen = !empty($previous['cashOpen']); $isOpen = !empty($next['cashOpen']);
     $wasShift = is_array($previous['activeShift'] ?? null) ? $previous['activeShift'] : null;
     $shift = is_array($next['activeShift'] ?? null) ? $next['activeShift'] : null;
+    $validOpening = static fn (): bool => $shift !== null && !empty($shift['id']) && ($shift['site'] ?? '') === $site
+        && ($shift['openedBy'] ?? '') === (string) $user['full_name'];
     if ($wasOpen && $isOpen && $wasShift !== null && (!$shift || ($shift['id'] ?? '') !== ($wasShift['id'] ?? ''))) {
-        throw new RuntimeException('La caja ya está abierta por ' . ($wasShift['openedBy'] ?? 'otra responsable') . '. Debe realizarse el cierre completo antes del relevo.');
+        // Relevo acumulado en un solo envío (cierre con arqueo y nueva apertura
+        // antes de que el primero llegara al servidor): es válido si el turno
+        // vigente figura cerrado y la nueva apertura cumple sus reglas.
+        $completedHandover = $validOpening() && shift_closed_in_snapshot($next, (string) ($wasShift['id'] ?? ''));
+        if (!$completedHandover) {
+            throw new OperationalSyncRejected('La caja ya está abierta por ' . ($wasShift['openedBy'] ?? 'otra responsable') . '. Debe realizarse el cierre completo antes del relevo.');
+        }
     }
-    if ($wasOpen && $isOpen && $wasShift !== null && $shift === null) throw new RuntimeException('No se permite cerrar un turno dejando la caja abierta.');
+    if ($wasOpen && $isOpen && $wasShift !== null && $shift === null) throw new OperationalSyncRejected('No se permite cerrar un turno dejando la caja abierta.');
     if (!$wasOpen && $isOpen) {
-        if (!$shift || empty($shift['id']) || ($shift['site'] ?? '') !== $site) throw new RuntimeException('La apertura debe crear una responsable activa.');
-        if (($shift['openedBy'] ?? '') !== (string) $user['full_name']) throw new RuntimeException('La caja solo puede ser abierta por la responsable de la sesión.');
+        if (!$shift || empty($shift['id']) || ($shift['site'] ?? '') !== $site) throw new OperationalSyncRejected('La apertura debe crear una responsable activa.');
+        if (($shift['openedBy'] ?? '') !== (string) $user['full_name']) throw new OperationalSyncRejected('La caja solo puede ser abierta por la responsable de la sesión.');
     }
-    if ($wasOpen && !$isOpen && $wasShift !== null) {
-        $closed = false;
-        foreach (is_array($next['shiftLog'] ?? null) ? $next['shiftLog'] : [] as $item) if (is_array($item) && ($item['id'] ?? '') === ($wasShift['id'] ?? '') && (!empty($item['closedAtISO']) || !empty($item['closedAt']))) { $closed = true; break; }
-        if (!$closed) throw new RuntimeException('El cierre completo debe registrar arqueo y responsable saliente antes de abrir otra caja.');
+    if ($wasOpen && !$isOpen && $wasShift !== null && !shift_closed_in_snapshot($next, (string) ($wasShift['id'] ?? ''))) {
+        throw new RuntimeException('El cierre completo debe registrar arqueo y responsable saliente antes de abrir otra caja.');
     }
 }
 
@@ -213,7 +234,10 @@ function enforce_strict_cash_snapshot(array $previous, array $next, array $user,
  * by the stale shift: otherwise its envelope or closing balance is written to
  * the current local's journal even though the close itself was rejected.
  *
- * New sales that belong to the actual active shift are intentionally kept.
+ * New sales that belong to the actual active shift are intentionally kept, and
+ * so are the real operations (sales, expenses, returns) recorded in the stale
+ * shift before its rejected close: discarding them left a saved sale without
+ * its cash entry.
  */
 function preserve_current_cash_after_rejected_stale_close(array $previous, array $candidate): array
 {
@@ -235,9 +259,11 @@ function preserve_current_cash_after_rejected_stale_close(array $previous, array
             if (!is_array($entry) || !isset($entry['id']) || !is_scalar($entry['id'])) return false;
             $id = (string) $entry['id'];
             if (isset($knownLedger[$id])) return true;
-            // A new journal entry is trustworthy only when it was recorded
-            // against the shift the server still has open.
-            return $activeId !== '' && (string) ($entry['shiftId'] ?? '') === $activeId;
+            if ($activeId !== '' && (string) ($entry['shiftId'] ?? '') === $activeId) return true;
+            // Only the entries the rejected close itself produced are dropped;
+            // an entry without a kind is ambiguous and also dropped.
+            $kind = (string) ($entry['kind'] ?? '');
+            return $kind !== '' && !in_array($kind, ['Cierre de caja', 'Sobre enviado a Caja Mayor', 'Gastos declarados al cierre', 'Retiros declarados al cierre'], true);
         }
     ));
 
