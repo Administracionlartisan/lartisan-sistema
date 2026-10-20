@@ -7,6 +7,8 @@ import { ADMIN_REPORTS, canOpenReport } from "./data/reportGuide";
 import Heading from "./modules/shared/components/Heading";
 import { buildThermalReceipt } from "./modules/ventas/thermalReceipt";
 import { orderDocumentHtml } from "./modules/pedidos/orderDocument";
+import { buildThermalOrderReceipt } from "./modules/pedidos/thermalOrderReceipt";
+import { internalDeliveryNoteHtml } from "./modules/pedidos/internalDeliveryNote";
 import {
   ACTION_PERMISSIONS, API_BASE, defaultActionPermissions, EMPTY_CASH_FIELDS,
   INITIAL_MANAGED_USERS, money, SITES,
@@ -3010,6 +3012,25 @@ export default function Home() {
     window.setTimeout(() => documentWindow.print(), 250);
     recordAudit("Pedido de mercadería preparado para PDF", `${request.site} · ${request.id.slice(0, 8)}`, request.site);
   };
+  const printOrderDocument = (request: StockRequest, format: "thermal" | "a4") => {
+    if (format === "a4" && !["Despachado", "Despachado parcial", "Entregado"].includes(request.status)) {
+      setMessage("Confirmá el despacho antes de emitir el remito interno.");
+      return;
+    }
+    const documentWindow = window.open("", "_blank");
+    if (!documentWindow) {
+      setMessage("El navegador bloqueó la ventana de impresión. Permití ventanas emergentes e intentá otra vez.");
+      return;
+    }
+    documentWindow.opener = null;
+    const receipt = format === "thermal" ? buildThermalOrderReceipt(request, products).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : "";
+    documentWindow.document.open();
+    documentWindow.document.write(format === "a4" ? internalDeliveryNoteHtml(request, products) : `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Pedido</title><style>@page{size:80mm auto;margin:3mm}body{margin:0;width:74mm;font-family:monospace;font-size:11px;line-height:1.35}pre{margin:0;white-space:pre-wrap;word-break:break-word}</style></head><body><pre>${receipt}</pre></body></html>`);
+    documentWindow.document.close();
+    documentWindow.focus();
+    window.setTimeout(() => documentWindow.print(), 250);
+    recordAudit(format === "a4" ? "Remito interno A4 preparado" : "Pedido preparado para impresión térmica", `${request.site} · ${request.id.slice(0, 8)}`, request.site);
+  };
   const updateRequestStatus = (
     request: StockRequest,
     status: StockRequest["status"],
@@ -3018,7 +3039,7 @@ export default function Home() {
       return setMessage("Solo Central puede actualizar el estado de un pedido.");
     setStockRequests((items) =>
       items.map((item) =>
-        item.id === request.id ? { ...item, status } : item,
+        item.id === request.id ? { ...item, status, ...(["Despachado", "Despachado parcial"].includes(status) && !item.dispatchedAt ? { dispatchedAt: new Date().toLocaleString("es-AR"), dispatchedBy: user?.name || "Central Villa Mitre" } : {}) } : item,
       ),
     );
     recordAudit(
@@ -6699,6 +6720,14 @@ export default function Home() {
                         </p>
                       )}
                       <div className="no-print mt-4 grid gap-2 sm:grid-cols-2">
+                        <button onClick={() => printOrderDocument(selectedRequest, "thermal")} className="rounded bg-[#183a67] px-3 py-3 text-sm font-bold text-white">
+                          Imprimir en térmica
+                        </button>
+                        {["Despachado", "Despachado parcial", "Entregado"].includes(selectedRequest.status) && (
+                          <button onClick={() => printOrderDocument(selectedRequest, "a4")} className="rounded border px-3 py-3 text-sm font-bold">
+                            Emitir remito interno A4
+                          </button>
+                        )}
                         <button
                           onClick={() => exportRequestCsv(selectedRequest)}
                           className="rounded bg-[#183a67] px-3 py-3 text-sm font-bold text-white"

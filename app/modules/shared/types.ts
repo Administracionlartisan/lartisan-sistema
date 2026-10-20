@@ -137,6 +137,8 @@ export type StockRequest = {
   requestedBy: string;
   requestedAt: string;
   requestedAtISO?: string;
+  dispatchedAt?: string;
+  dispatchedBy?: string;
   notes: string;
   status: "Pendiente" | "En preparación" | "Despachado" | "Despachado parcial" | "Entregado";
   lines: {
