@@ -465,7 +465,7 @@ function user_can_action(array $user, string $permission): bool
     // El stock ideal es una configuración operativa acotada: no se concede por
     // cargo ni por el bypass administrativo. Administración asigna esta acción
     // explícitamente a las supervisoras responsables desde Usuarios.
-    if (in_array($permission, ['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock'], true)) {
+    if (in_array($permission, ['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia'], true)) {
         return $user['role'] === 'supervisora'
             && in_array($permission, user_action_permissions($user), true);
     }

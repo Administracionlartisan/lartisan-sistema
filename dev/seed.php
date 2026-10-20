@@ -31,14 +31,14 @@ $password = 'Pruebas2026!';
 $sites = ['Recoleta', 'Villa Mitre', 'Congreso', 'Maure', 'Novo Pacheco'];
 $users = [
     ['admin.pruebas', 'Administración de Prueba', 'administracion', $sites, 1, null],
-    ['supervisora.pruebas', 'Supervisora de Prueba', 'supervisora', ['Recoleta', 'Congreso'], 0, null],
+    ['supervisora.pruebas', 'Supervisora de Prueba', 'supervisora', ['Recoleta', 'Congreso'], 0, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar', 'aprobarEgresoMercaderia']],
     ['vendedora.pruebas', 'Vendedora de Prueba', 'vendedora', ['Recoleta'], 0, null],
     ['compras.pruebas', 'Compras de Prueba', 'compras', ['Villa Mitre'], 0, ['mrp']],
 ];
 $insert = $pdo->prepare(
     'INSERT INTO users (username, full_name, password_hash, role, assigned_location, assigned_locations, access_all_locations, action_permissions, must_change_password)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-     ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), failed_attempts = 0, locked_until = NULL, active = 1'
+     ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), failed_attempts = 0, locked_until = NULL, active = 1, action_permissions = VALUES(action_permissions)'
 );
 foreach ($users as [$username, $name, $role, $locations, $all, $actions]) {
     $insert->execute([

@@ -52,6 +52,17 @@ test("stock autoapproval and third-party approval require separate explicit capa
   assert.match(page, /includes\("aprobarAjustesStock"\)/);
 });
 
+test("merchandise outflows are requested from Stock and approved only by explicitly assigned supervisors", () => {
+  const bootstrap = read("donweb-api/bootstrap.php");
+  const index = read("donweb-api/index.php");
+  const page = read("app/page.tsx");
+  assert.match(bootstrap, /'aprobarAjustesStock', 'aprobarEgresoMercaderia'\], true\)\) \{/);
+  assert.equal((index.match(/user_can_action\(\$outflowUser, 'aprobarEgresoMercaderia'\)/g) || []).length, 2);
+  assert.doesNotMatch(index, /\$outflowUser, 'stock'\)/);
+  assert.match(page, /includes\("aprobarEgresoMercaderia"\)/);
+  assert.match(page, /tab === "Stock" \?[\s\S]{0,400}<StockOutflows [^\n]{0,300}canApprove=\{canApproveStockOutflows\}/);
+});
+
 test("central sees only orders and adjustments of the sites it does not operate", () => {
   const bootstrap = read("donweb-api/bootstrap.php");
   const index = read("donweb-api/index.php");

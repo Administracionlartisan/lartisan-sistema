@@ -68,7 +68,7 @@ if (preg_match('#^stock/outflows(?:/([0-9a-f-]{36})/(approve|reject))?$#i', $rou
     $body = $method === 'POST' ? request_body() : [];
     $outflowSite = trim((string) ($body['site'] ?? $_GET['site'] ?? ''));
     if ($method === 'GET' && empty($outflowMatch[1]) && $outflowSite === '') {
-        if (!in_array($outflowUser['role'], ['supervisora', 'administracion'], true) || !user_can_action($outflowUser, 'stock')) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
+        if (!user_can_action($outflowUser, 'aprobarEgresoMercaderia')) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
         ensure_stock_outflow_schema($pdo);
         $sites = array_values(array_filter(operational_sites(), static fn(string $site): bool => user_can_access_site($outflowUser, $site)));
         if (!$sites) json_response(['ok' => true, 'pending' => []]);
@@ -112,7 +112,7 @@ if (preg_match('#^stock/outflows(?:/([0-9a-f-]{36})/(approve|reject))?$#i', $rou
         }
     }
     if ($method === 'POST' && !empty($outflowMatch[1])) {
-        if (!in_array($outflowUser['role'], ['supervisora', 'administracion'], true) || !user_can_action($outflowUser, 'stock')) json_response(['ok' => false, 'error' => 'No tenés permiso para autorizar egresos.'], 403);
+        if (!user_can_action($outflowUser, 'aprobarEgresoMercaderia')) json_response(['ok' => false, 'error' => 'No tenés permiso para autorizar egresos de mercadería.'], 403);
         try {
             $result = decide_stock_outflow($pdo, $outflowMatch[1], $outflowSite, $outflowUser, strtolower($outflowMatch[2]), (string) ($body['reason'] ?? ''));
             json_response(['ok' => true, 'request' => $result]);
@@ -2415,7 +2415,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
     // Si la edición no trae permisos, se conservan tal cual. NULL significa "los
     // del cargo": convertirlo en [] al bloquear o cambiar de local dejaba al
     // usuario sin ningún permiso (por ejemplo, sin poder cobrar).
@@ -2425,7 +2425,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
     }
-    if (array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock'], $actionPermissions) && $role !== 'supervisora') {
+    if (array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia'], $actionPermissions) && $role !== 'supervisora') {
         json_response(['ok' => false, 'error' => 'Los permisos especiales de stock solo pueden asignarse a una supervisora.'], 422);
     }
     if (!valid_username($username)) {
@@ -2582,7 +2582,7 @@ if ($method === 'POST' && $route === 'admin/users') {
     if ($fullName === '') $fieldErrors['fullName'] = 'Ingresá nombre y apellido.';
     if (!valid_username($username)) $fieldErrors['username'] = 'Usá nombre.apellido o un correo @lartisantaller.com.';
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) $fieldErrors['role'] = 'Seleccioná un cargo válido.';
-    if (is_array($actionPermissions) && array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock'], $actionPermissions) && $role !== 'supervisora') $fieldErrors['actionPermissions'] = 'Los permisos especiales de stock solo pueden asignarse a una supervisora.';
+    if (is_array($actionPermissions) && array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia'], $actionPermissions) && $role !== 'supervisora') $fieldErrors['actionPermissions'] = 'Los permisos especiales de stock solo pueden asignarse a una supervisora.';
     if (!$locations) $fieldErrors['locations'] = 'Seleccioná al menos un local o Todos los locales.';
     if (!valid_password($temporaryPassword)) $fieldErrors['temporaryPassword'] = 'Debe tener 8 o más caracteres, mayúscula, minúscula, número y símbolo.';
     if ($fieldErrors) {
