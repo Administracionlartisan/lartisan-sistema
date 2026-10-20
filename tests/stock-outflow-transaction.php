@@ -23,8 +23,10 @@ $item = make_stock_outflow_request(['id' => $id, 'destination' => 'Test', 'carri
 $state = ['stock' => ['987654' => 5], 'stockMovements' => [], 'cashOpen' => true, 'cashSession' => ['id' => 'test-cash-intact']];
 $pdo->prepare('INSERT INTO operation_site_states (site,state_json,revision,updated_by) VALUES (?,?,1,?)')->execute([$site, json_encode($state), $actorId]);
 $pdo->prepare('INSERT INTO stock_outflow_requests (id,site,status,request_json,created_by) VALUES (?,?,?,?,?)')->execute([$id, $site, 'Pendiente', json_encode($item), $actorId]);
-$extension = 'C:/laragon/bin/php/php-8.3.30-Win32-vs16-x64/ext/php_pdo_mysql.dll';
-$command = [PHP_BINARY, '-d', 'extension=' . $extension, __FILE__, '--worker', $id, $site, (string) $actorId];
+// Los procesos auxiliares heredan el php.ini; solo se fuerza la extensión si
+// este PHP no la carga por sí mismo (antes era una ruta fija de una PC).
+$extension = getenv('LARTISAN_PDO_MYSQL_EXTENSION') ?: 'pdo_mysql';
+$command = array_merge([PHP_BINARY], extension_loaded('pdo_mysql') ? [] : ['-d', 'extension=' . $extension], [__FILE__, '--worker', $id, $site, (string) $actorId]);
 $pipes1 = $pipes2 = [];
 $one = proc_open($command, [1 => ['pipe','w'], 2 => ['pipe','w']], $pipes1);
 $two = proc_open($command, [1 => ['pipe','w'], 2 => ['pipe','w']], $pipes2);
