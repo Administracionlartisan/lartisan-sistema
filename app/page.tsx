@@ -20,6 +20,7 @@ import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import MrpPanel from "./modules/administracion/MrpPanel";
 import CatalogEditor from "./modules/administracion/CatalogEditor";
+import SystemErrorLog from "./modules/administracion/SystemErrorLog";
 import { useCatalog } from "./modules/config/useCatalog";
 import { addConfirmedThirdPartyProducts, findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
@@ -2091,6 +2092,10 @@ export default function Home() {
     user?.role === "supervisora" && user.actionPermissions.includes("autoaprobarStockPropio");
   const canApproveStockAdjustments =
     user?.role === "supervisora" && user.actionPermissions.includes("aprobarAjustesStock");
+  // Solo las supervisoras a las que Administración asigna este permiso en
+  // Usuarios confirman un egreso de mercadería; el servidor aplica la misma regla.
+  const canApproveStockOutflows =
+    user?.role === "supervisora" && user.actionPermissions.includes("aprobarEgresoMercaderia");
   const canManageSchedules =
     user?.role === "administracion" || (user?.role === "supervisora" && user.reportPermissions.includes("Personal"));
   const canViewSupervisorReports =
@@ -4734,7 +4739,7 @@ export default function Home() {
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
-      {(user.role === "supervisora" || user.role === "administracion") && can("stock") && <StockOutflowAlerts onOpen={(local) => { setSite(local); setTab("Tareas"); }} />}
+      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { setSite(local); setTab("Stock"); }} />}
       {attendanceReminder && user.role !== "administracion" && user.role !== "compras" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="attendance-reminder-title">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -4926,7 +4931,6 @@ export default function Home() {
                 h="Bandeja de tareas"
                 p="Acciones pendientes según tu rol, local y permisos."
               />
-              {(["vendedora", "supervisora", "administracion"].includes(user.role)) && <StockOutflows site={site} products={products.filter((product) => product.active !== false)} canRequest={can("egresos")} canApprove={(user.role === "supervisora" || user.role === "administracion") && can("stock")} pendingSync={pendingSync} refreshStock={loadOperationalData} />}
               <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-4">
                 <div>
                   <b>Estado de conexión: {connectionMode}</b>
@@ -5891,6 +5895,7 @@ export default function Home() {
                 h="Inventario"
                 p="La venta descuenta una unidad de la presentación vendida."
               />
+              {(["vendedora", "supervisora"].includes(user.role)) && <StockOutflows site={site} products={products.filter((product) => product.active !== false)} canRequest={can("egresos")} canApprove={canApproveStockOutflows} pendingSync={pendingSync} refreshStock={loadOperationalData} />}
               <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#eef2f6] p-3 text-sm text-[#183a67]">
                 <b>Stock ideal:</b> define hasta qué cantidad se propone reponer cada producto. Solo las supervisoras autorizadas por Administración pueden editarlo; el resto de los perfiles lo consulta.
               </p>
@@ -8327,7 +8332,7 @@ export default function Home() {
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {ACTION_PERMISSIONS.filter((permission) =>
-                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock"].includes(permission.id) || profile.role === "supervisora",
+                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock", "aprobarEgresoMercaderia"].includes(permission.id) || profile.role === "supervisora",
                         ).map((permission) => (
                           <label
                             key={permission.id}
@@ -9604,6 +9609,7 @@ export default function Home() {
                       </div>
                     </div>
                   )}
+                  {adminReport === "Errores" && <SystemErrorLog />}
                   {adminReport === "Incidencias" && (
                     <div className="mt-5 overflow-auto rounded border">
                       <table className="w-full min-w-[700px] text-sm">

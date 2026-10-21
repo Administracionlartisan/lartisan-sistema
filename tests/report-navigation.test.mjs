@@ -22,11 +22,11 @@ function elements(node) {
 }
 const render = (selectedReport, reports = ADMIN_REPORTS, onSelect = () => {}) => Navigation({ selectedReport, reports, onSelect });
 
-test('six areas cover all 28 actual reports exactly once', () => {
+test('six areas cover all 29 actual reports exactly once', () => {
   assert.equal(REPORT_AREAS.length, 6);
   const ids = REPORT_AREAS.flatMap(area => area.reports);
-  assert.equal(ids.length, 28);
-  assert.equal(new Set(ids).size, 28);
+  assert.equal(ids.length, 29);
+  assert.equal(new Set(ids).size, 29);
   assert.deepEqual(new Set(ids), new Set(ADMIN_REPORTS.map(report => report.id)));
 });
 

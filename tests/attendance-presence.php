@@ -42,3 +42,19 @@ $recovered = preserve_current_cash_after_rejected_stale_close($currentCash, $sta
 check_presence('recupera caja vigente ante cierre obsoleto', $recovered['cashOpen'] === true && ($recovered['activeShift']['id'] ?? '') === 'turno-vigente');
 check_presence('conserva venta del turno vigente', array_column($recovered['cashLedger'], 'id') === ['apertura-vigente', 'venta-vigente']);
 check_presence('descarta sobre de cierre obsoleto', array_column($recovered['envelopeRecords'], 'id') === ['sobre-anterior']);
+$staleWithSale = $staleClose;
+$staleWithSale['cashLedger'][] = ['id' => 'venta-turno-antiguo', 'shiftId' => 'turno-antiguo', 'kind' => 'Venta', 'reference' => 'venta-1'];
+$staleWithSale['cashLedger'][] = ['id' => 'cierre-turno-antiguo', 'shiftId' => 'turno-antiguo', 'kind' => 'Cierre de caja'];
+$staleWithSale['cashLedger'][] = ['id' => 'sobre-turno-antiguo', 'shiftId' => 'turno-antiguo', 'kind' => 'Sobre enviado a Caja Mayor'];
+$recoveredSale = array_column(preserve_current_cash_after_rejected_stale_close($currentCash, $staleWithSale)['cashLedger'], 'id');
+check_presence('conserva el cobro de una venta del turno relevado', in_array('venta-turno-antiguo', $recoveredSale, true));
+check_presence('descarta los asientos del cierre rechazado', !in_array('cierre-turno-antiguo', $recoveredSale, true) && !in_array('sobre-turno-antiguo', $recoveredSale, true));
+
+// Relevo acumulado en un único envío: cierre con arqueo + nueva apertura propia.
+$handover = ['cashOpen' => true, 'activeShift' => ['id' => 'shift-b', 'site' => 'Recoleta', 'openedBy' => 'Vendedora de prueba'],
+    'shiftLog' => [['id' => 'shift-a', 'site' => 'Recoleta', 'closedAtISO' => '2026-10-20T18:00:00.000Z'], ['id' => 'shift-b', 'site' => 'Recoleta']]];
+enforce_strict_cash_snapshot($opening, $handover, $user, 'Recoleta'); check_presence('acepta relevo acumulado con cierre completo', true);
+try { enforce_strict_cash_snapshot($opening, array_merge($handover, ['shiftLog' => [['id' => 'shift-b']]]), $user, 'Recoleta'); throw new RuntimeException('permitió relevo sin cerrar'); }
+catch (OperationalSyncRejected $expected) { check_presence('rechaza relevo sin cierre del turno vigente', str_contains($expected->getMessage(), 'cierre completo')); }
+try { enforce_strict_cash_snapshot($opening, $handover, ['full_name' => 'Otra'], 'Recoleta'); throw new RuntimeException('permitió relevo a nombre de otra'); }
+catch (OperationalSyncRejected $expected) { check_presence('rechaza relevo abierto a nombre de otra responsable', true); }
