@@ -39,7 +39,24 @@ export function ScheduleManager({ apiBase, sites, canManage }: { apiBase: string
 
 export function AttendanceReport({ apiBase, sites, canResolveExceptions }: { apiBase: string; sites: string[]; canResolveExceptions: boolean }) {
   const [from, setFrom] = useState(today()); const [to, setTo] = useState(today()); const [site, setSite] = useState(""); const [rows, setRows] = useState<Report[]>([]); const [exceptions, setExceptions] = useState<AttendanceException[]>([]); const [message, setMessage] = useState(""); const load = async () => { try { const parameters = new URLSearchParams({ from, to }); if (site) parameters.set("site", site); const [reportResponse, exceptionsResponse] = await Promise.all([fetch(`${apiBase}/attendance/report?${parameters}`, { credentials: "include" }), canResolveExceptions ? fetch(`${apiBase}/attendance/exceptions`, { credentials: "include" }) : Promise.resolve(null)]); const data = await reportResponse.json() as { rows?: Report[]; error?: string }; if (!reportResponse.ok) return setMessage(data.error || "No se pudo cargar el reporte."); setRows(data.rows || []); if (exceptionsResponse) { const exceptionData = await exceptionsResponse.json() as { exceptions?: AttendanceException[] }; if (exceptionsResponse.ok) setExceptions(exceptionData.exceptions || []); } setMessage(""); } catch { setMessage("No se pudo cargar el reporte."); } };
-  useEffect(() => { if (canResolveExceptions) void load(); }, [apiBase, canResolveExceptions]);
+  useEffect(() => {
+    if (!canResolveExceptions) return;
+    let active = true;
+    const params = new URLSearchParams({ from: today(), to: today() });
+    void Promise.all([
+      fetch(`${apiBase}/attendance/report?${params}`, { credentials: "include" }),
+      fetch(`${apiBase}/attendance/exceptions`, { credentials: "include" }),
+    ]).then(async ([reportResponse, exceptionsResponse]) => {
+      const report = await reportResponse.json() as { rows?: Report[]; error?: string };
+      const exceptionData = await exceptionsResponse.json() as { exceptions?: AttendanceException[] };
+      if (!active) return;
+      if (!reportResponse.ok) { setMessage(report.error || "No se pudo cargar el reporte."); return; }
+      setRows(report.rows || []);
+      if (exceptionsResponse.ok) setExceptions(exceptionData.exceptions || []);
+      setMessage("");
+    }).catch(() => { if (active) setMessage("No se pudo cargar el reporte."); });
+    return () => { active = false; };
+  }, [apiBase, canResolveExceptions]);
   const resolveException = async (exception: AttendanceException, action: "approve" | "reject") => { const note = window.prompt(action === "approve" ? "Motivo de autorización:" : "Motivo de rechazo:") || "Resuelto por Supervisión"; try { const response = await fetch(`${apiBase}/attendance/exceptions/${exception.id}/${action}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }) }); const data = await response.json() as { error?: string }; if (!response.ok) return setMessage(data.error || "No se pudo resolver la excepción."); setExceptions((items) => items.map((item) => item.id === exception.id ? { ...item, status: action === "approve" ? "Aprobada" : "Rechazada" } : item)); setMessage(`Excepción ${action === "approve" ? "aprobada" : "rechazada"} y auditada.`); } catch { setMessage("No se pudo resolver la excepción."); } };
   const setPeriod = (kind: "day" | "week" | "fortnight" | "month") => { const base = new Date(`${today()}T12:00:00`); let start = new Date(base); let end = new Date(base); if (kind === "week") { const day = (base.getDay() + 6) % 7; start.setDate(base.getDate() - day); end.setDate(start.getDate() + 6); } if (kind === "fortnight") { start.setDate(base.getDate() - 13); } if (kind === "month") { start = new Date(base.getFullYear(), base.getMonth(), 1); end = new Date(base.getFullYear(), base.getMonth() + 1, 0); } const format = (value: Date) => value.toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }); setFrom(format(start)); setTo(format(end)); };
   const late = rows.filter((row) => (row.lateMinutes || 0) > 0).length; const early = rows.filter((row) => (row.earlyMinutes || 0) > 0).length; const absent = rows.filter((row) => row.status === "Sin fichaje").length;

@@ -37,6 +37,7 @@ export const ACTION_PERMISSIONS = [
   { id: "gestionarStockIdeal", label: "Editar stock ideal por local (solo Supervisión)" },
   { id: "autoaprobarStockPropio", label: "Aplicar automáticamente ajustes propios de stock (solo Supervisión)" },
   { id: "aprobarAjustesStock", label: "Aprobar ajustes de stock de otras supervisoras (solo Supervisión)" },
+  { id: "aprobarEgresoMercaderia", label: "Autorizar egresos de mercadería solicitados por el local (solo Supervisión)" },
   { id: "transferirCaja", label: "Transferir efectivo entre cajas" },
   { id: "exportar", label: "Exportar informes" },
   { id: "mrp", label: "Operar compras y MRP" },

@@ -46,4 +46,17 @@ if ((float) ($updated['stock'][88] ?? -1) !== 5.0 || $repaired !== []) {
     throw new RuntimeException('Se rechazó una variación de stock correctamente auditada.');
 }
 
+// Replaying a stale queue containing a movement already applied by ID must
+// not subtract that movement a second time from the current server balance.
+$replayBase = ['stock' => [88 => 7], 'stockMovements' => []];
+$recovered = ['stock' => [88 => 5], 'stockMovements' => [
+    ['id' => '33333333-3333-4333-a333-333333333333', 'productId' => 88, 'quantity' => -2],
+]];
+$stale = ['stock' => [88 => 5], 'stockMovements' => $recovered['stockMovements']];
+$mergedReplay = merge_operational_snapshot($replayBase, $recovered, $stale);
+[$replayed] = protect_stock_snapshot_integrity($recovered, $mergedReplay);
+if ((float) ($replayed['stock'][88] ?? -1) !== 5.0 || count($replayed['stockMovements']) !== 1) {
+    throw new RuntimeException('Un reintento duplicó el descuento de stock ya registrado.');
+}
+
 echo "stock snapshot protection: ok\n";

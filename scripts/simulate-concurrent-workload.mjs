@@ -16,7 +16,9 @@ const origin = 'http://localhost:3210';
 const password = 'Simulacion2026!';
 const run = `SIM-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 const usernameRun = run.replace(/[^a-z0-9]/gi, '').toLowerCase();
-const today = new Date().toISOString().slice(0, 10);
+// Fecha operativa en la zona del sistema: en UTC, después de las 21 h de
+// Argentina ya es el día siguiente y los reportes del día salían vacíos.
+const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
 const id = () => crypto.randomUUID();
 const result = { run, startedAt: new Date().toISOString(), checks: [], errors: [] };
 
@@ -134,12 +136,14 @@ async function main() {
     return { ...structuredClone(raceBase), cashOpen: true, activeShift: shift, shiftLog: [...(raceBase.shiftLog ?? []), shift] };
   };
   const first = reopen(id()); const second = reopen(id());
+  // La perdedora es un conflicto de caja para conciliar (422), no un 500 que
+  // la cola reintentaría a ciegas.
   const race = await Promise.all([
-    sync(raceSeller.api, 'Recoleta', id(), raceRevision, raceBase, first, [500]),
-    sync(raceSeller.api, 'Recoleta', id(), raceRevision, raceBase, second, [500]),
+    sync(raceSeller.api, 'Recoleta', id(), raceRevision, raceBase, first, [422]),
+    sync(raceSeller.api, 'Recoleta', id(), raceRevision, raceBase, second, [422]),
   ]);
   check('Carrera de apertura: una única solicitud aceptada', race.filter(item => item.status === 200 && item.json.ok).length === 1);
-  check('Carrera de apertura: segundo dispositivo rechazado', race.filter(item => item.status !== 200 || !item.json.ok).length === 1);
+  check('Carrera de apertura: segundo dispositivo rechazado para conciliar', race.filter(item => item.status === 422).length === 1);
   const openWinner = race.find(item => item.status === 200 && item.json.ok);
   const current = await raceSeller.api.request('operations/states'); const state = current.json.states.Recoleta.state;
   check('Carrera de apertura: queda una responsable activa', state.cashOpen === true && state.activeShift.id === (state.activeShift.id));

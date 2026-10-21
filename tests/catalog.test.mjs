@@ -21,7 +21,7 @@ function moduleUrl(file) {
 }
 const model = await import(moduleUrl(resolve(root, 'app/modules/config/catalogModel.ts')));
 const { PRODUCTS } = await import(moduleUrl(resolve(root, 'app/modules/config/operationalCatalog.ts')));
-const seed = PRODUCTS.map(p => ({ ...p, onlinePrice: p.price * 1.25, barcodeAliases: p.code === '501' ? ['LART-401'] : [] }));
+const seed = PRODUCTS.map(p => ({ ...p, onlinePrice: p.price * 1.25, barcodeAliases: p.code === '501' ? ['LART-401'] : [], active: true }));
 const sql = new DatabaseSync(':memory:');
 sql.exec(readFileSync(resolve(root, 'drizzle/0000_opposite_reavers.sql'), 'utf8'));
 globalThis.__testCatalogEnv = { DB: { prepare(query) {
@@ -48,6 +48,8 @@ test.after(() => { globalThis.fetch = nativeFetch; sql.close(); delete globalThi
 test('conserva IDs y todos los códigos actuales; reconoce ceros y apóstrofe', () => {
   assert.equal(seed.length, 57);
   assert.deepEqual(model.validateCatalog(seed, seed), seed);
+  const legacy = seed.map(({ active: _active, ...product }) => product);
+  assert.deepEqual(model.validateCatalog(legacy, legacy), seed, 'los productos anteriores sin estado siguen activos');
   assert.equal(model.findScannedProduct(seed, "LART'001").code, '001');
   assert.equal(model.findScannedProduct(seed, "LART'401").code, '501');
   assert.equal(model.findScannedProduct(seed, 'prefijoLART-501').code, '501');

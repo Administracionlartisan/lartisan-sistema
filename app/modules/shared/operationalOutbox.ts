@@ -20,6 +20,14 @@ export type SiteQueue = {
   blocked?: string;
 };
 
+/** A 2xx HTTP status alone is not proof that the operation was committed. */
+export function confirmedSyncResponse(value: unknown): value is { ok: true; revision: number; merged?: boolean } {
+  if (!value || typeof value !== "object") return false;
+  const response = value as { ok?: unknown; revision?: unknown; merged?: unknown };
+  return response.ok === true && Number.isSafeInteger(response.revision) && (response.revision as number) >= 0
+    && (response.merged === undefined || typeof response.merged === "boolean");
+}
+
 /**
  * Agrega un envío a la cola de un local, en orden estricto.
  *
@@ -128,6 +136,29 @@ const legacyPrefix = (userId: string) => `lartisan:operations-outbox:${userId}:`
 
 type StoredQueue = SiteQueue & { key: string; userId: string; site: string };
 
+/** Count all profiles in this browser; malformed stored data must not permit opening. */
+export function countDevicePendingForSite(stored: unknown[], legacy: unknown[], site: string): number {
+  let count = 0;
+  const operationCount = (write: unknown): number => {
+    if (!write || typeof write !== "object") throw new Error("Operación local ilegible");
+    const operations = (write as PendingOperationalWrite).operations;
+    if (operations !== undefined && (!Number.isSafeInteger(operations) || operations < 1)) throw new Error("Operación local ilegible");
+    return operations ?? 1;
+  };
+  for (const value of stored) {
+    if (!value || typeof value !== "object") throw new Error("Cola local ilegible");
+    const queue = value as Partial<StoredQueue>;
+    if (typeof queue.site !== "string" || !Array.isArray(queue.writes)) throw new Error("Cola local ilegible");
+    if (queue.site === site) for (const write of queue.writes) count += operationCount(write);
+  }
+  for (const value of legacy) {
+    if (!value || typeof value !== "object" || typeof (value as PendingOperationalWrite).site !== "string") throw new Error("Cola anterior ilegible");
+    const write = value as PendingOperationalWrite;
+    if (write.site === site) count += operationCount(write);
+  }
+  return count;
+}
+
 const request = <T>(operation: IDBRequest<T>) =>
   new Promise<T>((resolve, reject) => {
     operation.onsuccess = () => resolve(operation.result);
@@ -164,6 +195,7 @@ export class OperationalOutbox {
       for (const queue of stored) if (queue.userId === userId && queue.writes?.length) outbox.queues.set(queue.site, queue);
     } catch {
       outbox.db = null;
+      outbox.durable = false;
     }
     await outbox.migrateLegacy();
     return outbox;
@@ -177,12 +209,20 @@ export class OperationalOutbox {
         .filter((item): item is string => Boolean(item?.startsWith(legacyPrefix(this.userId))));
     } catch { return; }
     const legacy = keys.flatMap((storageKey) => {
-      try { return [JSON.parse(window.localStorage.getItem(storageKey) || "") as PendingOperationalWrite]; }
+      try {
+        const write = JSON.parse(window.localStorage.getItem(storageKey) || "") as PendingOperationalWrite;
+        if (!write || typeof write.site !== "string" || typeof write.requestId !== "string" || typeof write.queuedAt !== "string" || !write.state || !write.baseState || !write.event) return [];
+        return [{ ...write, storageKey }];
+      }
       catch { return []; }
     }).sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
     // Cada envío anterior tenía su propia base: se conservan separados y en orden.
-    for (const write of legacy) await this.save(write.site, appendToQueue(this.get(write.site), write, false));
-    if (this.durable) for (const storageKey of keys) window.localStorage.removeItem(storageKey);
+    for (const { storageKey, ...write } of legacy) {
+      // Un cierre entre guardar y quitar la clave anterior no debe duplicarla.
+      if (!this.get(write.site).writes.some((item) => item.requestId === write.requestId))
+        await this.save(write.site, appendToQueue(this.get(write.site), write, false));
+      if (this.durable) window.localStorage.removeItem(storageKey);
+    }
   }
 
   get(site: string): SiteQueue {
@@ -197,14 +237,50 @@ export class OperationalOutbox {
     return [...this.queues.values()].reduce((sum, queue) => sum + pendingOperations(queue), 0);
   }
 
+  /** Read all profiles afresh; never interpret inaccessible storage as empty. */
+  async countDevicePendingForSite(site: string): Promise<number> {
+    if (!this.db || !this.durable) throw new Error("No se puede verificar la cola local");
+    const stored = await request(this.db.transaction(STORE, "readonly").objectStore(STORE).getAll());
+    const legacy: unknown[] = [];
+    for (let index = 0; index < window.localStorage.length; index++) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith("lartisan:operations-outbox:")) {
+        const raw = window.localStorage.getItem(key);
+        if (!raw) throw new Error("Cola anterior ilegible");
+        legacy.push(JSON.parse(raw));
+      }
+    }
+    return countDevicePendingForSite(stored, legacy, site);
+  }
+
   private async save(site: string, queue: SiteQueue) {
     const key = `${this.userId}:${site}`;
-    if (queue.writes.length) this.queues.set(site, { ...queue, key, userId: this.userId, site });
+    // Publicar la cola en memoria antes de esperar permite que otra operación
+    // encolada durante la transacción parta de la versión más reciente.
+    const previous = this.queues.get(site);
+    const next = queue.writes.length ? { ...queue, key, userId: this.userId, site } : undefined;
+    if (next) this.queues.set(site, next);
     else this.queues.delete(site);
-    if (!this.db) return;
-    const store = this.db.transaction(STORE, "readwrite").objectStore(STORE);
-    if (queue.writes.length) await request(store.put({ ...queue, key, userId: this.userId, site }));
-    else await request(store.delete(key));
+    if (this.db) {
+      try {
+        const transaction = this.db.transaction(STORE, "readwrite");
+        const completed = new Promise<void>((resolve, reject) => {
+          transaction.oncomplete = () => resolve();
+          transaction.onabort = () => reject(transaction.error || new Error("No se pudo guardar la cola local"));
+          transaction.onerror = () => reject(transaction.error || new Error("No se pudo guardar la cola local"));
+        });
+        const store = transaction.objectStore(STORE);
+        if (next) store.put(next);
+        else store.delete(key);
+        await completed;
+      } catch (error) {
+        if (this.queues.get(site) === next) {
+          if (previous) this.queues.set(site, previous);
+          else this.queues.delete(site);
+        }
+        throw error;
+      }
+    }
   }
 
   enqueue(write: PendingOperationalWrite, continuous: boolean) {

@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import QRCode from "qrcode";
 import AiHelpChat from "./components/AiHelpChat";
 import ReportNavigation from "./components/ReportNavigation";
@@ -14,11 +15,12 @@ import {
   INITIAL_MANAGED_USERS, money, SITES,
 } from "./modules/shared/constants";
 import { downloadCsv } from "./modules/shared/downloadCsv";
-import { OperationalOutbox, isOpeningAlreadyClosedOnServer, latestQueuedState, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
+import { OperationalOutbox, confirmedSyncResponse, isOpeningAlreadyClosedOnServer, latestQueuedState, type PendingOperationalWrite } from "./modules/shared/operationalOutbox";
 import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import MrpPanel from "./modules/administracion/MrpPanel";
 import CatalogEditor from "./modules/administracion/CatalogEditor";
+import SystemErrorLog from "./modules/administracion/SystemErrorLog";
 import { useCatalog } from "./modules/config/useCatalog";
 import { addConfirmedThirdPartyProducts, findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
@@ -26,6 +28,8 @@ import CustomerPanel from "./modules/clientes/CustomerPanel";
 import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
+import StockOutflows from "./modules/stock/StockOutflows";
+import StockOutflowAlerts from "./modules/stock/StockOutflowAlerts";
 import { AttendanceReport, PersonnelManager, ScheduleManager } from "./modules/asistencia/ScheduleManager";
 import PersonnelFilesPanel from "./modules/administracion/PersonnelFilesPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
@@ -241,11 +245,11 @@ export default function Home() {
   const configuredSites = activeSites.length ? activeSites : SITES;
   // La fecha simulada nunca se toma de un campo libre ni del reloj del equipo.
   // Sólo se activa si la API la habilitó para Maure y conserva la hora real.
-  const operationalNow = () => {
+  const operationalNow = useCallback(() => {
     if (!(testOperatingDate.active && testOperatingDate.site === "Maure" && testOperatingDate.businessDate === "2026-10-15" && site === "Maure")) return new Date();
     const current = new Date();
     return new Date(2026, 9, 15, current.getHours(), current.getMinutes(), current.getSeconds(), current.getMilliseconds());
-  };
+  }, [testOperatingDate.active, testOperatingDate.site, testOperatingDate.businessDate, site]);
   const isValidationTest = testOperatingDate.active && testOperatingDate.site === "Maure" && testOperatingDate.businessDate === "2026-10-15" && site === "Maure";
   const catalog = useCatalog(user?.id);
   const allCatalogProducts = catalog.document.products;
@@ -266,6 +270,7 @@ export default function Home() {
   const queuedBaseSnapshot = useRef<Record<string, string>>({});
   const serverRevision = useRef<Record<string, number>>({});
   const outboxRef = useRef<{ userId: string; ready: Promise<OperationalOutbox> } | null>(null);
+  const checkingCashOpeningRef = useRef(false);
   const drainingSites = useRef(new Set<string>());
   // Último estado confirmado por local en esta sesión y si el servidor tuvo que combinarlo.
   const lastAcknowledged = useRef<Record<string, { stateJson: string; merged: boolean }>>({});
@@ -341,8 +346,10 @@ export default function Home() {
   const [auditUserFilter, setAuditUserFilter] = useState("");
   const [auditActionFilter, setAuditActionFilter] = useState("");
   const [cashHistory, setCashHistory] = useState<CashHistoryRow[]>([]);
-  const [siteCashClosures, setSiteCashClosures] = useState<CashHistoryRow[]>([]);
-  const [siteCashClosuresLoading, setSiteCashClosuresLoading] = useState(false);
+  const [cashClosuresResult, setCashClosuresResult] = useState<{ key: string; rows: CashHistoryRow[] } | null>(null);
+  const cashClosuresKey = JSON.stringify([user?.id, tab, site, operationalVersion, isValidationTest]);
+  const siteCashClosuresLoading = cashClosuresResult?.key !== cashClosuresKey;
+  const siteCashClosures = siteCashClosuresLoading ? [] : cashClosuresResult.rows;
   const [historyImportKind, setHistoryImportKind] = useState<"sales" | "cash">("sales");
   const [historyImporting, setHistoryImporting] = useState(false);
   const [aiSupportRequests, setAiSupportRequests] = useState<AiSupportRequest[]>([]);
@@ -1277,20 +1284,18 @@ export default function Home() {
   // local. Es una lectura desde la API: nunca depende del navegador que hizo el
   // cierre y no ofrece acciones para modificar la historia de Caja.
   useEffect(() => {
-    if (!user || tab !== "Caja") return;
+    if (!user?.id || tab !== "Caja") return;
     let active = true;
     const today = dateKey(operationalNow());
-    setSiteCashClosuresLoading(true);
     fetch(`${API_BASE}/cash/history?${new URLSearchParams({ site, from: today, to: today })}`, { credentials: "include", cache: "no-store" })
       .then(async (response) => {
         const data = await response.json() as { sessions?: CashHistoryRow[]; error?: string };
         if (!response.ok) throw new Error(data.error || "No se pudieron cargar los cierres.");
-        if (active) setSiteCashClosures(data.sessions || []);
+        if (active) setCashClosuresResult({ key: cashClosuresKey, rows: data.sessions || [] });
       })
-      .catch(() => { if (active) setSiteCashClosures([]); })
-      .finally(() => { if (active) setSiteCashClosuresLoading(false); });
+      .catch(() => { if (active) setCashClosuresResult({ key: cashClosuresKey, rows: [] }); });
     return () => { active = false; };
-  }, [user?.id, tab, site, operationalVersion]);
+  }, [user?.id, tab, site, operationalNow, cashClosuresKey]);
 
   useEffect(() => {
     if (user?.role !== "administracion" || tab !== "Administración" || adminReport !== "Personal") return;
@@ -1377,14 +1382,6 @@ export default function Home() {
     } catch { setMessage("No se pudo actualizar el local."); }
   };
 
-  const resolveAttendanceException = async (id: string, action: "approve" | "reject") => {
-    const note = window.prompt(action === "approve" ? "Motivo de autorización:" : "Motivo de rechazo:") || "Resuelto por Administración";
-    const response = await fetch(`${API_BASE}/admin/attendance/exceptions/${id}/${action}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }) });
-    const data = await response.json() as { error?: string };
-    if (!response.ok) return setMessage(data.error || "No se pudo resolver la excepción.");
-    setAttendanceExceptions((items) => items.map((item) => item.id === id ? { ...item, status: action === "approve" ? "Aprobada" : "Rechazada" } : item));
-    await loadOperationalData(); setMessage(`Excepción ${action === "approve" ? "aprobada" : "rechazada"} y auditada.`);
-  };
   const operationalSnapshot = (local: string): OperationalSnapshot => {
     const localSales = sales.filter((item) => item.site === local);
     const saleIds = new Set(localSales.map((item) => item.id));
@@ -1477,7 +1474,10 @@ export default function Home() {
       window.clearTimeout(timeout);
     }
     if (response.ok) {
-      const data = (await response.json().catch(() => ({}))) as { revision?: number; merged?: boolean };
+      const data: unknown = await response.json().catch(() => null);
+      if (!confirmedSyncResponse(data)) {
+        return { kind: "retry", message: "El servidor no confirmó el guardado. Se reintentará sin repetir el cobro." };
+      }
       return { kind: "saved", revision: data.revision, merged: data.merged };
     }
     if (response.status === 401) return { kind: "session" };
@@ -2032,7 +2032,7 @@ export default function Home() {
     setCashLedger((items) => [ledgerEntry, ...items]);
     return ledgerEntry;
   };
-  const recordStockMovement = (
+  const recordStockMovement = useCallback((
     movement: Omit<StockMovement, "id" | "site" | "at" | "atISO" | "createdBy"> & { site?: string },
   ) => {
     const now = operationalNow();
@@ -2046,7 +2046,13 @@ export default function Home() {
     };
     setStockMovements((items) => [entry, ...items]);
     return entry;
-  };
+  }, [operationalNow, site, user?.name]);
+  const recordAudit = useCallback((action: string, detail: string, auditSite = site) => {
+    const auditDetail = isValidationTest ? `PRUEBA DE VALIDACIÓN · fecha operativa 15/10/2026 · ${detail}` : detail;
+    operationalEventRef.current = { action, detail: auditDetail };
+    setAudit((events) => [{ id: crypto.randomUUID(), at: new Date().toLocaleString("es-AR"), site: auditSite, action, detail: auditDetail }, ...events]);
+    setOperationalVersion((version) => version + 1);
+  }, [isValidationTest, site]);
   // Administración es el rol propietario: ningún permiso agregado después de
   // iniciar sesión debe ocultarle un módulo operativo.
   const can = (permission: string) =>
@@ -2086,6 +2092,10 @@ export default function Home() {
     user?.role === "supervisora" && user.actionPermissions.includes("autoaprobarStockPropio");
   const canApproveStockAdjustments =
     user?.role === "supervisora" && user.actionPermissions.includes("aprobarAjustesStock");
+  // Solo las supervisoras a las que Administración asigna este permiso en
+  // Usuarios confirman un egreso de mercadería; el servidor aplica la misma regla.
+  const canApproveStockOutflows =
+    user?.role === "supervisora" && user.actionPermissions.includes("aprobarEgresoMercaderia");
   const canManageSchedules =
     user?.role === "administracion" || (user?.role === "supervisora" && user.reportPermissions.includes("Personal"));
   const canViewSupervisorReports =
@@ -2098,7 +2108,7 @@ export default function Home() {
       user?.location === "Villa Mitre" ||
       user?.locations?.includes("Villa Mitre"));
   useEffect(() => {
-    if (!user || !operationalReady || !canAutoApproveOwnStockAdjustments) return;
+    if (!user?.name || !operationalReady || !canAutoApproveOwnStockAdjustments) return;
     const ownPending = stockAdjustments.filter((adjustment) =>
       adjustment.status === "Pendiente" &&
       adjustment.requestedBy === user.name &&
@@ -2136,7 +2146,7 @@ export default function Home() {
     );
     recordAudit("Ajustes propios aplicados", `${ownPending.length} carga(s) previa(s) de ${user.name}`);
     setMessage(`Se aplicaron ${ownPending.length} carga(s) propia(s) pendiente(s) y quedaron auditadas.`);
-  }, [user?.id, user?.name, operationalReady, canAutoApproveOwnStockAdjustments, stockAdjustments]);
+  }, [user?.name, operationalReady, canAutoApproveOwnStockAdjustments, stockAdjustments, recordStockMovement, recordAudit]);
   const pendingResetFor = (profile: ManagedUser) =>
     resetRequests.find(
       (request) =>
@@ -2179,8 +2189,8 @@ export default function Home() {
   );
   const lowStockAlerts = configuredSites.flatMap((local) =>
     products.filter((product) => {
-      const minimum = minimumStock[local][product.id] || 0;
-      return minimum > 0 && (stock[local][product.id] || 0) <= minimum;
+      const minimum = minimumStock[local]?.[product.id] || 0;
+      return minimum > 0 && (stock[local]?.[product.id] || 0) <= minimum;
     }).map((product) => ({
       site: local,
       product,
@@ -2943,21 +2953,6 @@ export default function Home() {
     setMessage(
       `Aumento aplicado a ${affected.length} productos para los cinco locales.`,
     );
-  };
-  const recordAudit = (action: string, detail: string, auditSite = site) => {
-    const auditDetail = isValidationTest ? `PRUEBA DE VALIDACIÓN · fecha operativa 15/10/2026 · ${detail}` : detail;
-    operationalEventRef.current = { action, detail: auditDetail };
-    setAudit((events) => [
-      {
-        id: crypto.randomUUID(),
-        at: new Date().toLocaleString("es-AR"),
-        site: auditSite,
-        action,
-        detail: auditDetail,
-      },
-      ...events,
-    ]);
-    setOperationalVersion((version) => version + 1);
   };
   const saveIdealStock = () => {
     if (!canManageIdealStock) {
@@ -3868,9 +3863,11 @@ export default function Home() {
   };
   // La emisión fiscal sincroniza el comprobante externo con el recibo visible.
   // Sus estados se limpian deliberadamente al cambiar de recibo.
+  const receiptSaleId = receiptSale?.id;
+  const receiptSaleInvoiceType = receiptSale?.invoiceType;
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (!receiptSale) {
+    if (!receiptSaleId) {
       // Dejar que React cierre el render actual antes de limpiar el comprobante
       // anterior; evita una actualización de estado encadenada dentro del efecto.
       const reset = window.setTimeout(() => {
@@ -3883,7 +3880,7 @@ export default function Home() {
     const controller = new AbortController();
     setFiscalReceipt(null);
     setFiscalReceiptQr("");
-    const expectsFiscal = ["Factura A", "Factura B", "Factura B electrónica", "Factura B fiscal"].includes(receiptSale.invoiceType);
+    const expectsFiscal = ["Factura A", "Factura B", "Factura B electrónica", "Factura B fiscal"].includes(receiptSaleInvoiceType || "");
     setFiscalReceiptChecking(expectsFiscal);
     let attempts = 0;
     const loadFiscalReceipt = async () => {
@@ -3893,7 +3890,7 @@ export default function Home() {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ saleReference: receiptSale.id }),
+            body: JSON.stringify({ saleReference: receiptSaleId }),
             signal: controller.signal,
           });
         } catch {
@@ -3901,7 +3898,7 @@ export default function Home() {
         }
       }
       try {
-        const response = await fetch(`${API_BASE}/fiscal/sale-document?saleReference=${encodeURIComponent(receiptSale.id)}`, {
+        const response = await fetch(`${API_BASE}/fiscal/sale-document?saleReference=${encodeURIComponent(receiptSaleId)}`, {
           credentials: "include", cache: "no-store", signal: controller.signal,
         });
         if (response.ok) {
@@ -3924,7 +3921,7 @@ export default function Home() {
     };
     void loadFiscalReceipt();
     return () => controller.abort();
-  }, [receiptSale?.id]);
+  }, [receiptSaleId, receiptSaleInvoiceType]);
   /* eslint-enable react-hooks/set-state-in-effect */
   /** Envía siempre la misma identidad: reintentar nunca puede crear otro ajuste. */
   const syncPostCloseCancellation = async (adjustment: PostCloseCancellationAdjustment) => {
@@ -4475,10 +4472,26 @@ export default function Home() {
     setAttendanceReminder("Salida");
     setMessage("Caja cerrada. Recordá marcar tu salida en Fichaje antes de retirarte.");
   };
-  const openCash = () => {
+  const openCash = async () => {
     if (!user) return;
     if (cashIsOpen && activeShift)
       return setMessage("La caja y el turno ya se encuentran abiertos.");
+    if (checkingCashOpeningRef.current) return;
+    checkingCashOpeningRef.current = true;
+    try {
+      const outbox = await getOutbox();
+      if (!outbox) throw new Error("Cola no disponible");
+      const pending = await outbox.countDevicePendingForSite(site);
+      if (pending > 0) {
+        setMessage(`No se puede abrir caja en ${site}: hay ${pending} operaciones pendientes en este navegador. Sincronizalas con el usuario correspondiente o avisá a Administración. No borres los datos del navegador.`);
+        return;
+      }
+    } catch {
+      setMessage("No se puede abrir caja porque no se pudo verificar la cola local. Avisá a Administración y no borres los datos del navegador.");
+      return;
+    } finally {
+      checkingCashOpeningRef.current = false;
+    }
     const now = operationalNow();
     const shift: CashShift = {
       id: crypto.randomUUID(),
@@ -4538,7 +4551,7 @@ export default function Home() {
     setMessage("Fondo inicial corregido y auditado. La caja conserva el importe real para el arqueo.");
   };
   useEffect(() => {
-    if (!user || typeof window === "undefined") return;
+    if (!user?.id || typeof window === "undefined") return;
     const storageKey = "lartisan:attendance-device";
     let stored: { deviceId: string; token: string; status: "Pendiente" | "Aprobado" | "Revocado"; label: string } | null = null;
     try { stored = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch { stored = null; }
@@ -4553,20 +4566,6 @@ export default function Home() {
       .catch(() => { if (active) setAttendanceDevice(null); });
     return () => { active = false; };
   }, [user?.id, site]);
-
-  const requestAttendanceDevice = async () => {
-    if (!user) return;
-    const storageKey = "lartisan:attendance-device";
-    const current = attendanceDevice || { deviceId: crypto.randomUUID(), token: `${crypto.randomUUID()}${crypto.randomUUID()}`, status: "Pendiente" as const, label: "" };
-    const label = window.prompt("Identificá esta computadora para autorizarla (ej.: Mostrador Villa Mitre):", current.label || `Computadora de ${site}`)?.trim();
-    if (!label) return;
-    try {
-      const response = await fetch(`${API_BASE}/attendance/devices`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, deviceId: current.deviceId, token: current.token, label }) });
-      const data = await response.json() as { device?: { status: "Pendiente" | "Aprobado"; label: string }; error?: string };
-      if (!response.ok || !data.device) return setMessage(data.error || "No se pudo solicitar la autorización del equipo.");
-      const next = { ...current, ...data.device }; window.localStorage.setItem(storageKey, JSON.stringify(next)); setAttendanceDevice(next); setMessage(data.device.status === "Aprobado" ? "Equipo autorizado para fichaje en este local." : "Solicitud enviada. Supervisión (Betzi o Andrea) debe aprobar este equipo una sola vez.");
-    } catch { setMessage("No se pudo solicitar la autorización del equipo."); }
-  };
 
   const markAttendance = async (kind: AttendanceRecord["kind"]) => {
     if (!user) return;
@@ -4616,6 +4615,28 @@ export default function Home() {
     setCashLedger((items) => [{ id: crypto.randomUUID(), site: destinationSite, shiftId: activeShiftBySite[destinationSite]?.id, kind: "Transferencia recibida", direction: "Ingreso", amount: transfer.amount, cashImpact: transfer.amount, paymentMethod: "Efectivo", reference: transfer.id, detail: `${transfer.originSite} · ${transfer.reason}`, at: new Date().toLocaleString("es-AR"), atISO: new Date().toISOString(), createdBy: user.name }, ...items]);
     recordAudit("Transferencia de caja recibida", `${transfer.originSite} a ${transfer.destination} · ${money.format(transfer.amount)}`);
     setMessage("Transferencia confirmada y conciliada en el libro mayor.");
+  };
+  const exportPendingBackup = async () => {
+    try {
+      const outbox = await getOutbox();
+      if (!outbox || !outbox.count()) return setMessage("No hay operaciones pendientes para respaldar en este usuario y navegador.");
+      const backup = {
+        format: "lartisan-operational-outbox-backup-v1",
+        exportedAt: new Date().toISOString(),
+        userId: String(user?.id),
+        durable: outbox.durable,
+        queues: outbox.sites().map((siteName) => ({ site: siteName, ...outbox.get(siteName) })),
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `respaldo-operaciones-pendientes-${Date.now()}.json`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setMessage("Se inició la descarga del respaldo. Contiene datos sensibles: compartilo solo por un medio seguro. Las operaciones siguen pendientes en este equipo.");
+    } catch {
+      setMessage("No se pudo generar el respaldo. Las operaciones pendientes no fueron modificadas.");
+    }
   };
   const syncContingency = async () => {
     if (connectionMode === "Contingencia")
@@ -4718,6 +4739,7 @@ export default function Home() {
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
+      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { setSite(local); setTab("Stock"); }} />}
       {attendanceReminder && user.role !== "administracion" && user.role !== "compras" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="attendance-reminder-title">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -4928,6 +4950,11 @@ export default function Home() {
                   >
                     {connectionMode === "En línea" ? "Activar contingencia" : "Volver a En línea"}
                   </button>
+                  {pendingSync > 0 && (
+                    <button onClick={exportPendingBackup} className="rounded border px-3 py-2 text-sm font-bold">
+                      Descargar respaldo de pendientes
+                    </button>
+                  )}
                   {pendingSync > 0 && (
                     <button onClick={syncContingency} className="rounded bg-[#183a67] px-3 py-2 text-sm font-bold text-white">
                       Sincronizar pendientes
@@ -5868,6 +5895,7 @@ export default function Home() {
                 h="Inventario"
                 p="La venta descuenta una unidad de la presentación vendida."
               />
+              {(["vendedora", "supervisora"].includes(user.role)) && <StockOutflows site={site} products={products.filter((product) => product.active !== false)} canRequest={can("egresos")} canApprove={canApproveStockOutflows} pendingSync={pendingSync} refreshStock={loadOperationalData} />}
               <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#eef2f6] p-3 text-sm text-[#183a67]">
                 <b>Stock ideal:</b> define hasta qué cantidad se propone reponer cada producto. Solo las supervisoras autorizadas por Administración pueden editarlo; el resto de los perfiles lo consulta.
               </p>
@@ -6549,7 +6577,7 @@ export default function Home() {
                           type="search"
                           value={centralOrderSearch}
                           onChange={(event) => setCentralOrderSearch(event.target.value)}
-                          placeholder="Ej.: Maure o Anni Lai Muñoz"
+                          placeholder="Ej.: local o responsable"
                           className="mt-1 w-full rounded border p-2 font-normal text-slate-900"
                         />
                       </label>
@@ -8304,7 +8332,7 @@ export default function Home() {
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {ACTION_PERMISSIONS.filter((permission) =>
-                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock"].includes(permission.id) || profile.role === "supervisora",
+                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock", "aprobarEgresoMercaderia"].includes(permission.id) || profile.role === "supervisora",
                         ).map((permission) => (
                           <label
                             key={permission.id}
@@ -9581,6 +9609,7 @@ export default function Home() {
                       </div>
                     </div>
                   )}
+                  {adminReport === "Errores" && <SystemErrorLog />}
                   {adminReport === "Incidencias" && (
                     <div className="mt-5 overflow-auto rounded border">
                       <table className="w-full min-w-[700px] text-sm">
@@ -9792,7 +9821,7 @@ export default function Home() {
                 <section className="pt-2 text-center">
                   <p className="font-bold">CAE: {fiscalReceipt.cae}</p>
                   <p>Vto. CAE: {fiscalReceipt.caeExpiresOn || "—"}</p>
-                  {fiscalReceiptQr ? <img src={fiscalReceiptQr} alt="Código QR fiscal ARCA" className="mx-auto mt-2 h-[30mm] w-[30mm]" /> : <p className="mt-2 text-center text-xs">Generando QR fiscal…</p>}
+                  {fiscalReceiptQr ? <Image unoptimized width={180} height={180} src={fiscalReceiptQr} alt="Código QR fiscal ARCA" className="mx-auto mt-2 h-[30mm] w-[30mm]" /> : <p className="mt-2 text-center text-xs">Generando QR fiscal…</p>}
                   <p className="mt-1 text-[9px]">Comprobante autorizado electrónicamente por ARCA</p>
                 </section>
               </div>

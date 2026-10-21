@@ -1,13 +1,20 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
-import hostingConfig from './.openai/hosting.json';
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
 
-const { d1, r2 } = hostingConfig;
+// `.openai/hosting.json` identifica el proyecto en OpenAI Sites y no se
+// versiona en el repositorio público. Sin él la web se compila igual para el
+// hosting propio; solo se omite el empaquetado para Sites, que lo exige.
+const hostingPath = new URL('./.openai/hosting.json', import.meta.url);
+const hasSitesHosting = existsSync(hostingPath);
+const { d1, r2 }: { d1?: string | null; r2?: string | null } = hasSitesHosting
+  ? JSON.parse(readFileSync(hostingPath, 'utf8'))
+  : {};
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
@@ -54,7 +61,7 @@ export default defineConfig(async () => {
     },
     plugins: [
       vinext(),
-      sites(),
+      ...(hasSitesHosting ? [sites()] : []),
       cloudflare({
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
         config: localBindingConfig,

@@ -16,6 +16,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test:regresion": "node --test tests/regression-guards.test.mjs",
     "test:simulacion-local": "node scripts/simulate-concurrent-workload.mjs",
+    "test:simulacion-fallas": "node --experimental-strip-types scripts/simulate-sync-failures.mjs",
     "check": "node scripts/check.mjs"
   },
   "dependencies": {

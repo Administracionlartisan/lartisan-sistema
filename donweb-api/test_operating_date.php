@@ -9,25 +9,35 @@ declare(strict_types=1);
  */
 function ensure_test_operating_date_schema(PDO $pdo): void
 {
-    $pdo->exec("CREATE TABLE IF NOT EXISTS test_operating_date_runs (
-        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        site VARCHAR(80) NOT NULL,
-        business_date DATE NOT NULL,
-        label VARCHAR(120) NOT NULL,
-        purpose VARCHAR(500) NOT NULL,
-        status ENUM('active','disabled') NOT NULL DEFAULT 'active',
-        enabled_by BIGINT UNSIGNED NOT NULL,
-        enabled_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        disabled_by BIGINT UNSIGNED NULL,
-        disabled_at DATETIME NULL,
-        UNIQUE KEY uq_test_operating_date_active (site, business_date, status),
-        INDEX idx_test_operating_date_status (status, site, business_date)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    if (!table_exists($pdo, 'test_operating_date_runs')) {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS test_operating_date_runs (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            site VARCHAR(80) NOT NULL,
+            business_date DATE NOT NULL,
+            label VARCHAR(120) NOT NULL,
+            purpose VARCHAR(500) NOT NULL,
+            status ENUM('active','disabled') NOT NULL DEFAULT 'active',
+            enabled_by BIGINT UNSIGNED NOT NULL,
+            enabled_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            disabled_by BIGINT UNSIGNED NULL,
+            disabled_at DATETIME NULL,
+            INDEX idx_test_operating_date_status (status, site, business_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    }
+    // La clave única (site, business_date, status) impedía desactivar la
+    // ventana por segunda vez: chocaba con la fila ya desactivada y la ventana
+    // quedaba activa, rechazando toda venta real de Maure. Que haya una sola
+    // ventana activa lo garantiza la habilitación.
+    if ($pdo->query("SHOW INDEX FROM test_operating_date_runs WHERE Key_name = 'uq_test_operating_date_active'")->fetch()) {
+        $pdo->exec('ALTER TABLE test_operating_date_runs DROP INDEX uq_test_operating_date_active');
+    }
 }
 
+/** Solo lectura: /sync la consulta dentro de su transacción, donde un DDL
+ * haría un COMMIT implícito. La estructura la crea la migración inicial. */
 function active_test_operating_date(PDO $pdo): ?array
 {
-    ensure_test_operating_date_schema($pdo);
+    if (!table_exists($pdo, 'test_operating_date_runs')) return null;
     $statement = $pdo->query("SELECT id,site,business_date,label,purpose,enabled_by,enabled_at FROM test_operating_date_runs WHERE status='active' ORDER BY id DESC LIMIT 1");
     $row = $statement->fetch();
     return is_array($row) ? $row : null;
@@ -80,7 +90,13 @@ function validate_test_operating_date_scope(string $site, string $businessDate, 
  */
 function validate_test_operating_snapshot(PDO $pdo, string $site, array $previous, array $incoming, array $event): void
 {
-    $active = active_test_operating_date($pdo);
+    check_test_operating_snapshot(active_test_operating_date($pdo), $site, $previous, $incoming, $event);
+}
+
+/** Un rechazo aquí es definitivo (422): reintentar no cambia el resultado
+ * mientras la ventana siga activa, y la cola del equipo se conserva. */
+function check_test_operating_snapshot(?array $active, string $site, array $previous, array $incoming, array $event): void
+{
     if ($active === null || $site !== (string) $active['site']) return;
     $businessDate = (string) $active['business_date'];
     $hasCanonicalEvent = (string) ($event['testOperatingDate'] ?? '') === $businessDate
@@ -92,8 +108,10 @@ function validate_test_operating_snapshot(PDO $pdo, string $site, array $previou
     // colecciones nuevas se siguen verificando más abajo contra la misma fecha.
     $legacyLabeledReplay = !$hasCanonicalEvent
         && str_contains((string) ($event['detail'] ?? ''), 'PRUEBA DE VALIDACIÓN');
+    $windowNotice = $site . ' tiene activa la ventana de prueba del ' . $businessDate
+        . ': solo acepta operaciones identificadas como PRUEBA DE VALIDACIÓN. Administración debe cerrarla para sincronizar operaciones reales.';
     if (!$hasCanonicalEvent && !$legacyLabeledReplay) {
-        throw new InvalidArgumentException('La operación de prueba debe conservar su fecha y etiqueta auditadas.');
+        throw new OperationalSyncRejected($windowNotice);
     }
     foreach (['sales', 'shiftLog', 'cashLedger', 'stockMovements', 'returnsLog', 'audit'] as $collection) {
         $known = [];
@@ -108,14 +126,14 @@ function validate_test_operating_snapshot(PDO $pdo, string $site, array $previou
             ], static fn ($value): bool => is_string($value) && $value !== '');
             foreach ($timestamps as $timestamp) {
                 if (!str_starts_with((string) $timestamp, $businessDate . 'T')) {
-                    throw new InvalidArgumentException('Un registro nuevo no utiliza la fecha operativa de prueba autorizada.');
+                    throw new OperationalSyncRejected('Un registro nuevo no utiliza la fecha operativa de prueba autorizada. ' . $windowNotice);
                 }
             }
             if ($collection === 'sales' && !str_contains((string) ($item['customer'] ?? ''), 'PRUEBA DE VALIDACIÓN')) {
-                throw new InvalidArgumentException('La venta de prueba debe estar identificada para auditoría.');
+                throw new OperationalSyncRejected('La venta de prueba debe estar identificada para auditoría. ' . $windowNotice);
             }
             if ($collection === 'stockMovements' && !str_contains((string) ($item['detail'] ?? ''), 'PRUEBA DE VALIDACIÓN')) {
-                throw new InvalidArgumentException('El movimiento de stock de prueba debe estar identificado para auditoría.');
+                throw new OperationalSyncRejected('El movimiento de stock de prueba debe estar identificado para auditoría. ' . $windowNotice);
             }
         }
     }

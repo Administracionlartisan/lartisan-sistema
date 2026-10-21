@@ -20,8 +20,8 @@ test('every rendered admin report has exactly one audited entry',()=>{
   const page=readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');
   const rendered=new Set([...page.matchAll(/adminReport === "([^"]+)"/g)].map(m=>m[1]));
   assert.deepEqual(new Set(ADMIN_REPORTS.map(r=>r.id)),rendered);
-  assert.equal(ADMIN_REPORTS.length,28);
-  assert.equal(new Set(adminReportGuides.map(r=>r.id)).size,28);
+  assert.equal(ADMIN_REPORTS.length,29);
+  assert.equal(new Set(adminReportGuides.map(r=>r.id)).size,29);
   assert.match(page,/import \{ ADMIN_REPORTS, canOpenReport \}/);
   for(const r of adminReportGuides){assert.ok(r.source&&r.questions.length>=6&&r.filters&&r.limits);}
 });

@@ -12,6 +12,7 @@ require __DIR__ . '/arca_wsfe.php';
 require __DIR__ . '/internal_chat.php';
 require __DIR__ . '/training.php';
 require __DIR__ . '/attendance_presence.php';
+require __DIR__ . '/stock_outflow.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -42,6 +43,7 @@ if ($method === 'GET' && ($route === '' || $route === 'health')) {
 // también valida su propia estructura justo antes de usarse, donde puede dar un
 // error específico sin dejar fuera al resto de la operación.
 foreach ([
+    'system_error_log' => static fn () => ensure_system_error_log_schema($pdo),
     'users' => static fn () => ensure_user_locations_schema($pdo),
     'locations' => static fn () => ensure_locations_schema($pdo),
     'operations' => static fn () => ensure_operations_schema($pdo),
@@ -55,8 +57,74 @@ foreach ([
     try {
         $ensure();
     } catch (Throwable $error) {
-        error_log('LARTISAN deferred ' . $schema . ' schema update: ' . $error->getMessage());
+        system_error($pdo, 'deferred ' . $schema . ' schema update', $error->getMessage());
     }
+}
+
+// Las solicitudes se guardan fuera del snapshot operativo y se deciden bajo
+// bloqueo de filas, para que dos supervisoras no descuenten dos veces.
+if (preg_match('#^stock/outflows(?:/([0-9a-f-]{36})/(approve|reject))?$#i', $route, $outflowMatch)) {
+    $outflowUser = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    if ($method === 'POST' && !empty($outflowUser['must_change_password'])) json_response(['ok' => false, 'error' => 'Cambiá tu contraseña temporal antes de operar.'], 403);
+    $body = $method === 'POST' ? request_body() : [];
+    $outflowSite = trim((string) ($body['site'] ?? $_GET['site'] ?? ''));
+    if ($method === 'GET' && empty($outflowMatch[1]) && $outflowSite === '') {
+        if (!user_can_action($outflowUser, 'aprobarEgresoMercaderia')) json_response(['ok' => false, 'error' => 'Acceso no autorizado.'], 403);
+        ensure_stock_outflow_schema($pdo);
+        $sites = array_values(array_filter(operational_sites(), static fn(string $site): bool => user_can_access_site($outflowUser, $site)));
+        if (!$sites) json_response(['ok' => true, 'pending' => []]);
+        $query = $pdo->prepare('SELECT site, COUNT(*) AS total FROM stock_outflow_requests WHERE status = ? AND site IN (' . implode(',', array_fill(0, count($sites), '?')) . ') GROUP BY site');
+        $query->execute(array_merge(['Pendiente'], $sites));
+        json_response(['ok' => true, 'pending' => $query->fetchAll()]);
+    }
+    if (!user_can_access_site($outflowUser, $outflowSite)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+    ensure_stock_outflow_schema($pdo);
+    if ($method === 'GET' && empty($outflowMatch[1])) {
+        $query = $pdo->prepare("SELECT request_json FROM stock_outflow_requests WHERE site = ? ORDER BY (status = 'Pendiente') DESC, created_at DESC");
+        $query->execute([$outflowSite]);
+        $items = array_values(array_filter(array_map(static fn ($value) => json_decode((string) $value, true), $query->fetchAll(PDO::FETCH_COLUMN)), 'is_array'));
+        json_response(['ok' => true, 'requests' => $items]);
+    }
+    if ($method === 'POST' && empty($outflowMatch[1])) {
+        if (!user_can_action($outflowUser, 'egresos')) json_response(['ok' => false, 'error' => 'No tenés permiso para solicitar egresos.'], 403);
+        try {
+            $item = make_stock_outflow_request($body, $outflowSite, (string) ($outflowUser['full_name'] ?? $outflowUser['username']), gmdate('Y-m-d\TH:i:s\Z'));
+            $query = $pdo->prepare('SELECT request_json, created_by FROM stock_outflow_requests WHERE id = ?');
+            $query->execute([$item['id']]);
+            $existing = $query->fetch();
+            if ($existing) {
+                $prior = json_decode((string) $existing['request_json'], true);
+                foreach (['site', 'destination', 'carrier', 'reason', 'lines'] as $field) if (($prior[$field] ?? null) !== $item[$field]) throw new DomainException('El identificador ya corresponde a otra solicitud.');
+                if ((int) $existing['created_by'] !== (int) $outflowUser['id']) throw new DomainException('El identificador ya corresponde a otra solicitud.');
+                json_response(['ok' => true, 'request' => $prior]);
+            }
+            $pdo->beginTransaction();
+            $pdo->prepare('INSERT INTO stock_outflow_requests (id, site, status, request_json, created_by) VALUES (?, ?, ?, ?, ?)')->execute([$item['id'], $outflowSite, $item['status'], json_encode($item, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), (int) $outflowUser['id']]);
+            audit($pdo, (int) $outflowUser['id'], 'stock_outflow_requested', $outflowSite . ' · ' . $item['id']);
+            $pdo->commit();
+            json_response(['ok' => true, 'request' => $item]);
+        } catch (DomainException $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            system_error($pdo, 'stock outflow creation failed', $error->getMessage(), $outflowSite);
+            json_response(['ok' => false, 'error' => 'No se pudo confirmar la solicitud. Reintentá con el mismo identificador.'], 500);
+        }
+    }
+    if ($method === 'POST' && !empty($outflowMatch[1])) {
+        if (!user_can_action($outflowUser, 'aprobarEgresoMercaderia')) json_response(['ok' => false, 'error' => 'No tenés permiso para autorizar egresos de mercadería.'], 403);
+        try {
+            $result = decide_stock_outflow($pdo, $outflowMatch[1], $outflowSite, $outflowUser, strtolower($outflowMatch[2]), (string) ($body['reason'] ?? ''));
+            json_response(['ok' => true, 'request' => $result]);
+        } catch (DomainException $error) {
+            json_response(['ok' => false, 'error' => $error->getMessage()], 409);
+        } catch (Throwable $error) {
+            system_error($pdo, 'stock outflow decision failed', $error->getMessage(), $outflowSite);
+            json_response(['ok' => false, 'error' => 'No se pudo confirmar la decisión. Consultá el estado antes de reintentar.'], 500);
+        }
+    }
+    json_response(['ok' => false, 'error' => 'Método no permitido.'], 405);
 }
 
 // Capacitación de ventas: catálogo publicado, avance por usuario y gestión
@@ -528,7 +596,7 @@ if ($method === 'POST' && $route === 'admin/arca/homologation-test') {
         // la causa operativa permite corregir certificados/configuración sin tener
         // que adivinar frente a un mensaje genérico.
         $arcaError = $error->getMessage();
-        error_log('LARTISAN ARCA WSAA homologation test failed: ' . $arcaError);
+        system_error($pdo, 'ARCA WSAA homologation test failed', $arcaError);
         audit($pdo, (int) $user['id'], 'arca_wsaa_homologation_failed');
         json_response(['ok' => false, 'error' => 'No se pudo validar ARCA en homologación: ' . $arcaError], 422);
     }
@@ -569,7 +637,7 @@ if (in_array($method, ['GET', 'POST'], true) && $route === 'admin/arca/productio
         json_response(['ok' => true, 'environment' => 'produccion', 'ticketExpiresAt' => $ticket['expiresAt'], 'checks' => $checks, 'message' => 'Consulta de producción validada. No se emitió ningún comprobante.']);
     } catch (Throwable $error) {
         $arcaError = $error->getMessage();
-        error_log('LARTISAN ARCA production preflight failed: ' . $arcaError);
+        system_error($pdo, 'ARCA production preflight failed', $arcaError);
         audit($pdo, (int) $user['id'], 'arca_wsfe_production_preflight_failed');
         json_response(['ok' => false, 'error' => 'No se pudo validar ARCA en producción: ' . $arcaError], 422);
     }
@@ -682,7 +750,7 @@ if ($method === 'GET' && $route === 'admin/arca/eligible-sales') {
         $statement->execute([$cutover]);
         json_response(['ok' => true, 'sales' => $statement->fetchAll(), 'cutover' => $cutover]);
     } catch (Throwable $error) {
-        error_log('LARTISAN fiscal eligible sales failed: ' . $error->getMessage());
+        system_error($pdo, 'fiscal eligible sales failed', $error->getMessage());
         json_response(['ok' => false, 'error' => 'No se pudo cargar la cola fiscal. Intentá nuevamente o revisá la salud de la API.'], 500);
     }
 }
@@ -895,7 +963,7 @@ if ($method === 'POST' && $route === 'cash-sheets/close') {
     } catch (InvalidArgumentException $error) {
         json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     } catch (RuntimeException $error) {
-        error_log('LARTISAN cash-sheet sync failed: ' . $error->getMessage());
+        system_error($pdo, 'cash-sheet sync failed', $error->getMessage());
         json_response(['ok' => false, 'error' => $error->getMessage()], 503);
     }
 }
@@ -908,7 +976,7 @@ if ($method === 'POST' && $route === 'cash-sheets/adjustment') {
     } catch (InvalidArgumentException $error) {
         json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     } catch (RuntimeException $error) {
-        error_log('LARTISAN cash-sheet adjustment failed: ' . $error->getMessage());
+        system_error($pdo, 'cash-sheet adjustment failed', $error->getMessage());
         json_response(['ok' => false, 'error' => $error->getMessage()], 503);
     }
 }
@@ -971,7 +1039,7 @@ if ($method === 'GET' && $route === 'admin/expenses/latest') {
             expense_sync_from_google($pdo, $config, (int) $admin['id']);
             $latest = $pdo->query("SELECT rows_imported, payload_json, started_at, finished_at FROM expense_sync_runs WHERE status = 'verified' ORDER BY id DESC LIMIT 1")->fetch();
         } catch (Throwable $error) {
-            error_log('LARTISAN automatic expense sync failed: ' . $error->getMessage());
+            system_error($pdo, 'automatic expense sync failed', $error->getMessage());
         }
     }
     json_response([
@@ -1108,7 +1176,7 @@ if ($method === 'POST' && $route === 'mrp/import') {
     } catch (InvalidArgumentException | JsonException $error) {
         json_response(['ok' => false, 'error' => $error->getMessage()], 422);
     } catch (Throwable $error) {
-        error_log('LARTISAN one-time MRP import failed: ' . $error->getMessage());
+        system_error($pdo, 'one-time MRP import failed', $error->getMessage());
         json_response(['ok' => false, 'error' => 'No se completó la importación. No se guardó una carga parcial.'], 500);
     }
 }
@@ -1489,7 +1557,7 @@ if ($method === 'POST' && $route === 'assistant/chat') {
         audit($pdo, (int) $user['id'], 'ai_assistant_question', 'message_id=' . $messageId);
         json_response(['ok' => true, 'messageId' => $messageId, 'answer' => $result['answer']]);
     } catch (Throwable $error) {
-        error_log('LARTISAN assistant failed: ' . $error->getMessage());
+        system_error($pdo, 'assistant failed', $error->getMessage());
         $pdo->prepare("UPDATE ai_chat_messages SET status = 'failed' WHERE id = ?")->execute([$messageId]);
         $notConfigured = $error->getMessage() === 'assistant_not_configured';
         json_response([
@@ -1730,7 +1798,7 @@ if ($method === 'GET' && $route === 'operations/states') {
         try {
             compact_oversized_site_state($pdo, $config, $site);
         } catch (Throwable $error) {
-            error_log('LARTISAN state compaction failed for ' . $site . ': ' . $error->getMessage());
+            system_error($pdo, 'state compaction failed', $error->getMessage(), $site);
         }
     }
     $readableSites = array_merge($allowedSites, $centralSites);
@@ -1791,6 +1859,12 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
     $syncStage = 'preparar';
     $pdo->beginTransaction();
     try {
+        $revisionStatement = $pdo->prepare('SELECT revision, state_json FROM operation_site_states WHERE site = ? FOR UPDATE');
+        $revisionStatement->execute([$site]);
+        $currentRow = $revisionStatement->fetch();
+        // Después del bloqueo del local: dos envíos del mismo requestId en
+        // paralelo (dos pestañas o un reintento) esperan aquí y el segundo
+        // recibe la confirmación del primero en lugar de reprocesarlo.
         $requestLookup = $pdo->prepare('SELECT revision FROM operation_requests WHERE request_id = ? AND site = ? LIMIT 1');
         $requestLookup->execute([$requestId, $site]);
         $processedRevision = $requestLookup->fetchColumn();
@@ -1798,9 +1872,6 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $pdo->commit();
             json_response(['ok' => true, 'revision' => (int) $processedRevision, 'alreadyProcessed' => true]);
         }
-        $revisionStatement = $pdo->prepare('SELECT revision, state_json FROM operation_site_states WHERE site = ? FOR UPDATE');
-        $revisionStatement->execute([$site]);
-        $currentRow = $revisionStatement->fetch();
         $currentRevision = $currentRow === false ? false : (int) $currentRow['revision'];
         $previousState = $currentRow === false ? [] : (json_decode((string) $currentRow['state_json'], true) ?: []);
         if ($centralOnly && $currentRow === false) {
@@ -1838,13 +1909,16 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         if ($centralOnly) {
             // Los cambios de Central ya se aplicaron sobre el estado vigente.
             $state = $authorizedIncoming;
-        } elseif ($currentRow !== false && (int) $currentRevision !== $baseRevision) {
-            if (!is_array($baseState)) {
-                $pdo->rollBack();
-                json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
-            }
+        } elseif ($currentRow !== false && is_array($baseState)) {
+            // Siempre por diferencias contra la copia base del equipo, aunque
+            // la revisión coincida: tras una confirmación combinada el
+            // navegador conoce la revisión nueva pero no las ventas de otro
+            // equipo, y reemplazar el estado completo las sacaba del local.
             $state = merge_operational_snapshot($baseState, $previousState, $authorizedIncoming);
-            $merged = true;
+            $merged = (int) $currentRevision !== $baseRevision;
+        } elseif ($currentRow !== false && (int) $currentRevision !== $baseRevision) {
+            $pdo->rollBack();
+            json_response(['ok' => false, 'error' => 'Otro equipo actualizó este local', 'currentRevision' => (int) $currentRevision], 409);
         } else {
             $state = $authorizedIncoming;
         }
@@ -1893,7 +1967,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             // de la operación. Ante una falla técnica se conservan los tipos de
             // comprobante previamente guardados y se permiten stock, caja,
             // pedidos y recepciones.
-            error_log('LARTISAN invoice validation fallback: ' . $invoiceValidationError->getMessage());
+            system_error($pdo, 'invoice validation fallback', $invoiceValidationError->getMessage(), $site);
             $previousSales = is_array($previousState['sales'] ?? null) ? $previousState['sales'] : [];
             $knownSales = operational_items_by_id($previousSales);
             foreach (is_array($state['sales'] ?? null) ? $state['sales'] : [] as $index => $sale) {
@@ -1914,7 +1988,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             record_sale_validation_findings($pdo, $site, (int) $user['id'], array_merge($invoiceFindings,
                 validate_operational_sales($previousState, $untrimmedState, $site, catalog_price_lists($pdo))));
         } catch (Throwable $validationError) {
-            error_log('LARTISAN sale validation failed: ' . $validationError->getMessage());
+            system_error($pdo, 'sale validation failed', $validationError->getMessage(), $site);
         }
         $changedKeys = array_values(array_filter(array_unique(array_merge(array_keys($previousState), array_keys($state))), static function ($key) use ($previousState, $state): bool {
             return ($previousState[$key] ?? null) !== ($state[$key] ?? null);
@@ -1959,7 +2033,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         try {
             sync_normalized_operations($pdo, $site, $untrimmedState, (int) $user['id'], $currentRow === false ? null : $previousState);
         } catch (Throwable $normalizationError) {
-            error_log('LARTISAN normalized operations sync failed for ' . $site . ': ' . $normalizationError->getMessage());
+            system_error($pdo, 'normalized operations sync failed', $normalizationError->getMessage(), $site);
         }
         $syncStage = 'auditar';
         audit($pdo, (int) $user['id'], 'operational_state_updated', $site);
@@ -1980,7 +2054,7 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         $failureDetail = preg_replace('/[\r\n]+/', ' ', $error->getMessage()) ?: 'Sin detalle disponible.';
         $failureDetail = substr($syncStage . ': ' . $failureDetail, 0, 800);
-        error_log('LARTISAN operation sync failed at ' . $syncStage . ' for ' . $site . ': ' . $failureDetail);
+        system_error($pdo, 'operation sync failed', $failureDetail, $site);
         // El intento fallido se audita fuera de la transacción revertida para
         // poder diagnosticar una cola pendiente sin exponer el detalle técnico
         // al equipo de ventas.
@@ -1988,6 +2062,11 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             audit($pdo, (int) $user['id'], 'operational_sync_failed', $site . ' · ' . $failureDetail);
         } catch (Throwable $auditError) {
             error_log('LARTISAN operation sync failure audit failed: ' . $auditError->getMessage());
+        }
+        $cashConflict = operational_cash_conflict_response($error, $syncStage);
+        if ($cashConflict !== null) json_response($cashConflict, 422);
+        if ($error instanceof OperationalSyncRejected) {
+            json_response(['ok' => false, 'error' => $error->getMessage() . ' Las operaciones siguen guardadas en este equipo: no repitas los cobros y avisá a Administración.'], 422);
         }
         json_response(['ok' => false, 'error' => 'No se pudo guardar la operación en la etapa ' . $syncStage . '.'], 500);
     }
@@ -2043,6 +2122,30 @@ if ($method === 'GET' && $route === 'admin/audit') {
         $events = array_slice($events, 0, 1000);
     }
     json_response(['ok' => true, 'events' => $events]);
+}
+
+// Registro técnico: errores del servidor para que Administración los revise y
+// los reporte. Solo lectura; los mensajes ya llegan sin rutas del servidor.
+if ($method === 'GET' && $route === 'admin/system-errors') {
+    require_user($pdo, ['administracion']);
+    ensure_system_error_log_schema($pdo);
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : date('Y-m-d', strtotime('-6 days'));
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? '')) ? (string) $_GET['to'] : date('Y-m-d');
+    $search = trim((string) ($_GET['q'] ?? ''));
+    $sql = "SELECT e.id, e.created_at, e.source, e.site, e.route, e.message, e.fingerprint, COALESCE(u.full_name, '') AS user_name
+            FROM system_error_log e LEFT JOIN users u ON u.id = e.user_id
+            WHERE e.created_at >= ? AND e.created_at < DATE_ADD(?, INTERVAL 1 DAY)";
+    $params = [$from, $to];
+    if ($search !== '') { $sql .= ' AND (e.source LIKE ? OR e.message LIKE ? OR e.site LIKE ?)'; array_push($params, "%$search%", "%$search%", "%$search%"); }
+    $sql .= ' ORDER BY e.created_at DESC, e.id DESC LIMIT 500';
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
+    $errors = array_map(static fn (array $row): array => [
+        'id' => (int) $row['id'], 'at' => (string) $row['created_at'], 'source' => (string) $row['source'],
+        'site' => (string) ($row['site'] ?? ''), 'route' => (string) ($row['route'] ?? ''), 'userName' => (string) $row['user_name'],
+        'message' => (string) $row['message'], 'fingerprint' => (string) $row['fingerprint'],
+    ], $statement->fetchAll());
+    json_response(['ok' => true, 'from' => $from, 'to' => $to, 'errors' => $errors]);
 }
 
 if ($method === 'GET' && $route === 'admin/cash-history') {
@@ -2337,7 +2440,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
     // Si la edición no trae permisos, se conservan tal cual. NULL significa "los
     // del cargo": convertirlo en [] al bloquear o cambiar de local dejaba al
     // usuario sin ningún permiso (por ejemplo, sin poder cobrar).
@@ -2347,7 +2450,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) {
         json_response(['ok' => false, 'error' => 'Cargo inválido'], 422);
     }
-    if (array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock'], $actionPermissions) && $role !== 'supervisora') {
+    if (array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia'], $actionPermissions) && $role !== 'supervisora') {
         json_response(['ok' => false, 'error' => 'Los permisos especiales de stock solo pueden asignarse a una supervisora.'], 422);
     }
     if (!valid_username($username)) {
@@ -2504,7 +2607,7 @@ if ($method === 'POST' && $route === 'admin/users') {
     if ($fullName === '') $fieldErrors['fullName'] = 'Ingresá nombre y apellido.';
     if (!valid_username($username)) $fieldErrors['username'] = 'Usá nombre.apellido o un correo @lartisantaller.com.';
     if (!in_array($role, ['vendedora', 'supervisora', 'compras', 'administracion'], true)) $fieldErrors['role'] = 'Seleccioná un cargo válido.';
-    if (is_array($actionPermissions) && array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock'], $actionPermissions) && $role !== 'supervisora') $fieldErrors['actionPermissions'] = 'Los permisos especiales de stock solo pueden asignarse a una supervisora.';
+    if (is_array($actionPermissions) && array_intersect(['gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia'], $actionPermissions) && $role !== 'supervisora') $fieldErrors['actionPermissions'] = 'Los permisos especiales de stock solo pueden asignarse a una supervisora.';
     if (!$locations) $fieldErrors['locations'] = 'Seleccioná al menos un local o Todos los locales.';
     if (!valid_password($temporaryPassword)) $fieldErrors['temporaryPassword'] = 'Debe tener 8 o más caracteres, mayúscula, minúscula, número y símbolo.';
     if ($fieldErrors) {

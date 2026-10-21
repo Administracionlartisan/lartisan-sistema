@@ -18,7 +18,7 @@ const steps = [
   ["Tipos (TypeScript)", [npx, ["tsc", "--noEmit"]]],
   ["Lint (sin errores)", [npx, ["eslint", "app", "db", "--max-warnings=1"]]],
   ["Anti-regresión", nodeTest("tests/regression-guards.test.mjs")],
-  ["Seguridad y confiabilidad", nodeTest("tests/security.test.mjs", "tests/reliability-history.test.mjs", "tests/operational-outbox.test.mjs")],
+  ["Seguridad y confiabilidad", nodeTest("tests/security.test.mjs", "tests/reliability-history.test.mjs", "tests/operational-outbox.test.mjs", "tests/system-error-log.test.mjs")],
   ["Usuarios, MRP y estructura", nodeTest("tests/user-management.test.mjs", "tests/mrp.test.mjs", "tests/module-structure.test.mjs", "tests/app-icons.test.mjs", "tests/report-navigation.test.mjs")],
   ["Catálogo", nodeTest("tests/catalog.test.mjs", "tests/catalog-runtime.test.mjs")],
   ["Pedidos y documento", nodeTest("tests/order-document.test.mjs")],
@@ -27,7 +27,7 @@ const steps = [
 if (php) {
   for (const file of ["donweb-api/index.php", "donweb-api/bootstrap.php", "donweb-api/arca_fiscal_queue.php", "donweb-api/arca_wsfe.php", "donweb-api/mrp_sync.php", "donweb-api/pnl_sync.php", "donweb-api/cash_sheet_sync.php", "donweb-api/assistant.php", "donweb-api/backup.php", "donweb-api/monitor.php"])
     steps.push([`Sintaxis PHP ${file.split("/")[1]}`, [php, ["-l", file]]]);
-  for (const file of ["tests/operations-retention.php", "tests/sale-validation.php", "tests/timezone.php"])
+  for (const file of ["tests/operations-retention.php", "tests/sale-validation.php", "tests/timezone.php", "tests/stock-outflow.php", "tests/attendance-presence.php"])
     steps.push([`PHP ${file.split("/")[1]}`, [php, [file]]]);
 }
 
