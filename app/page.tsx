@@ -31,6 +31,8 @@ import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
 import StockOutflows from "./modules/stock/StockOutflows";
 import StockOutflowAlerts from "./modules/stock/StockOutflowAlerts";
 import PromotionReport from "./modules/reports/PromotionReport";
+import PromotionManager from "./modules/promotions/PromotionManager";
+import { promotionDiscount } from "./modules/promotions/calculate";
 import { AttendanceReport, PersonnelManager, ScheduleManager } from "./modules/asistencia/ScheduleManager";
 import PersonnelFilesPanel from "./modules/administracion/PersonnelFilesPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
@@ -97,6 +99,7 @@ const blankLocation = (): LocationConfig => ({
   contactName: "", contactPhone: "", active: true, latitude: null, longitude: null, radiusMeters: 100, maxAccuracyMeters: 75,
 });
 export default function Home() {
+  const [activePromotions, setActivePromotions] = useState<Array<{ id: string; name: string; percentage: number; startsOn: string; endsOn: string; productIds: number[] | null; site: string }>>([]);
   // En producción el portal se determina por el subdominio. El parámetro
   // ?portal=admin o ?portal=ventas permite revisar ambos accesos localmente.
   const portal = (() => {
@@ -245,6 +248,17 @@ export default function Home() {
     [drive, setDrive] = useState("");
   const activeSites = useMemo(() => locations.filter((location) => location.active).map((location) => location.site), [locations]);
   const configuredSites = activeSites.length ? activeSites : SITES;
+  useEffect(() => {
+    if (!user || !site) return;
+    let alive = true;
+    const load = () => fetch(`${API_BASE}/promotions?site=${encodeURIComponent(site)}`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => { if (!response.ok) throw new Error("No se pudieron actualizar promociones"); return response.json() as Promise<{ promotions?: typeof activePromotions }>; })
+      .then((data: { promotions?: typeof activePromotions }) => { if (alive) setActivePromotions((data.promotions ?? []).map((item) => ({ ...item, site }))); })
+      .catch(() => { if (alive) setActivePromotions([]); });
+    void load();
+    const timer = window.setInterval(load, 60000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [user, site]);
   // La fecha simulada nunca se toma de un campo libre ni del reloj del equipo.
   // Sólo se activa si la API la habilitó para Maure y conserva la hora real.
   const operationalNow = useCallback(() => {
@@ -1783,7 +1797,10 @@ export default function Home() {
       0,
     );
   const discountableTotal = Math.max(0, total - invitationTotal);
-  const requestedDiscountAmount = discountMode === "amount"
+  const selectedCampaign = isPromotion ? activePromotions.find((item) => item.site === site && `campaign:${item.id}` === promotion) : undefined;
+  const requestedDiscountAmount = selectedCampaign
+    ? promotionDiscount(cart, invitedQuantities, selectedCampaign.productIds, selectedCampaign.percentage)
+    : discountMode === "amount"
     ? Math.round(Math.max(0, fixedDiscount))
     : Math.round((discountableTotal * Math.max(0, discount)) / 100);
   // Un descuento fijo nunca puede superar lo que queda por cobrar. El límite
@@ -2102,7 +2119,8 @@ export default function Home() {
   const canManageSchedules =
     user?.role === "administracion" || (user?.role === "supervisora" && user.reportPermissions.includes("Personal"));
   const canViewSupervisorReports =
-    user?.role === "supervisora" && user.reportPermissions.length > 0;
+    (user?.role === "supervisora" && user.reportPermissions.length > 0) ||
+    (user?.role === "supervisora" && user.actionPermissions.includes("gestionarPromociones"));
   const managesCentralOrders =
     can("pedidos") &&
     site === "Villa Mitre" &&
@@ -2527,6 +2545,7 @@ export default function Home() {
         const end = Math.min(start + hourInterval, 24);
         const matching = sales.filter((sale) => {
           const date = new Date(sale.createdAtISO);
+          if (Number.isNaN(date.getTime())) return false;
           const saleDate = date.toISOString().slice(0, 10);
           return (
             sale.status === "activa" &&
@@ -3735,6 +3754,12 @@ export default function Home() {
     if (!cart.length) return setMessage("Agregá productos a la venta.");
     if (isPromotion && !promotion)
       return setMessage("Seleccioná el tipo de promoción antes de cobrar.");
+    if (isPromotion && promotion.startsWith("campaign:") && !selectedCampaign)
+      return setMessage("La promoción ya no está disponible. Actualizá la selección antes de cobrar.");
+    if (selectedCampaign && (dateKey(operationalNow()) < selectedCampaign.startsOn || dateKey(operationalNow()) > selectedCampaign.endsOn))
+      return setMessage("La promoción está fuera de vigencia.");
+    if (selectedCampaign && discountAmount === 0)
+      return setMessage("No hay productos incluidos en esta promoción para cobrar.");
     const selectedPromotion = SALE_PROMOTIONS.find((item) => item.name === promotion);
     if (selectedPromotion?.method && (splitPayment || payment !== selectedPromotion.method))
       return setMessage(`La promoción ${selectedPromotion.name} requiere cobrar con ${selectedPromotion.method}.`);
@@ -3782,7 +3807,8 @@ export default function Home() {
       items: [...cart],
       gross: total,
       discount: total - net,
-      promotion: isPromotion ? promotion : undefined,
+      promotion: isPromotion ? (selectedCampaign?.name ?? promotion) : undefined,
+      promotionId: selectedCampaign?.id,
       net,
       method: splitPayment ? "Múltiple" : payment,
       invoiceType,
@@ -4938,6 +4964,15 @@ export default function Home() {
                 El perfil autorizado puede consultar los locales asignados. Estos reportes son de seguimiento; los permisos de Administración permanecen separados.
               </p>
               {(user.reportPermissions.includes("Resumen") || user.reportPermissions.includes("Promociones")) && <PromotionReport />}
+              {user.role === "supervisora" && user.actionPermissions.includes("gestionarPromociones") && <PromotionManager
+                sites={user.accessAllLocations ? configuredSites : (user.locations ?? []).filter((local) => configuredSites.includes(local))}
+                products={products}
+                save={async (draft) => {
+                  const response = await fetch(`${API_BASE}/promotions`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+                  const result = await response.json() as { ok?: boolean; error?: string };
+                  if (!response.ok || !result.ok) throw new Error(result.error || "No se pudo guardar la promoción.");
+                }}
+              />}
             </>
           ) : tab === "Tareas" ? (
             <>
@@ -5240,6 +5275,7 @@ export default function Home() {
                           className="mt-1 w-full rounded border bg-white p-2 font-normal"
                         >
                           <option value="">Seleccionar promoción…</option>
+                          {activePromotions.filter((item) => item.site === site).map((item) => <option key={item.id} value={`campaign:${item.id}`}>{item.name} · {item.percentage}%</option>)}
                           {SALE_PROMOTIONS.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
                         </select>
                       </label>
@@ -5248,11 +5284,13 @@ export default function Home() {
                       <p className="mt-2 text-xs text-slate-600">
                         {SALE_PROMOTIONS.find((item) => item.name === promotion)?.discount !== undefined
                           ? "El descuento y el medio de pago se aplicaron según la promoción."
-                          : "La promoción queda identificada en la venta. Cargá el descuento solo si corresponde."}
+                          : selectedCampaign
+                            ? "El descuento de la promoción se calcula automáticamente sobre los productos incluidos."
+                            : "La promoción queda identificada en la venta. Cargá el descuento solo si corresponde."}
                       </p>
                     )}
                   </div>
-                  <fieldset className="mt-3">
+                  <fieldset className="mt-3" disabled={Boolean(selectedCampaign)}>
                     <legend className="text-sm font-bold">Descuento</legend>
                     <div className="mt-1 flex gap-4 text-sm font-bold">
                       <label className="flex items-center gap-2"><input type="radio" name="discount-mode" checked={discountMode === "percentage"} onChange={() => setDiscountMode("percentage")} /> Porcentaje</label>
@@ -8347,7 +8385,7 @@ export default function Home() {
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {ACTION_PERMISSIONS.filter((permission) =>
-                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock", "aprobarEgresoMercaderia"].includes(permission.id) || profile.role === "supervisora",
+                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock", "aprobarEgresoMercaderia", "gestionarPromociones"].includes(permission.id) || profile.role === "supervisora",
                         ).map((permission) => (
                           <label
                             key={permission.id}

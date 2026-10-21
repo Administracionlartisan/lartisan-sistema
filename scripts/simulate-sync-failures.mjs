@@ -25,6 +25,8 @@ const upstreams = (process.env.LARTISAN_SIM_UPSTREAMS ?? "http://127.0.0.1:8080"
 for (const upstream of upstreams) if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(upstream)) throw new Error(`Refusing non-local API: ${upstream}`);
 let nextUpstream = 0;
 const mariadb = process.env.LARTISAN_MARIADB ?? "C:/lartisan-dev/mariadb/bin/mariadb.exe";
+const databasePort = process.env.LARTISAN_SIM_DB_PORT ?? "3313";
+if (!/^\d{1,5}$/.test(databasePort)) throw new Error("Puerto de base local inválido");
 const proxyPort = 8090;
 const base = `http://127.0.0.1:${proxyPort}/sistema-api`;
 const origin = "http://localhost:3210";
@@ -39,7 +41,7 @@ const results = [];
 
 // ---------- base de datos local (solo lectura para verificar) ----------
 function sql(query) {
-  const out = spawnSync(mariadb, ["-h127.0.0.1", "-P3313", "-ulartisan_dev", "-pdev-local-only", "lartisan_dev", "-N", "-B", "-e", query], { encoding: "utf8" });
+  const out = spawnSync(mariadb, ["-h127.0.0.1", `-P${databasePort}`, "-ulartisan_dev", "-pdev-local-only", "lartisan_dev", "-N", "-B", "-e", query], { encoding: "utf8" });
   if (out.status !== 0) throw new Error(`SQL: ${out.stderr}`);
   return out.stdout.trim();
 }

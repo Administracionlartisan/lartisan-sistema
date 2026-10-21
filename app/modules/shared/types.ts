@@ -46,6 +46,7 @@ export type Sale = {
   discount: number;
   /** Nombre de la promoción seleccionado al cobrar, si corresponde. */
   promotion?: string;
+  promotionId?: string;
   net: number;
   method: string;
   invoiceType: "Factura B" | "Factura B electrónica" | "Factura B fiscal" | "Factura A" | "Remito interno" | "Ticket";

@@ -13,6 +13,8 @@ require __DIR__ . '/internal_chat.php';
 require __DIR__ . '/training.php';
 require __DIR__ . '/attendance_presence.php';
 require __DIR__ . '/stock_outflow.php';
+require __DIR__ . '/promotions.php';
+require __DIR__ . '/promotion_calculation.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -53,6 +55,7 @@ foreach ([
     'internal_chat' => static fn () => ensure_internal_chat_schema($pdo),
     'training' => static fn () => ensure_training_schema($pdo),
     'attendance_presence' => static fn () => ensure_attendance_presence_schema($pdo),
+    'promotions' => static fn () => ensure_promotions_schema($pdo),
 ] as $schema => $ensure) {
     try {
         $ensure();
@@ -572,6 +575,40 @@ if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
     if ($sessionUser && !empty($sessionUser['must_change_password'])) {
         json_response(['ok' => false, 'error' => 'Primero debés cambiar la contraseña temporal.'], 403);
     }
+}
+
+if ($route === 'promotions' && in_array($method, ['GET', 'POST'], true)) {
+    $promotionUser = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    ensure_promotions_schema($pdo);
+    if ($method === 'POST') {
+        if (($promotionUser['role'] ?? '') !== 'administracion' && (($promotionUser['role'] ?? '') !== 'supervisora' || !user_can_action($promotionUser, 'gestionarPromociones'))) {
+            json_response(['ok' => false, 'error' => 'No tenés permiso para gestionar promociones.'], 403);
+        }
+        try { $draft = validate_promotion_draft(request_body()); }
+        catch (InvalidArgumentException $e) { json_response(['ok' => false, 'error' => $e->getMessage()], 422); }
+        foreach ($draft['sites'] as $promotionSite) {
+            if (!user_can_access_site($promotionUser, $promotionSite)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+        }
+        if ($draft['productIds'] !== null) {
+            $prices = catalog_price_lists($pdo);
+            foreach ($draft['productIds'] as $id) if (!isset($prices[$id])) json_response(['ok' => false, 'error' => 'Hay productos fuera del catálogo.'], 422);
+        }
+        $id = sprintf('%s-%s-4%s-%s%s-%s', bin2hex(random_bytes(4)), bin2hex(random_bytes(2)), substr(bin2hex(random_bytes(2)), 1), dechex(random_int(8, 11)), substr(bin2hex(random_bytes(2)), 1), bin2hex(random_bytes(6)));
+        $stmt = $pdo->prepare('INSERT INTO lartisan_promotions (id, name, percentage, starts_on, ends_on, sites_json, product_ids_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([$id, $draft['name'], $draft['percentage'], $draft['startsOn'], $draft['endsOn'], json_encode($draft['sites'], JSON_UNESCAPED_UNICODE), $draft['productIds'] === null ? null : json_encode($draft['productIds']), (int) $promotionUser['id'], date('Y-m-d H:i:s')]);
+        audit($pdo, (int) $promotionUser['id'], 'promotion_created', $id);
+        json_response(['ok' => true, 'id' => $id]);
+    }
+    $site = trim((string) ($_GET['site'] ?? ''));
+    if ($site === '' || !user_can_access_site($promotionUser, $site)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+    $rows = $pdo->query('SELECT id, name, percentage, starts_on, ends_on, sites_json, product_ids_json, disabled_at FROM lartisan_promotions ORDER BY created_at DESC')->fetchAll();
+    $result = [];
+    foreach ($rows as $row) {
+        $sites = json_decode((string) $row['sites_json'], true);
+        if (!is_array($sites) || !in_array($site, $sites, true) || $row['disabled_at'] !== null || date('Y-m-d') < $row['starts_on'] || date('Y-m-d') > $row['ends_on']) continue;
+        $result[] = ['id' => $row['id'], 'name' => $row['name'], 'percentage' => (float) $row['percentage'], 'startsOn' => $row['starts_on'], 'endsOn' => $row['ends_on'], 'productIds' => $row['product_ids_json'] === null ? null : json_decode((string) $row['product_ids_json'], true)];
+    }
+    json_response(['ok' => true, 'promotions' => $result]);
 }
 
 if ($method === 'GET' && $route === 'admin/arca/status') {
@@ -1999,6 +2036,13 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $invoiceFindings = [];
         }
         $untrimmedState = $state;
+        // No confirmar una campaña alterada: la transacción se revierte y el
+        // equipo conserva la operación para conciliación, sin repetir el cobro.
+        $syncStage = 'validar_promocion';
+        $promotionFindings = promotion_sale_findings($pdo, $previousState, $untrimmedState, $site);
+        if ($promotionFindings) {
+            throw new OperationalSyncRejected('No se pudo validar la promoción de la venta.');
+        }
         $syncStage = 'recortar';
         [$state] = compact_operational_state($untrimmedState, $config);
         $syncStage = 'archivar_recorte';
