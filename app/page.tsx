@@ -5556,6 +5556,30 @@ export default function Home() {
                               Ticket
                             </button>
                             </div>
+                            {paymentCorrectionSaleId === sale.id && (() => {
+                              const salePayments = payments.filter((item) => item.saleId === sale.id);
+                              const currentDescription = salePayments.map((item) => `${item.method} ${money.format(item.amount)}`).join(" + ") || sale.method;
+                              return (
+                                <div className="mt-3 rounded border-2 border-[#183a67] bg-[#f7fafc] p-3 text-xs">
+                                  <p className="font-bold">Corregir medio de pago · #{sale.id.slice(0, 8)}</p>
+                                  <p className="mt-1">Total {money.format(sale.net)} · registrado: {currentDescription}</p>
+                                  {salePayments.length > 1 && <p className="mt-1 rounded bg-amber-50 p-2 text-amber-900">Esta venta tuvo pago dividido. Esta corrección reunirá el total en un solo medio; verificá el comprobante antes de confirmar.</p>}
+                                  <label className="mt-2 block font-bold">Medio realmente cobrado
+                                    <select value={paymentCorrectionMethod} onChange={(event) => setPaymentCorrectionMethod(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal">
+                                      {methods.map((method) => <option key={method}>{method}</option>)}
+                                    </select>
+                                  </label>
+                                  <label className="mt-2 block font-bold">Motivo de la corrección
+                                    <input value={paymentCorrectionReason} onChange={(event) => setPaymentCorrectionReason(event.target.value)} placeholder="Ej.: se cobró con tarjeta y se registró efectivo" className="mt-1 w-full rounded border p-2 font-normal" />
+                                  </label>
+                                  <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, el movimiento queda vinculado al turno original. Si ese turno ya cerró, el cierre histórico no se reabre ni se altera.</p>
+                                  <div className="mt-3 flex gap-2">
+                                    <button onClick={() => changeSalePayment(sale, paymentCorrectionMethod)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
+                                    <button onClick={() => setPaymentCorrectionSaleId(null)} className="rounded border px-3 py-2 font-bold">Cancelar</button>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ))
                     ) : (
@@ -5563,33 +5587,6 @@ export default function Home() {
                         No hay ventas de este local que coincidan con la búsqueda.
                       </p>
                     )}
-                    {paymentCorrectionSaleId && (() => {
-                      const sale = sales.find((item) => item.id === paymentCorrectionSaleId);
-                      if (!sale) return null;
-                      const salePayments = payments.filter((item) => item.saleId === sale.id);
-                      const currentDescription = salePayments.map((item) => `${item.method} ${money.format(item.amount)}`).join(" + ") || sale.method;
-                      const isSplit = salePayments.length > 1;
-                      return (
-                        <div className="mt-3 rounded border-2 border-[#183a67] bg-[#f7fafc] p-3 text-xs">
-                          <p className="font-bold">Corregir medio de pago · #{sale.id.slice(0, 8)}</p>
-                          <p className="mt-1">Total {money.format(sale.net)} · registrado: {currentDescription}</p>
-                          {isSplit && <p className="mt-1 rounded bg-amber-50 p-2 text-amber-900">Esta venta tuvo pago dividido. Esta corrección reunirá el total en un solo medio; verificá el comprobante antes de confirmar.</p>}
-                          <label className="mt-2 block font-bold">Medio realmente cobrado
-                            <select value={paymentCorrectionMethod} onChange={(event) => setPaymentCorrectionMethod(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal">
-                              {methods.map((method) => <option key={method}>{method}</option>)}
-                            </select>
-                          </label>
-                          <label className="mt-2 block font-bold">Motivo de la corrección
-                            <input value={paymentCorrectionReason} onChange={(event) => setPaymentCorrectionReason(event.target.value)} placeholder="Ej.: se cobró con tarjeta y se registró efectivo" className="mt-1 w-full rounded border p-2 font-normal" />
-                          </label>
-                          <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, el movimiento queda vinculado al turno original. Si ese turno ya cerró, el cierre histórico no se reabre ni se altera.</p>
-                          <div className="mt-3 flex gap-2">
-                            <button onClick={() => changeSalePayment(sale, paymentCorrectionMethod)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
-                            <button onClick={() => setPaymentCorrectionSaleId(null)} className="rounded border px-3 py-2 font-bold">Cancelar</button>
-                          </div>
-                        </div>
-                      );
-                    })()}
                   </div>
                 </aside>
               </div>
