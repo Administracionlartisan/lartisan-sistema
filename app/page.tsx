@@ -299,6 +299,8 @@ export default function Home() {
   // Desde «Cambiar usuario» no se encola nada más: lo que entrara después de
   // vaciar la cola quedaría atrapado con la sesión ya cerrada.
   const loggingOutRef = useRef(false);
+  // Local cuyo envío falló por última vez: es el único que puede limpiar el aviso.
+  const syncFailureSite = useRef<string | null>(null);
   const pendingReceiptRef = useRef<Sale | null>(null);
   const syncingAdjustmentIds = useRef(new Set<string>());
   // Evita aplicar dos veces una carga propia ya existente al recuperar una
@@ -1531,6 +1533,12 @@ export default function Home() {
       while (navigator.onLine) {
         const queue = outbox.get(local);
         const write = queue.writes[0];
+        if (write && queue.blocked) {
+          // El rechazo se guarda con la cola: tras recargar o volver a
+          // ingresar solo quedaba el contador de pendientes, sin el motivo.
+          syncFailureSite.current = local;
+          setSyncFailure(`La API rechazó una operación de ${local}: ${queue.blocked}`);
+        }
         if (!write || queue.blocked) break;
         await outbox.markSent(local, write.requestId);
         // Si parte exactamente de lo que el servidor acaba de confirmar sin
@@ -1541,11 +1549,13 @@ export default function Home() {
         const result = await sendPendingWrite(exactBase ? { ...write, baseRevision: serverRevision.current[local] ?? write.baseRevision } : write);
         lastResult = result.kind;
         if (result.kind === "retry") {
+          syncFailureSite.current = local;
           setSyncFailure(`Pendiente de sincronización en ${local}: ${result.message || "sin respuesta de la API"}`);
           setMessage(`La operación quedó pendiente en este equipo. ${result.message || "Se reintentará sola."} No repitas el cobro.`);
           break;
         }
         if (result.kind === "session") {
+          syncFailureSite.current = local;
           setSyncFailure(`Sesión vencida al guardar una operación de ${local}.`);
           setMessage("Tu sesión venció. Volvé a ingresar: las operaciones pendientes siguen guardadas en este equipo y se enviarán.");
           break;
@@ -1555,13 +1565,20 @@ export default function Home() {
           if (write.event.action === "Límites operativos actualizados") {
             setLimitsSaveStatus(`No se guardaron los cambios: ${result.message}`);
           }
+          syncFailureSite.current = local;
           setSyncFailure(`La API rechazó una operación de ${local}: ${result.message}`);
           setMessage(`No se pudo guardar en ${local}: ${result.message} Las operaciones siguen guardadas en este equipo; avisá a Administración antes de cerrar la sesión.`);
           break;
         }
         await outbox.acknowledge(local, write.requestId);
         if (typeof result.revision === "number") serverRevision.current[local] = result.revision;
-        setSyncFailure("");
+        // Solo el local que falló puede limpiar su aviso: si otro local
+        // confirmaba después, el rechazo de Maure desaparecía de la pantalla y
+        // la cola seguía trabada sin que nadie viera el motivo.
+        if (syncFailureSite.current === local) {
+          syncFailureSite.current = null;
+          setSyncFailure("");
+        }
         lastPersistedSnapshot.current[local] = JSON.stringify(write.state);
         lastAcknowledged.current[local] = { stateJson: lastPersistedSnapshot.current[local], merged: Boolean(result.merged) };
         if (result.merged) reloadAfterDrain.current = true;

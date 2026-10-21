@@ -126,6 +126,11 @@ test("Relevos: Cambiar usuario envía la cola antes de cerrar la sesión", () =>
   // Desde que se toca «Cambiar usuario» no se encola nada que quedaría sin sesión.
   assert.match(page, /const logout = async \(\) => \{[\s\S]*?loggingOutRef\.current = true;[\s\S]*?await flushPendingWrites\(\)/);
   assert.match(page, /operationalVersion === 0 \|\| loggingOutRef\.current\) return;/);
+  // El motivo de una cola trabada no se pierde: otro local no lo borra y
+  // una cola rechazada lo vuelve a mostrar tras recargar.
+  assert.match(page, /if \(syncFailureSite\.current === local\) \{\s*syncFailureSite\.current = null;\s*setSyncFailure\(""\);/);
+  assert.doesNotMatch(page, /result\.revision;\s*setSyncFailure\(""\);/);
+  assert.match(page, /if \(write && queue\.blocked\) \{[\s\S]*?setSyncFailure\(`La API rechazó una operación de \$\{local\}: \$\{queue\.blocked\}`\);/);
   // Quien entra después no hereda la última acción ni el ticket de la sesión anterior.
   assert.match(page, /const logout = async \(\) => \{[\s\S]*?auth\/logout[\s\S]*?setOperationalVersion\(0\);[\s\S]*?setReceiptSale\(null\);[\s\S]*?setUser\(null\);/);
 });
