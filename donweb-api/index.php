@@ -74,9 +74,7 @@ if ($route === 'stock/receipts') {
     ensure_stock_receipt_review_schema($pdo);
     if ($method === 'GET') {
         $offset = min(1000000, max(0, (int) ($_GET['offset'] ?? 0)));
-        $query = $pdo->prepare("SELECT m.id, m.site, m.product_id, m.movement_type, m.quantity, m.remito, m.detail, m.occurred_at, m.created_by, r.status AS review_status, r.observation, r.reviewer_name, r.reviewed_at FROM lartisan_stock_movements m LEFT JOIN stock_receipt_review_events r ON r.id = (SELECT MAX(e.id) FROM stock_receipt_review_events e WHERE e.movement_id = m.id AND e.site = m.site) WHERE m.site = ? AND m.movement_type IN ('Ingreso por remito', 'Ingreso manual', 'Recepción de pedido') ORDER BY m.occurred_at DESC, m.id DESC LIMIT 101 OFFSET " . $offset);
-        $query->execute([$receiptSite]);
-        json_response(['ok' => true, 'movements' => $query->fetchAll()]);
+        json_response(['ok' => true, 'movements' => list_stock_receipt_movements($pdo, $receiptSite, $offset)]);
     }
     if ($method === 'POST') {
         if (!in_array($receiptUser['role'], ['supervisora', 'administracion'], true)) json_response(['ok' => false, 'error' => 'Solo supervisión puede revisar ingresos.'], 403);
