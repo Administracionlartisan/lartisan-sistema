@@ -148,10 +148,10 @@ export default function AiHelpChat({
   };
 
   return (
-    <div className="no-print fixed bottom-5 right-5 z-50">
+    <div className="no-print relative order-3">
       {open && (
         <section role="dialog" aria-modal="false" aria-label="Guía de ayuda de L’ARTISAN"
-          className="absolute bottom-16 right-0 flex h-[min(680px,calc(100vh-6rem))] w-[min(440px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-[#183a67]/25 bg-[#fffdf8] shadow-2xl">
+          className="fixed bottom-20 right-3 z-50 flex sm:right-5 h-[min(680px,calc(100vh-6rem))] w-[min(440px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-[#183a67]/25 bg-[#fffdf8] shadow-2xl">
           <header className="flex items-center justify-between bg-[#183a67] px-4 py-3 text-white">
             <div><b>Ayuda L’ARTISAN</b><p className="text-xs text-white/75">Guía gratuita · {roleNames[role]} · solo consulta</p></div>
             <button onClick={() => setOpen(false)} aria-label="Cerrar ayuda" className="rounded px-3 py-2 text-xl leading-none hover:bg-white/10">×</button>
@@ -239,7 +239,7 @@ export default function AiHelpChat({
       )}
       <button onClick={() => setOpen((value) => !value)} aria-expanded={open}
         aria-label={open ? "Cerrar ayuda" : "Abrir ayuda"}
-        className="rounded-full bg-[#ec3a35] px-5 py-3 text-sm font-bold text-white shadow-lg">
+        className="rounded-full bg-[#ec3a35] px-4 py-2.5 text-sm font-bold text-white shadow-lg">
         {open ? "Cerrar" : "✦ Ayuda"}
       </button>
     </div>

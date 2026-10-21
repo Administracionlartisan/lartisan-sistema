@@ -9982,6 +9982,11 @@ export default function Home() {
           </div>
         </div>
       )}
+      {/* Arriba, Chat y Ayuda en una sola barra centrada: en la esquina
+          derecha tapaban «Cobrar venta» y el resto del panel de cobro. Sin
+          transform en la barra: los paneles abiertos son fixed y un
+          transform los ubicaría relativos a ella. */}
+      <div className="floating-dock no-print fixed inset-x-0 bottom-4 z-50 mx-auto flex w-fit items-center gap-2">
       <AiHelpChat
         key={`${user.role}:${user.name}:${site}`}
         role={user.role}
@@ -10039,16 +10044,17 @@ export default function Home() {
         onSupportCreated={user.role === "administracion" ? () => void loadAdminSecurityData() : undefined}
       />
       {user.role !== "compras" && (
-        <div className="no-print fixed bottom-5 right-40 z-50 max-sm:bottom-20 max-sm:right-5">
+        <div className="relative order-2">
           {chatOpen && (
-            <section role="dialog" aria-modal="false" aria-label="Chat interno de L’ARTISAN" className="absolute bottom-16 right-0 h-[min(680px,calc(100vh-7rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[#183a67]/20 bg-white shadow-2xl max-sm:fixed max-sm:bottom-32 max-sm:left-3 max-sm:right-3 max-sm:h-[min(640px,calc(100vh-9rem))] max-sm:w-auto">
+            <section role="dialog" aria-modal="false" aria-label="Chat interno de L’ARTISAN" className="fixed bottom-20 right-5 z-50 h-[min(680px,calc(100vh-7rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[#183a67]/20 bg-white shadow-2xl max-sm:left-3 max-sm:right-3 max-sm:h-[min(640px,calc(100vh-7rem))] max-sm:w-auto">
               <InternalChatPanel userId={user.id} floating onClose={() => setChatOpen(false)} />
             </section>
           )}
           <ChatUnreadIndicator open={chatOpen} onOpen={() => setChatOpen((value) => !value)} />
         </div>
       )}
-      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-72 z-50 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
+      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="floating-top order-1 rounded-full bg-[#183a67] px-4 py-2.5 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
+      </div>
     </main>
   );
 }
