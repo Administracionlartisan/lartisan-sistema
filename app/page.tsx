@@ -127,6 +127,7 @@ export default function Home() {
     [recoverySending, setRecoverySending] = useState(false),
     [site, setSite] = useState("Recoleta"),
     [tab, setTab] = useState("Ventas"),
+    [supervisionView, setSupervisionView] = useState(false),
     [navOpen, setNavOpen] = useState(false),
     [chatOpen, setChatOpen] = useState(false),
     [trainingWelcomeOpen, setTrainingWelcomeOpen] = useState(false),
@@ -573,8 +574,9 @@ export default function Home() {
       ? rememberedSite
       : allowedSites[0] || next.location || "Recoleta";
     setSite(initialSite);
+    setSupervisionView(next.role === "supervisora");
     setPayment((METHODS[initialSite] || METHODS.Recoleta || ["Efectivo"])[0]);
-    setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : next.role === "personal" ? "Fichaje" : "Ventas");
+    setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : next.role === "personal" ? "Fichaje" : next.role === "supervisora" ? (next.reportPermissions.length > 0 ? "Reportes" : "Tareas") : "Ventas");
     setMessage("");
     return true;
   };
@@ -4719,7 +4721,7 @@ export default function Home() {
           ...(can("mrp") ? ["MRP"] : []),
           ...(can("comprasProduccion") ? ["Compras de producción"] : []),
         ];
-  const tabs = [
+  const allTabs = [
     ...baseTabs,
     ...(managesCentralOrders ? ["Central de pedidos"] : []),
     ...(canManageSchedules ? ["Horarios"] : []),
@@ -4727,6 +4729,9 @@ export default function Home() {
     ...(canManageSchedules ? ["Asistencia"] : []),
     ...(canViewSupervisorReports ? ["Reportes"] : []),
   ];
+  const tabs = user.role === "supervisora" && supervisionView
+    ? allTabs.filter((item) => ["Tareas", "Horarios", "Personal", "Asistencia", "Reportes"].includes(item))
+    : allTabs;
   const adminTaskAlertCount = user.role === "administracion"
     ? aiSupportRequests.filter((request) => request.status === "pendiente").length +
       resetRequests.filter((request) => request.status === "Pendiente").length
@@ -4739,7 +4744,7 @@ export default function Home() {
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
-      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { setSite(local); setTab("Stock"); }} />}
+      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { setSupervisionView(false); setSite(local); setTab("Stock"); }} />}
       {attendanceReminder && user.role !== "administracion" && user.role !== "compras" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="attendance-reminder-title">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -4793,13 +4798,21 @@ export default function Home() {
                 </p>
               ) : (
                 <select
-                  value={site}
+                  value={user.role === "supervisora" && supervisionView ? "__supervision__" : site}
                   onChange={(e) => {
+                    if (user.role === "supervisora" && e.target.value === "__supervision__") {
+                      setSupervisionView(true);
+                      setTab(canViewSupervisorReports ? "Reportes" : "Tareas");
+                      return;
+                    }
+                    setSupervisionView(false);
                     setSite(e.target.value);
                     setPayment((METHODS[e.target.value] || METHODS.Recoleta || ["Efectivo"])[0]);
+                    if (user.role === "supervisora") setTab("Stock");
                   }}
                   className="mt-2 w-full rounded border p-2"
                 >
+                  {user.role === "supervisora" && <option value="__supervision__">Supervisión</option>}
                   {(user.accessAllLocations ? configuredSites : user.locations?.length ? user.locations : configuredSites).map((s) => (
                     <option key={s}>{s}</option>
                   ))}
