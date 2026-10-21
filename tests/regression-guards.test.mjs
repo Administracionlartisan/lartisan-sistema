@@ -123,6 +123,20 @@ test("Acceso: el relevo puede volver al inicio con el botón Cambiar usuario", (
   assert.match(page, /auth\/logout/);
 });
 
+test("Relevos: Cambiar usuario envía la cola antes de cerrar la sesión", () => {
+  // La venta en viaje llegaba sin sesión (401) y quedaba en la cola de la
+  // vendedora saliente: con otro usuario conectado nunca se enviaba.
+  assert.match(page, /const logout = async \(\) => \{[\s\S]*?await flushPendingWrites\(\)[\s\S]*?auth\/logout/);
+  assert.match(page, /const closeForInactivity = async \(\) => \{[\s\S]*?await flushPendingWrites\(\)[\s\S]*?auth\/logout/);
+  // Pedir drenar un local ocupado espera ese envío en vez de volver al instante.
+  assert.match(page, /const running = drainingSites\.current\.get\(local\);\s*if \(running\) return running;/);
+  // Desde que se toca «Cambiar usuario» no se encola nada que quedaría sin sesión.
+  assert.match(page, /const logout = async \(\) => \{[\s\S]*?loggingOutRef\.current = true;[\s\S]*?await flushPendingWrites\(\)/);
+  assert.match(page, /operationalVersion === 0 \|\| loggingOutRef\.current\) return;/);
+  // Quien entra después no hereda la última acción ni el ticket de la sesión anterior.
+  assert.match(page, /const logout = async \(\) => \{[\s\S]*?auth\/logout[\s\S]*?setOperationalVersion\(0\);[\s\S]*?setReceiptSale\(null\);[\s\S]*?setUser\(null\);/);
+});
+
 test("Límites: cada local recibe los suyos y la interfaz los combina", () => {
   assert.match(bootstrap, /\$ownLimits/, "operational_snapshot_for_user debe conservar los límites del propio local");
   assert.match(page, /setLimitsBySite\(\(current\) => \(\{ \.\.\.current, \.\.\.receivedLimits \}\)\)/);

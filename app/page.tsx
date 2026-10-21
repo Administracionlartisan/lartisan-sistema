@@ -290,12 +290,16 @@ export default function Home() {
   const serverRevision = useRef<Record<string, number>>({});
   const outboxRef = useRef<{ userId: string; ready: Promise<OperationalOutbox> } | null>(null);
   const checkingCashOpeningRef = useRef(false);
-  const drainingSites = useRef(new Set<string>());
+  // Envío en curso por local: quien pide drenar un local ocupado espera ese mismo envío.
+  const drainingSites = useRef(new Map<string, Promise<void>>());
   // Último estado confirmado por local en esta sesión y si el servidor tuvo que combinarlo.
   const lastAcknowledged = useRef<Record<string, { stateJson: string; merged: boolean }>>({});
   // Locales que Central ve solo para gestionar pedidos y ajustes (no los opera).
   const centralOnlySites = useRef(new Set<string>());
   const reloadAfterDrain = useRef(false);
+  // Desde «Cambiar usuario» no se encola nada más: lo que entrara después de
+  // vaciar la cola quedaría atrapado con la sesión ya cerrada.
+  const loggingOutRef = useRef(false);
   const pendingReceiptRef = useRef<Sale | null>(null);
   const syncingAdjustmentIds = useRef(new Set<string>());
   // Evita aplicar dos veces una carga propia ya existente al recuperar una
@@ -585,6 +589,7 @@ export default function Home() {
       return false;
     }
     setOperationalReady(false);
+    loggingOutRef.current = false;
     setUser(next);
     const rememberedSite = window.localStorage.getItem(`lartisan:last-site:${next.id}`);
     const allowedSites = next.accessAllLocations ? configuredSites : next.locations || [];
@@ -1517,8 +1522,11 @@ export default function Home() {
    */
   const drainSite = async (local: string) => {
     const outbox = await getOutbox();
-    if (!outbox || drainingSites.current.has(local)) return;
-    drainingSites.current.add(local);
+    if (!outbox) return;
+    const running = drainingSites.current.get(local);
+    if (running) return running;
+    let finishDrain = () => {};
+    drainingSites.current.set(local, new Promise<void>((resolve) => { finishDrain = resolve; }));
     let lastResult: SendResult["kind"] | null = null;
     try {
       while (navigator.onLine) {
@@ -1572,6 +1580,7 @@ export default function Home() {
       }
     } finally {
       drainingSites.current.delete(local);
+      finishDrain();
       setPendingSync(outbox.count());
       // Una operación encolada mientras terminaba este envío no debe esperar al
       // próximo reintento automático.
@@ -1615,7 +1624,7 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, site, testOperatingDate.active, testOperatingDate.site, testOperatingDate.businessDate]);
   useEffect(() => {
-    if (!user || !operationalReady || operationalVersion === 0) return;
+    if (!user || !operationalReady || operationalVersion === 0 || loggingOutRef.current) return;
     const event = operationalEventRef.current || {
       action: "Actualización operativa",
       detail: "Cambios registrados en el sistema.",
@@ -2590,10 +2599,34 @@ export default function Home() {
     cashRemaining = cashControlIsOpen ? counted - (requiresEnvelope ? envelope : 0) : 0,
     cashVariance = cashControlIsOpen ? counted - expected : 0;
   const logout = async () => {
+    // La cola es de quien registró las operaciones: después de cerrar su
+    // sesión nadie más puede enviarlas desde este equipo. En un relevo, la
+    // última venta solía seguir en viaje al tocar «Cambiar usuario»; llegaba
+    // al servidor ya sin sesión (401) y quedaba atrapada en la cola de la
+    // vendedora saliente. Se confirma todo antes de salir.
+    loggingOutRef.current = true;
+    const outbox = await getOutbox();
+    if (outbox && outbox.count() > 0) {
+      setMessage("Enviando operaciones pendientes antes de cambiar de usuario…");
+      await flushPendingWrites().catch(() => undefined);
+      const pending = outbox.count();
+      if (pending > 0 && !window.confirm(`Quedan ${pending} operaciones sin confirmar por el servidor. Si cerrás la sesión, solo se enviarán cuando ${user?.name ?? "este usuario"} vuelva a ingresar en este equipo, y nadie podrá abrir caja en ${site} hasta entonces. ¿Cerrar la sesión igualmente?`)) {
+        loggingOutRef.current = false;
+        setMessage(`No se cerró la sesión: quedan ${pending} operaciones pendientes. Revisá la conexión y usá «Sincronizar pendientes» antes de cambiar de usuario.`);
+        return;
+      }
+    }
     await fetch(`${API_BASE}/auth/logout`, {
       method: "POST",
       credentials: "include",
     }).catch(() => undefined);
+    // Sin esto, quien ingresa a continuación enviaba al entrar un guardado
+    // con la última acción de la sesión anterior («Venta registrada») a su
+    // nombre y veía el ticket de una venta ajena.
+    operationalEventRef.current = null;
+    setOperationalVersion(0);
+    pendingReceiptRef.current = null;
+    setReceiptSale(null);
     setUser(null);
     setPassword("");
     setCurrentPassword("");
@@ -2605,7 +2638,11 @@ export default function Home() {
     if (!user) return;
     const inactivityMs = 6 * 60 * 60 * 1000;
     let timeout = 0;
-    const closeForInactivity = () => {
+    const closeForInactivity = async () => {
+      // Último intento con la sesión vigente: después de salir la cola queda
+      // esperando a que este mismo usuario vuelva a ingresar.
+      loggingOutRef.current = true;
+      await flushPendingWrites().catch(() => undefined);
       void fetch(`${API_BASE}/auth/logout`, {
         method: "POST",
         credentials: "include",
@@ -2619,7 +2656,7 @@ export default function Home() {
     };
     const resetInactivityTimer = () => {
       window.clearTimeout(timeout);
-      timeout = window.setTimeout(closeForInactivity, inactivityMs);
+      timeout = window.setTimeout(() => void closeForInactivity(), inactivityMs);
     };
     const activityEvents: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "scroll"];
     activityEvents.forEach((event) => window.addEventListener(event, resetInactivityTimer, { passive: true }));
@@ -2628,6 +2665,8 @@ export default function Home() {
       window.clearTimeout(timeout);
       activityEvents.forEach((event) => window.removeEventListener(event, resetInactivityTimer));
     };
+  // El temporizador se instala por sesión; flushPendingWrites lee la cola vigente.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
   const changeOwnPassword = async () => {
     if (newPassword !== confirmNewPassword) {
