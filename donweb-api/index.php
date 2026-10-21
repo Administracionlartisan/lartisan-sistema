@@ -455,8 +455,8 @@ if ($method === 'GET' && $route === 'attendance/schedule-users') {
 if ($method === 'GET' && $route === 'attendance/personnel') {
     $manager = require_user($pdo); ensure_attendance_presence_schema($pdo);
     if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager, 'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para gestionar personal.'],403);
-    $rows = $pdo->query("SELECT id,full_name,username,role,job_title,assigned_locations,assigned_location,active FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
-    $out=[]; foreach($rows as $row){ if (($manager['role'] ?? '') !== 'administracion' && !array_intersect(assigned_locations($manager), assigned_locations($row))) continue; $out[]=['id'=>(int)$row['id'],'name'=>$row['full_name'],'username'=>$row['username'],'role'=>$row['role'],'jobTitle'=>$row['job_title'],'sites'=>assigned_locations($row)]; }
+    $rows = $pdo->query("SELECT id,full_name,username,role,job_title,assigned_locations,assigned_location,access_all_locations,active FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
+    $out=[]; foreach($rows as $row){ $locations=array_values(array_filter(operational_sites(),static fn(string $site): bool => (($manager['role'] ?? '') === 'administracion' || user_can_access_site($manager,$site)) && user_can_access_site($row,$site))); if (!$locations) continue; $out[]=['id'=>(int)$row['id'],'name'=>$row['full_name'],'username'=>$row['username'],'role'=>$row['role'],'jobTitle'=>$row['job_title'],'sites'=>$locations]; }
     json_response(['ok'=>true,'personnel'=>$out]);
 }
 
@@ -464,7 +464,7 @@ if ($method === 'POST' && $route === 'attendance/personnel') {
     $manager = require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
     if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager, 'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para dar de alta personal.'],403);
     $name=trim((string)($body['fullName']??'')); $username=mb_strtolower(trim((string)($body['username']??'')),'UTF-8'); $password=(string)($body['temporaryPassword']??''); $title=(string)($body['jobTitle']??''); $site=trim((string)($body['site']??''));
-    $titles=['jefe_area','cocinero','ayudante_cocina'];
+    $titles=['jefe_area','cocinero','ayudante_cocina','repositor','vendedor','supervisora','repartidor'];
     if ($name==='' || !valid_username($username) || !valid_password($password) || !in_array($title,$titles,true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Revisá nombre, usuario, contraseña, cargo y local.'],422);
     if (($manager['role'] ?? '') !== 'administracion' && !user_can_access_site($manager,$site)) json_response(['ok'=>false,'error'=>'No podés dar de alta personal para ese local.'],403);
     ensure_personnel_files_schema($pdo);
@@ -482,6 +482,27 @@ if ($method === 'POST' && $route === 'attendance/personnel') {
         throw $e;
     }
     audit($pdo,(int)$manager['id'],'attendance_personnel_created','user_id='.$id.';file_id='.$fileId.';site='.$site.';title='.$title); json_response(['ok'=>true,'id'=>$id,'personnelFileId'=>$fileId],201);
+}
+
+// Vincular un cargo a una cuenta existente no cambia su rol ni sus permisos.
+if ($method === 'POST' && $route === 'attendance/personnel/job-title') {
+    $manager=require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
+    if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager,'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para gestionar personal.'],403);
+    $id=(int)($body['employeeUserId']??0); $title=(string)($body['jobTitle']??''); $site=trim((string)($body['site']??''));
+    if ($id<=0 || !in_array($title,['jefe_area','cocinero','ayudante_cocina','repositor','vendedor','supervisora','repartidor'],true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Elegí una persona, cargo y local válidos.'],422);
+    ensure_personnel_files_schema($pdo);
+    try {
+        $pdo->beginTransaction();
+        $stmt=$pdo->prepare('SELECT id,role,active,assigned_location,assigned_locations,access_all_locations FROM users WHERE id=? FOR UPDATE'); $stmt->execute([$id]); $employee=$stmt->fetch();
+        if (!$employee || !(bool)$employee['active']) { $pdo->rollBack(); json_response(['ok'=>false,'error'=>'Usuario no disponible.'],404); }
+        if (!user_can_access_site($employee,$site) || (($manager['role'] ?? '') !== 'administracion' && (!user_can_access_site($manager,$site) || in_array($employee['role'],['administracion','compras'],true)))) { $pdo->rollBack(); json_response(['ok'=>false,'error'=>'No podés asignar ese local a esta persona.'],403); }
+        $pdo->prepare('UPDATE users SET job_title=? WHERE id=?')->execute([$title,$id]);
+        $fileId=bin2hex(random_bytes(16));
+        $pdo->prepare("INSERT INTO lartisan_personnel_files (id,employee_user_id,job_title,assigned_site,status,created_by) VALUES (?,?,?,?, 'activo',?) ON DUPLICATE KEY UPDATE job_title=VALUES(job_title), assigned_site=VALUES(assigned_site)")->execute([$fileId,$id,$title,$site,(int)$manager['id']]);
+        audit($pdo,(int)$manager['id'],'attendance_personnel_title_updated','user_id='.$id.';site='.$site.';title='.$title);
+        $pdo->commit();
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+    json_response(['ok'=>true]);
 }
 
 if ($method === 'GET' && $route === 'admin/personnel-files') {
