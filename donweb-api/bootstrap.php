@@ -122,7 +122,10 @@ function json_response(array $payload, int $status = 200): never
 if (PHP_SAPI !== 'cli') {
     ini_set('display_errors', '0');
     set_exception_handler(static function (Throwable $error): void {
-        error_log('LARTISAN API unhandled ' . get_class($error) . ': ' . $error->getMessage() . ' @ ' . $error->getFile() . ':' . $error->getLine());
+        $pdo = ($GLOBALS['pdo'] ?? null) instanceof PDO ? $GLOBALS['pdo'] : null;
+        // Una transacción a medio camino se revierte antes de registrar.
+        try { if ($pdo && $pdo->inTransaction()) $pdo->rollBack(); } catch (Throwable $ignored) {}
+        system_error($pdo, 'API unhandled', get_class($error) . ': ' . $error->getMessage() . ' @ ' . basename($error->getFile()) . ':' . $error->getLine());
         if (!headers_sent()) {
             http_response_code(500);
             header('Content-Type: application/json; charset=utf-8');
@@ -193,6 +196,58 @@ function audit(PDO $pdo, ?int $userId, string $type, ?string $detail = null): vo
         'INSERT INTO audit_log (user_id, event_type, event_detail, ip_address) VALUES (?, ?, ?, ?)'
     );
     $stmt->execute([$userId, $type, $detail, client_ip()]);
+}
+
+/** Registro técnico visible en Administración → Registro técnico. La crea la
+ * migración inicial: system_error() nunca emite DDL porque puede ejecutarse
+ * dentro de la transacción de /sync. */
+function ensure_system_error_log_schema(PDO $pdo): void
+{
+    if (!table_exists($pdo, 'system_error_log')) {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS system_error_log (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            source VARCHAR(80) NOT NULL,
+            site VARCHAR(80) NULL,
+            user_id BIGINT UNSIGNED NULL,
+            route VARCHAR(160) NULL,
+            message VARCHAR(1000) NOT NULL,
+            fingerprint CHAR(40) NOT NULL,
+            INDEX idx_system_error_created (created_at),
+            INDEX idx_system_error_fingerprint (fingerprint, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    }
+}
+
+/** Rutas absolutas del servidor → nombre de archivo; nunca datos enviados. */
+function system_error_message(string $message): string
+{
+    $message = preg_replace('#(?:[A-Za-z]:)?[\\\\/](?:[^\s:\'"]+[\\\\/])+([^\s\\\\/:\'"]+\.php)#', '$1', $message) ?? $message;
+    $message = trim(preg_replace('/\s+/', ' ', $message) ?? $message);
+    return mb_substr($message !== '' ? $message : 'Sin detalle disponible.', 0, 1000, 'UTF-8');
+}
+
+/**
+ * Deja el error en el log del servidor (como antes) y en system_error_log para
+ * que Administración lo vea y lo reporte. Nunca interrumpe la operación.
+ */
+function system_error(?PDO $pdo, string $source, string $message, ?string $site = null): void
+{
+    $clean = system_error_message($message);
+    error_log('LARTISAN ' . $source . ($site ? ' (' . $site . ')' : '') . ': ' . $clean);
+    if (!$pdo) return;
+    try {
+        if (!table_exists($pdo, 'system_error_log')) return;
+        // La huella agrupa repeticiones del mismo error sin números variables.
+        $fingerprint = sha1($source . '|' . (preg_replace('/[0-9a-f]{8}-[0-9a-f-]{27}|\d+/i', '#', $clean) ?? $clean));
+        $route = substr(trim((string) ($_GET['route'] ?? ''), '/'), 0, 160) ?: null;
+        $userId = isset($GLOBALS['lartisan_request_user_id']) ? (int) $GLOBALS['lartisan_request_user_id'] : null;
+        $pdo->prepare('INSERT INTO system_error_log (source, site, user_id, route, message, fingerprint) VALUES (?, ?, ?, ?, ?, ?)')
+            ->execute([substr($source, 0, 80), $site ? substr($site, 0, 80) : null, $userId, $route, $clean, $fingerprint]);
+        if (random_int(1, 50) === 1) $pdo->exec('DELETE FROM system_error_log WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)');
+    } catch (Throwable $logError) {
+        error_log('LARTISAN system error log unavailable: ' . $logError->getMessage());
+    }
 }
 
 function is_primary_user(array $user, array $config): bool
@@ -322,6 +377,7 @@ function require_user(PDO $pdo, ?array $roles = null): array
     if ($roles !== null && !in_array($user['role'], $roles, true)) {
         json_response(['ok' => false, 'error' => 'Acceso no autorizado'], 403);
     }
+    $GLOBALS['lartisan_request_user_id'] = (int) $user['id'];
     return $user;
 }
 
@@ -431,7 +487,7 @@ function operational_sites(bool $includeInactive = false): array
         $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_COLUMN);
         return $cache[$key] = $rows ? array_values(array_map('strval', $rows)) : default_operational_sites();
     } catch (Throwable $error) {
-        error_log('LARTISAN location catalogue unavailable: ' . $error->getMessage());
+        system_error($pdo, 'location catalogue unavailable', $error->getMessage());
         return $cache[$key] = default_operational_sites();
     }
 }
@@ -963,7 +1019,7 @@ function enforce_invoice_type_changes(PDO $pdo, array $user, array $previous, ar
                     if ($fiscal->fetchColumn() !== false) $reason = 'la venta ya tiene un comprobante ARCA emitido o en curso';
                 }
             } catch (Throwable $error) {
-                error_log('LARTISAN fiscal invoice-change check deferred: ' . $error->getMessage());
+                system_error($pdo, 'fiscal invoice-change check deferred', $error->getMessage());
                 $reason = 'no se pudo validar el estado fiscal; se conservó el comprobante anterior';
             }
         }

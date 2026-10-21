@@ -18,7 +18,7 @@ const steps = [
   ["Tipos (TypeScript)", [npx, ["tsc", "--noEmit"]]],
   ["Lint (sin errores)", [npx, ["eslint", "app", "db", "--max-warnings=1"]]],
   ["Anti-regresión", nodeTest("tests/regression-guards.test.mjs")],
-  ["Seguridad y confiabilidad", nodeTest("tests/security.test.mjs", "tests/reliability-history.test.mjs", "tests/operational-outbox.test.mjs")],
+  ["Seguridad y confiabilidad", nodeTest("tests/security.test.mjs", "tests/reliability-history.test.mjs", "tests/operational-outbox.test.mjs", "tests/system-error-log.test.mjs")],
   ["Usuarios, MRP y estructura", nodeTest("tests/user-management.test.mjs", "tests/mrp.test.mjs", "tests/module-structure.test.mjs", "tests/app-icons.test.mjs", "tests/report-navigation.test.mjs")],
   ["Catálogo", nodeTest("tests/catalog.test.mjs", "tests/catalog-runtime.test.mjs")],
   ["Pedidos y documento", nodeTest("tests/order-document.test.mjs")],

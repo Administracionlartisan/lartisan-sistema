@@ -100,6 +100,11 @@ errores **no vuelvan**. Cada una está protegida por una prueba automática.
   Las fechas ISO del navegador se convierten con `iso_datetime`.
 - **Errores**: los mensajes de configuración pueden mostrarse a Administración;
   los de base de datos (`PDOException`) nunca. El manejador global responde JSON.
+- **Todo error técnico del servidor se registra con `system_error()`**, no con
+  `error_log()` suelto: además del log del hosting queda en Administración →
+  Registro técnico (sin rutas del servidor ni datos enviados), desde donde se
+  copia el reporte para Codex. `system_error()` no emite DDL: puede correr
+  dentro de la transacción de `/sync`.
 - **SQL**: consultas siempre con parámetros. Cada `INSERT` debe tener la misma
   cantidad de columnas que de valores (la prueba lo verifica en todo `donweb-api/`).
 - **Nunca** versionar `config.local.php`, claves, certificados ni datos reales.

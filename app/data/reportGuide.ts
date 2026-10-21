@@ -99,6 +99,11 @@ export const adminReportGuides: ReportGuide[] = [
   report("Auditoria", "Auditoría", "Historial del servidor con fecha, usuario, local, acción y detalle.", "Operativo con límites",
     ["quien hizo modificacion", "quien cambio datos", "quien hizo un cambio", "historial de cambios", "reporte auditoria", "rastreo acciones", "quien hizo ajuste", "usuario que modifico"], historyFilters,
     "Desde, Hasta y Local filtran el historial; Usuario y Acción permiten acotar la búsqueda. Los eventos anteriores a esta mejora pueden mostrar un detalle técnico reducido porque no guardaban la descripción completa."),
+  report("Errores", "Registro técnico", "Errores técnicos del servidor agrupados por repetición, con fecha, origen, local y mensaje, y un reporte listo para Codex.", "Operativo con límites",
+    ["registro tecnico", "errores del sistema", "logs del sistema", "ver los logs", "error 500", "reportar errores a codex", "fallas tecnicas del servidor", "por que fallo la sincronizacion"],
+    "Desde, Hasta y Buscar (origen, local o texto) propios de esta sección; los filtros superiores no se aplican.",
+    "Conserva 90 días. Solo registra errores del servidor: un equipo sin conexión no puede informar los suyos hasta reconectarse, y si la base de datos no responde el error queda solo en el log del hosting. «Copiar reporte para Codex» copia el texto; no lo envía a ningún lado.",
+    "app/modules/administracion/SystemErrorLog.tsx · GET admin/system-errors"),
   report("Incidencias", "Incidencias", "Problemas cargados: local, tipo, detalle, persona que informó y estado.", "Operativo con límites",
     ["reclamos de locales", "problemas abiertos", "informe incidencias", "reclamos pendientes", "quien reporto problema", "incidencias resueltas", "faltantes reclamados"], noFilters,
     "El listado usa los registros disponibles, sin filtros efectivos por estado/fecha/local. Ver el estado no cambia el caso: el selector Gestión sí lo modifica y debe usarse solo cuando corresponda, no para consultar."),
@@ -122,7 +127,7 @@ export const REPORT_AREAS = [
   { id: "caja", title: "Caja y cobros", reports: ["Pagos", "VendidoCobrado", "Cajas", "CajaMayor", "Bancos", "Egresos"] },
   { id: "stock", title: "Stock y pedidos", reports: ["Stock", "Reposicion", "PedidosCentral"] },
   { id: "personas", title: "Personas y clientes", reports: ["Personal", "Clientes"] },
-  { id: "control", title: "Control", reports: ["Alertas", "Ajustes", "Calidad", "Auditoria", "Incidencias", "Fiscal"] },
+  { id: "control", title: "Control", reports: ["Alertas", "Ajustes", "Calidad", "Auditoria", "Errores", "Incidencias", "Fiscal"] },
 ] as const;
 export function reportArea(id: string) {
   return REPORT_AREAS.find(area => (area.reports as readonly string[]).includes(id));

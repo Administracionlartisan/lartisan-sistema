@@ -191,3 +191,13 @@ test("Caja: relevo acumulado aceptado y cierre obsoleto sin perder cobros", () =
   assert.match(cash, /\$completedHandover = \$validOpening\(\) && shift_closed_in_snapshot/);
   assert.match(cash, /'Cierre de caja', 'Sobre enviado a Caja Mayor', 'Gastos declarados al cierre', 'Retiros declarados al cierre'/);
 });
+
+test("Registro técnico: los errores del servidor quedan visibles para Administración", () => {
+  assert.match(index, /'system_error_log' => static fn \(\) => ensure_system_error_log_schema\(\$pdo\)/, "la tabla se crea en la migración inicial, nunca dentro de /sync");
+  const helper = bootstrap.match(/function system_error\([\s\S]*?\n\}/)[0];
+  assert.doesNotMatch(helper, /CREATE TABLE|ALTER TABLE|ensure_/, "system_error() puede correr dentro de la transacción de /sync");
+  assert.match(index, /route === 'admin\/system-errors'\) \{\s*require_user\(\$pdo, \['administracion'\]\);/);
+  const remaining = [...index.matchAll(/error_log\('([^']+)/g)].map((match) => match[1]);
+  assert.deepEqual(remaining, ["LARTISAN API database initialization failed: ", "LARTISAN operation sync failure audit failed: "], "un error nuevo debe usar system_error() para que Administración lo vea");
+  assert.match(page, /adminReport === "Errores" && <SystemErrorLog \/>/);
+});

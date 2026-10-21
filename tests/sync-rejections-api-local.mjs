@@ -55,4 +55,12 @@ assert.equal(second.status, 200);
 assert.equal(second.data.alreadyProcessed, true);
 assert.equal(second.data.revision, first.data.revision);
 assert.equal((await call(admin, "operations/states")).data.states["Novo Pacheco"].revision, pacheco.revision + 1);
-console.log("API local: rechazos de /sync como 422, ventana de prueba reabrible, sin escrituras parciales y reintento idempotente OK");
+// Los rechazos quedan en el Registro técnico, visible solo para Administración.
+const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+const logged = await call(admin, `admin/system-errors?from=${today}&to=${today}&q=Maure`);
+assert.equal(logged.status, 200);
+assert.ok(logged.data.errors.some((row) => row.source === "operation sync failed" && row.site === "Maure" && /ventana de prueba/.test(row.message)), "el rechazo de Maure no quedó en el registro técnico");
+assert.ok(logged.data.errors.every((row) => !/[A-Za-z]:\\|\/home\//.test(row.message)), "el registro expone rutas del servidor");
+const seller = await login("vendedora.pruebas");
+assert.equal((await call(seller, "admin/system-errors")).status, 403);
+console.log("API local: rechazos de /sync como 422, ventana de prueba reabrible, sin escrituras parciales, reintento idempotente y registro técnico OK");

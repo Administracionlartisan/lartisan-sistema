@@ -20,6 +20,7 @@ import { managedUserFromApi } from "./modules/usuarios/apiUserMapper";
 import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./modules/auth/AuthScreens";
 import MrpPanel from "./modules/administracion/MrpPanel";
 import CatalogEditor from "./modules/administracion/CatalogEditor";
+import SystemErrorLog from "./modules/administracion/SystemErrorLog";
 import { useCatalog } from "./modules/config/useCatalog";
 import { addConfirmedThirdPartyProducts, findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
@@ -9608,6 +9609,7 @@ export default function Home() {
                       </div>
                     </div>
                   )}
+                  {adminReport === "Errores" && <SystemErrorLog />}
                   {adminReport === "Incidencias" && (
                     <div className="mt-5 overflow-auto rounded border">
                       <table className="w-full min-w-[700px] text-sm">
