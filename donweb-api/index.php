@@ -13,6 +13,7 @@ require __DIR__ . '/internal_chat.php';
 require __DIR__ . '/training.php';
 require __DIR__ . '/attendance_presence.php';
 require __DIR__ . '/stock_outflow.php';
+require __DIR__ . '/stock_receipts.php';
 require __DIR__ . '/promotions.php';
 require __DIR__ . '/promotion_calculation.php';
 
@@ -62,6 +63,44 @@ foreach ([
     } catch (Throwable $error) {
         system_error($pdo, 'deferred ' . $schema . ' schema update', $error->getMessage());
     }
+}
+
+if ($route === 'stock/receipts') {
+    $receiptUser = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    if ($method === 'POST' && !empty($receiptUser['must_change_password'])) json_response(['ok' => false, 'error' => 'Cambiá tu contraseña temporal antes de operar.'], 403);
+    $body = $method === 'POST' ? request_body() : [];
+    $receiptSite = trim((string) ($body['site'] ?? $_GET['site'] ?? ''));
+    if (!user_can_access_site($receiptUser, $receiptSite)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+    ensure_stock_receipt_review_schema($pdo);
+    if ($method === 'GET') {
+        $offset = min(1000000, max(0, (int) ($_GET['offset'] ?? 0)));
+        $query = $pdo->prepare("SELECT m.id, m.site, m.product_id, m.movement_type, m.quantity, m.remito, m.detail, m.occurred_at, m.created_by, r.status AS review_status, r.observation, r.reviewer_name, r.reviewed_at FROM lartisan_stock_movements m LEFT JOIN stock_receipt_review_events r ON r.id = (SELECT MAX(e.id) FROM stock_receipt_review_events e WHERE e.movement_id = m.id AND e.site = m.site) WHERE m.site = ? AND m.movement_type IN ('Ingreso por remito', 'Ingreso manual', 'Recepción de pedido') ORDER BY m.occurred_at DESC, m.id DESC LIMIT 101 OFFSET " . $offset);
+        $query->execute([$receiptSite]);
+        json_response(['ok' => true, 'movements' => $query->fetchAll()]);
+    }
+    if ($method === 'POST') {
+        if (!in_array($receiptUser['role'], ['supervisora', 'administracion'], true)) json_response(['ok' => false, 'error' => 'Solo supervisión puede revisar ingresos.'], 403);
+        $movementId = trim((string) ($body['movementId'] ?? ''));
+        $status = (string) ($body['status'] ?? '');
+        $observation = trim((string) ($body['observation'] ?? ''));
+        if (!in_array($status, ['revisado', 'diferencia'], true) || ($status === 'diferencia' && $observation === '') || mb_strlen($observation) > 500) json_response(['ok' => false, 'error' => 'Indicá un estado válido y una observación para las diferencias.'], 422);
+        $query = $pdo->prepare("SELECT id FROM lartisan_stock_movements WHERE id = ? AND site = ? AND movement_type IN ('Ingreso por remito', 'Ingreso manual', 'Recepción de pedido')");
+        $query->execute([$movementId, $receiptSite]);
+        if (!$query->fetch()) json_response(['ok' => false, 'error' => 'No se encontró el ingreso.'], 404);
+        $pdo->beginTransaction();
+        try {
+            $query = $pdo->prepare('INSERT INTO stock_receipt_review_events (movement_id, site, status, observation, reviewer_id, reviewer_name) VALUES (?, ?, ?, ?, ?, ?)');
+            $query->execute([$movementId, $receiptSite, $status, $observation, (int) $receiptUser['id'], (string) ($receiptUser['full_name'] ?? $receiptUser['username'])]);
+            audit($pdo, (int) $receiptUser['id'], 'stock_receipt_reviewed', $receiptSite . ' · ' . $movementId . ' · ' . $status);
+            $pdo->commit();
+            json_response(['ok' => true]);
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            system_error($pdo, 'stock receipt review failed', $error->getMessage(), $receiptSite);
+            json_response(['ok' => false, 'error' => 'No se pudo guardar la revisión.'], 500);
+        }
+    }
+    json_response(['ok' => false, 'error' => 'Método no permitido.'], 405);
 }
 
 // Las solicitudes se guardan fuera del snapshot operativo y se deciden bajo
@@ -2558,7 +2597,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'gestionarPromociones', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
     // Si la edición no trae permisos, se conservan tal cual. NULL significa "los
     // del cargo": convertirlo en [] al bloquear o cambiar de local dejaba al
     // usuario sin ningún permiso (por ejemplo, sin poder cobrar).

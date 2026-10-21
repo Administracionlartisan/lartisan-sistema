@@ -29,6 +29,7 @@ import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
 import StockOutflows from "./modules/stock/StockOutflows";
+import StockReceiptHistory from "./modules/stock/StockReceiptHistory";
 import StockOutflowAlerts from "./modules/stock/StockOutflowAlerts";
 import PromotionReport from "./modules/reports/PromotionReport";
 import PromotionManager from "./modules/promotions/PromotionManager";
@@ -4913,6 +4914,7 @@ export default function Home() {
                 h="Reportes de supervisión"
                 p="Seguimiento operativo de ventas, stock, pedidos y cajas por sucursal."
               />
+              <StockReceiptHistory site={site} sites={user.accessAllLocations ? configuredSites : (user.locations ?? []).filter((local) => configuredSites.includes(local))} products={products} canReview={user.role === "supervisora" || user.role === "administracion"} />
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl border bg-white p-5">
                   <p className="text-sm">Ventas de esta sesión</p>
@@ -5946,6 +5948,7 @@ export default function Home() {
                 p="La venta descuenta una unidad de la presentación vendida."
               />
               {(["vendedora", "supervisora"].includes(user.role)) && <StockOutflows site={site} products={products.filter((product) => product.active !== false)} canRequest={can("egresos")} canApprove={canApproveStockOutflows} pendingSync={pendingSync} refreshStock={loadOperationalData} />}
+              <StockReceiptHistory site={site} products={products} canReview={user.role === "supervisora" || user.role === "administracion"} />
               <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#eef2f6] p-3 text-sm text-[#183a67]">
                 <b>Stock ideal:</b> define hasta qué cantidad se propone reponer cada producto. Solo las supervisoras autorizadas por Administración pueden editarlo; el resto de los perfiles lo consulta.
               </p>
