@@ -182,12 +182,13 @@ export default function Home() {
     [salesHistoryLoading, setSalesHistoryLoading] = useState(false),
     [salesHistoryError, setSalesHistoryError] = useState(""),
     [receiptSale, setReceiptSale] = useState<Sale | null>(null),
+    [confirmedReceiptId, setConfirmedReceiptId] = useState<string | null>(null),
     [fiscalReceipt, setFiscalReceipt] = useState<{ pointOfSale: number; voucherType: number; voucherNumber: number; cae: string; caeExpiresOn?: string; net: number; vat: number; total: number; customerName: string; customerDocumentType: string; customerDocumentNumber?: string; customerTaxCondition?: string; invoiceType: string; qrUrl: string } | null>(null),
     [fiscalReceiptQr, setFiscalReceiptQr] = useState(""),
     [fiscalReceiptChecking, setFiscalReceiptChecking] = useState(false),
     [saleSearch, setSaleSearch] = useState(""),
     [paymentCorrectionSaleId, setPaymentCorrectionSaleId] = useState<string | null>(null),
-    [paymentCorrectionMethod, setPaymentCorrectionMethod] = useState("Efectivo"),
+    [paymentCorrectionPayments, setPaymentCorrectionPayments] = useState<Payment[]>([]),
     [paymentCorrectionReason, setPaymentCorrectionReason] = useState(""),
     [audit, setAudit] = useState<AuditEvent[]>([]),
     [syncStatus, setSyncStatus] = useState("Sin cierre enviado"),
@@ -1563,6 +1564,7 @@ export default function Home() {
         const pendingReceipt = pendingReceiptRef.current;
         if (pendingReceipt && pendingReceipt.site === local && write.state.sales?.some((sale) => sale.id === pendingReceipt.id)) {
           pendingReceiptRef.current = null;
+          setConfirmedReceiptId(pendingReceipt.id);
           setReceiptSale(pendingReceipt);
           setMessage(`Venta confirmada y guardada: ${money.format(pendingReceipt.net)}. Ya podés imprimir el ticket.`);
         }
@@ -3837,6 +3839,7 @@ export default function Home() {
     ]);
     setSales((x) => [sale, ...x]);
     pendingReceiptRef.current = sale;
+    setConfirmedReceiptId(null);
     setReceiptSale(null);
     currentPayments.forEach((item) =>
       appendCashLedgerEntry({
@@ -4211,7 +4214,7 @@ export default function Home() {
       `${returnKind} registrada como ${transaction.creditNoteNumber}${returnRestock ? "; se repuso el stock" : ""}.`,
     );
   };
-  const changeSalePayment = (sale: Sale, method: string) => {
+  const changeSalePayment = (sale: Sale, replacementPayments: Payment[]) => {
     if (!can("cobrar"))
       return setMessage("Tu usuario no tiene permiso para corregir medios de pago.");
     if (sale.site !== site || sale.status !== "activa")
@@ -4221,10 +4224,30 @@ export default function Home() {
     const originalPayments = payments.filter((item) => item.saleId === sale.id);
     if (!originalPayments.length)
       return setMessage("No se encontraron cobros asociados a esta venta. Pedí revisión a Administración.");
-    if (originalPayments.every((item) => item.method === method)) {
-      setPaymentCorrectionSaleId(null);
-      return setMessage("La venta ya tiene ese medio de pago.");
+    if (originalPayments.some((item) => !item.shiftId || item.shiftId !== originalPayments[0].shiftId))
+      return setMessage("No se pudo identificar un único turno original para estos cobros. Pedí revisión a Administración.");
+    const grouped = new Map<string, number>();
+    for (const item of replacementPayments) {
+      if (!methods.includes(item.method) || !Number.isFinite(item.amount) || item.amount < 0 || Math.abs(item.amount * 100 - Math.round(item.amount * 100)) > 0.000001)
+        return setMessage("Revisá los medios y montos de la corrección.");
+      if (item.amount > 0) grouped.set(item.method, (grouped.get(item.method) || 0) + item.amount);
     }
+    const nextPayments = Array.from(grouped, ([method, amount]) => ({ method, amount }));
+    const toCents = (amount: number) => Math.round(amount * 100);
+    if (!nextPayments.length || nextPayments.reduce((sum, item) => sum + toCents(item.amount), 0) !== toCents(sale.net))
+      return setMessage("La suma de los medios debe coincidir exactamente con el total de la venta.");
+    if (originalPayments.reduce((sum, item) => sum + toCents(item.amount), 0) !== toCents(sale.net))
+      return setMessage("Los cobros registrados no coinciden con el total. Pedí revisión a Administración.");
+    const describe = (items: Payment[]) => items.map((item) => `${item.method} ${money.format(item.amount)}`).join(" + ");
+    const previousDescription = describe(originalPayments);
+    const nextDescription = describe(nextPayments);
+    const previousByMethod = new Map<string, number>();
+    originalPayments.forEach((item) => previousByMethod.set(item.method, (previousByMethod.get(item.method) || 0) + toCents(item.amount)));
+    if (nextPayments.length === previousByMethod.size && nextPayments.every((item) => previousByMethod.get(item.method) === toCents(item.amount))) {
+      setPaymentCorrectionSaleId(null);
+      return setMessage("La venta ya tiene esos medios e importes.");
+    }
+    const method = nextPayments.length === 1 ? nextPayments[0].method : "Múltiple";
     const previousCash = originalPayments
       .filter((item) => item.method === "Efectivo")
       .reduce((sum, item) => sum + item.amount, 0);
@@ -4233,16 +4256,15 @@ export default function Home() {
     );
     setPayments((items) => [
       ...items.filter((item) => item.saleId !== sale.id),
-      {
-        method,
-        amount: originalPayments.reduce((sum, item) => sum + item.amount, 0),
+      ...nextPayments.map((item) => ({
+        ...item,
         saleId: sale.id,
         site: sale.site,
         shiftId: originalPayments[0].shiftId,
         createdAtISO: originalPayments[0].createdAtISO,
-      },
+      })),
     ]);
-    const nextCash = method === "Efectivo" ? sale.net : 0;
+    const nextCash = nextPayments.filter((item) => item.method === "Efectivo").reduce((sum, item) => sum + item.amount, 0);
     if (nextCash !== previousCash)
       appendCashLedgerEntry({
         kind: "Corrección de cobro",
@@ -4252,16 +4274,16 @@ export default function Home() {
         paymentMethod: method,
         reference: sale.id,
         shiftId: originalPayments[0].shiftId,
-        detail: `${sale.method} a ${method} · Motivo: ${paymentCorrectionReason.trim()}`,
+        detail: `${previousDescription} → ${nextDescription} · Motivo: ${paymentCorrectionReason.trim()}`,
       });
     recordAudit(
       "Forma de cobro modificada",
-      `${sale.id.slice(0, 8)} · ${sale.method} a ${method} · Motivo: ${paymentCorrectionReason.trim()}`,
+      `${sale.id.slice(0, 8)} · ${previousDescription} → ${nextDescription} · Motivo: ${paymentCorrectionReason.trim()}`,
     );
     setPaymentCorrectionSaleId(null);
     setPaymentCorrectionReason("");
     setPendingSync((value) => value + 1);
-    setMessage(`Medio de pago corregido y auditado: ${sale.method} a ${method}. El total, los productos y el stock no cambiaron${cashIsOpen ? "." : "; el cierre histórico no se modificó."}`);
+    setMessage("Corrección pendiente de confirmación del servidor. No repitas la operación.");
   };
   const changeSaleInvoice = (
     sale: Sale,
@@ -4534,6 +4556,10 @@ export default function Home() {
     };
     setCashOpenBySite((items) => ({ ...items, [site]: true }));
     setActiveShiftBySite((items) => ({ ...items, [site]: shift }));
+    setCashFieldsBySite((items) => ({
+      ...items,
+      [site]: { ...EMPTY_CASH_FIELDS, ...items[site], counted: 0, envelope: 0 },
+    }));
     setShiftLog((items) => [shift, ...items]);
     setCashLedger((items) => [
       {
@@ -5517,7 +5543,7 @@ export default function Home() {
                                 <button
                                   onClick={() => {
                                     if (!can("cobrar")) return setMessage("Tu usuario no tiene permiso para corregir medios de pago.");
-                                    setPaymentCorrectionMethod(payments.find((item) => item.saleId === sale.id)?.method || sale.method);
+                                    setPaymentCorrectionPayments(payments.filter((item) => item.saleId === sale.id).map(({ method, amount }) => ({ method, amount })));
                                     setPaymentCorrectionReason("");
                                     setPaymentCorrectionSaleId(sale.id);
                                   }}
@@ -5566,18 +5592,24 @@ export default function Home() {
                                 <div className="mt-3 rounded border-2 border-[#183a67] bg-[#f7fafc] p-3 text-xs">
                                   <p className="font-bold">Corregir medio de pago · #{sale.id.slice(0, 8)}</p>
                                   <p className="mt-1">Total {money.format(sale.net)} · registrado: {currentDescription}</p>
-                                  {salePayments.length > 1 && <p className="mt-1 rounded bg-amber-50 p-2 text-amber-900">Esta venta tuvo pago dividido. Esta corrección reunirá el total en un solo medio; verificá el comprobante antes de confirmar.</p>}
-                                  <label className="mt-2 block font-bold">Medio realmente cobrado
-                                    <select value={paymentCorrectionMethod} onChange={(event) => setPaymentCorrectionMethod(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal">
-                                      {methods.map((method) => <option key={method}>{method}</option>)}
-                                    </select>
-                                  </label>
+                                  <p className="mt-2 font-bold">Medios e importes realmente cobrados</p>
+                                  {paymentCorrectionPayments.map((item, index) => (
+                                    <div key={index} className="mt-2 flex gap-2">
+                                      <select aria-label={`Medio ${index + 1}`} value={item.method} onChange={(event) => setPaymentCorrectionPayments((items) => items.map((payment, i) => i === index ? { ...payment, method: event.target.value } : payment))} className="min-w-0 flex-1 rounded border p-2">
+                                        {methods.map((method) => <option key={method}>{method}</option>)}
+                                      </select>
+                                      <input aria-label={`Importe ${index + 1}`} type="number" min="0" step="0.01" value={item.amount} onChange={(event) => setPaymentCorrectionPayments((items) => items.map((payment, i) => i === index ? { ...payment, amount: Number(event.target.value) } : payment))} className="w-24 rounded border p-2" />
+                                      <button type="button" aria-label={`Quitar medio ${index + 1}`} onClick={() => setPaymentCorrectionPayments((items) => items.filter((_, i) => i !== index))} className="rounded border px-2">×</button>
+                                    </div>
+                                  ))}
+                                  <button type="button" onClick={() => setPaymentCorrectionPayments((items) => [...items, { method: methods[0], amount: 0 }])} className="mt-2 font-bold underline">Agregar medio</button>
+                                  <p className="mt-2">Suma: {money.format(paymentCorrectionPayments.reduce((sum, item) => sum + item.amount, 0))} de {money.format(sale.net)}</p>
                                   <label className="mt-2 block font-bold">Motivo de la corrección
                                     <input value={paymentCorrectionReason} onChange={(event) => setPaymentCorrectionReason(event.target.value)} placeholder="Ej.: se cobró con tarjeta y se registró efectivo" className="mt-1 w-full rounded border p-2 font-normal" />
                                   </label>
                                   <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, el movimiento queda vinculado al turno original. Si ese turno ya cerró, el cierre histórico no se reabre ni se altera.</p>
                                   <div className="mt-3 flex gap-2">
-                                    <button onClick={() => changeSalePayment(sale, paymentCorrectionMethod)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
+                                    <button onClick={() => changeSalePayment(sale, paymentCorrectionPayments)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
                                     <button onClick={() => setPaymentCorrectionSaleId(null)} className="rounded border px-3 py-2 font-bold">Cancelar</button>
                                   </div>
                                 </div>
@@ -5753,6 +5785,57 @@ export default function Home() {
                       <p className="mt-2 text-xs text-slate-600">Para el relevo es obligatorio realizar el cierre completo, incluido el arqueo. La siguiente responsable podrá abrir una nueva caja una vez confirmado el cierre.</p>
                     </div>
                   )}
+                  <div className="mt-4 border-t pt-4">
+                    <b className="text-sm">Ajuste / movimiento de caja</b>
+                    <select
+                      value={cashAdjustmentKind}
+                      onChange={(event) =>
+                        setCashAdjustmentKind(
+                          event.target.value as CashAdjustment["kind"],
+                        )
+                      }
+                      className="mt-2 w-full rounded border p-2"
+                    >
+                      <option>Ingreso de caja</option>
+                      <option>Ajuste de caja</option>
+                      <option>Retiro de caja</option>
+                    </select>
+                    {cashAdjustmentKind === "Ajuste de caja" && (
+                      <select
+                        value={cashAdjustmentImpact}
+                        onChange={(event) => setCashAdjustmentImpact(event.target.value as "Ingreso" | "Egreso")}
+                        className="mt-2 w-full rounded border p-2"
+                        aria-label="Impacto del ajuste"
+                      >
+                        <option value="Ingreso">Ajuste que suma efectivo</option>
+                        <option value="Egreso">Ajuste que resta efectivo</option>
+                      </select>
+                    )}
+                    <input
+                      type="number"
+                      min="0"
+                      value={cashAdjustmentAmount || ""}
+                      onChange={(event) =>
+                        setCashAdjustmentAmount(Number(event.target.value))
+                      }
+                      placeholder="Importe"
+                      className="mt-2 w-full rounded border p-2"
+                    />
+                    <input
+                      value={cashAdjustmentDetail}
+                      onChange={(event) =>
+                        setCashAdjustmentDetail(event.target.value)
+                      }
+                      placeholder="Motivo"
+                      className="mt-2 w-full rounded border p-2"
+                    />
+                    <button
+                      onClick={registerCashAdjustment}
+                      className="mt-2 w-full rounded border py-2 text-sm font-bold"
+                    >
+                      Registrar movimiento
+                    </button>
+                  </div>
                   <label className="mt-3 block text-sm font-bold">Otros gastos en efectivo (no cargados en Egresos)</label>
                   <input
                     type="number"
@@ -5843,57 +5926,6 @@ export default function Home() {
                       cobrarlas.
                     </p>
                   )}
-                  <div className="mt-4 border-t pt-4">
-                    <b className="text-sm">Ajuste / movimiento de caja</b>
-                    <select
-                      value={cashAdjustmentKind}
-                      onChange={(event) =>
-                        setCashAdjustmentKind(
-                          event.target.value as CashAdjustment["kind"],
-                        )
-                      }
-                      className="mt-2 w-full rounded border p-2"
-                    >
-                      <option>Ingreso de caja</option>
-                      <option>Ajuste de caja</option>
-                      <option>Retiro de caja</option>
-                    </select>
-                    {cashAdjustmentKind === "Ajuste de caja" && (
-                      <select
-                        value={cashAdjustmentImpact}
-                        onChange={(event) => setCashAdjustmentImpact(event.target.value as "Ingreso" | "Egreso")}
-                        className="mt-2 w-full rounded border p-2"
-                        aria-label="Impacto del ajuste"
-                      >
-                        <option value="Ingreso">Ajuste que suma efectivo</option>
-                        <option value="Egreso">Ajuste que resta efectivo</option>
-                      </select>
-                    )}
-                    <input
-                      type="number"
-                      min="0"
-                      value={cashAdjustmentAmount || ""}
-                      onChange={(event) =>
-                        setCashAdjustmentAmount(Number(event.target.value))
-                      }
-                      placeholder="Importe"
-                      className="mt-2 w-full rounded border p-2"
-                    />
-                    <input
-                      value={cashAdjustmentDetail}
-                      onChange={(event) =>
-                        setCashAdjustmentDetail(event.target.value)
-                      }
-                      placeholder="Motivo"
-                      className="mt-2 w-full rounded border p-2"
-                    />
-                    <button
-                      onClick={registerCashAdjustment}
-                      className="mt-2 w-full rounded border py-2 text-sm font-bold"
-                    >
-                      Registrar movimiento
-                    </button>
-                  </div>
                   <button
                     onClick={confirmClose}
                     disabled={
@@ -9844,6 +9876,7 @@ export default function Home() {
       {receiptSale && (
         <div className="receipt-modal fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Vista previa del ticket">
           <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl">
+            {confirmedReceiptId === receiptSale.id && <p role="status" className="no-print mb-3 rounded bg-green-100 p-3 text-center font-bold text-green-900">Venta confirmada y guardada en el servidor.</p>}
             {fiscalReceiptChecking ? (
               <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-8 text-center font-mono text-sm text-black">
                 Validando factura fiscal con ARCA…
@@ -9889,7 +9922,7 @@ export default function Home() {
               </pre>
             )}
             <div className="no-print mt-4 grid grid-cols-2 gap-2">
-              <button onClick={() => setReceiptSale(null)} className="rounded border px-4 py-3 font-bold">Cerrar</button>
+              <button onClick={() => { setReceiptSale(null); setConfirmedReceiptId(null); }} className="rounded border px-4 py-3 font-bold">Cerrar</button>
               <button onClick={printReceipt} disabled={fiscalReceiptChecking || Boolean(fiscalReceipt && !fiscalReceiptQr)} className="rounded bg-[#183a67] px-4 py-3 font-bold text-white disabled:opacity-50">{fiscalReceipt ? "Imprimir factura fiscal" : fiscalReceiptChecking ? "Validando ARCA…" : "Imprimir ticket"}</button>
             </div>
           </div>

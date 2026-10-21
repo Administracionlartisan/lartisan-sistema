@@ -72,7 +72,7 @@ export const GUIDE_UPDATES = [
     date: "Sistema nuevo",
     title: "Pagos con dos medios",
     detail:
-      "Para un pago mixto, activá Pago dividido y cargá cada medio con su importe. La suma debe coincidir con el total. Si registraste un medio incorrecto, no repitas la venta: en Ventas buscá la operación por cliente, importe o referencia, elegí Corregir medio y confirmá el medio realmente cobrado antes de cerrar caja. La corrección conserva productos, total y stock; queda auditada y ajusta la caja si interviene efectivo. En pagos divididos verificá primero el comprobante: la corrección los reúne en un solo medio.",
+      "Para un pago mixto, activá Pago dividido y cargá cada medio con su importe. La suma debe coincidir con el total. Si registraste un medio incorrecto, no repitas la venta: buscá la operación, elegí Corregir medio e indicá cada medio y monto realmente cobrado. La corrección conserva productos, total y stock; queda auditada y ajusta la caja si interviene efectivo.",
   },
   {
     date: "Sistema nuevo",

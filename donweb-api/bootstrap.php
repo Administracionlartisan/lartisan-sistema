@@ -1291,6 +1291,29 @@ function operational_item_key(string $field, array $item, int $index): string
 /** Three-way list merge: apply only this browser's changes over the latest server list. */
 function merge_operational_list(string $field, array $base, array $current, array $incoming): array
 {
+    if ($field === 'payments') {
+        // Una corrección concurrente del mismo cobro no puede combinarse por
+        // filas: unir dos repartos diferentes duplicaría el total de la venta.
+        $bySale = static function (array $rows): array {
+            $grouped = operational_payments_by_sale($rows);
+            foreach ($grouped as &$payments) {
+                $payments = array_map(static fn (array $payment): string => json_encode($payment, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $payments);
+                sort($payments);
+            }
+            unset($payments);
+            return $grouped;
+        };
+        $before = $bySale($base);
+        $server = $bySale($current);
+        $client = $bySale($incoming);
+        foreach ($before as $saleId => $payments) {
+            $serverPayments = $server[$saleId] ?? [];
+            $clientPayments = $client[$saleId] ?? [];
+            if ($serverPayments !== $payments && $clientPayments !== $payments) {
+                throw new OperationalSyncRejected('Los cobros de una venta cambiaron en otro equipo. La operación queda pendiente para conciliación.');
+            }
+        }
+    }
     $map = [];
     $order = [];
     foreach ($current as $index => $item) {
