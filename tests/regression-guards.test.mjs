@@ -15,6 +15,13 @@ const htaccess = read("donweb-api/.htaccess");
 const phpFiles = readdirSync(new URL("../donweb-api/", import.meta.url)).filter((file) => file.endsWith(".php"));
 const php = Object.fromEntries(phpFiles.map((file) => [file, read(`donweb-api/${file}`)]));
 
+test("Caja: no ofrece otros gastos al cierre y conserva importes anteriores visibles", () => {
+  assert.doesNotMatch(page, /Otros gastos en efectivo \(no cargados en Egresos\)/);
+  assert.match(page, /cashControlIsOpen && expenses > 0/);
+  assert.match(page, /conserva un gasto declarado anteriormente/);
+  assert.match(page, /kind: "Gastos declarados al cierre"/);
+});
+
 /** Lista separada por comas al primer nivel de paréntesis, desde la posición de "(". */
 function topLevelList(source, openIndex) {
   let depth = 0, current = "", items = [], quote = null;

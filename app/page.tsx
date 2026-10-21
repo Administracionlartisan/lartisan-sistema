@@ -5836,14 +5836,12 @@ export default function Home() {
                       Registrar movimiento
                     </button>
                   </div>
-                  <label className="mt-3 block text-sm font-bold">Otros gastos en efectivo (no cargados en Egresos)</label>
-                  <input
-                    type="number"
-                    value={expenses}
-                    onChange={(e) => setExpenses(Number(e.target.value))}
-                    disabled={!cashControlIsOpen}
-                    className="mt-1 w-full rounded border p-2"
-                  />
+                  {cashControlIsOpen && expenses > 0 && (
+                    <div role="status" className="mt-3 rounded border border-amber-400 bg-amber-50 p-3 text-sm">
+                      <p>Esta caja conserva un gasto declarado anteriormente de {money.format(expenses)}. Sigue incluido en el cierre para no perderlo ni duplicarlo.</p>
+                      <button type="button" onClick={() => setExpenses(0)} className="mt-2 rounded border px-3 py-1 font-bold">Quitar importe anterior del cierre</button>
+                    </div>
+                  )}
                   <label className="mt-3 block text-sm font-bold">
                     Retiros
                   </label>
