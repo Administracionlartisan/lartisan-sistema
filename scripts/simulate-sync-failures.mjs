@@ -32,6 +32,9 @@ const password = "Simulacion2026!";
 const run = `FALLAS-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
 const usernameRun = run.replace(/[^a-z0-9]/gi, "").toLowerCase();
 const PRODUCT = 990001;
+// Locales de la simulación: uno para cortes y reintentos, otro para varios equipos y caja.
+const SITE_A = process.env.LARTISAN_SIM_SITE_A ?? "Novo Pacheco";
+const SITE_B = process.env.LARTISAN_SIM_SITE_B ?? "Congreso";
 const results = [];
 
 // ---------- base de datos local (solo lectura para verificar) ----------
@@ -78,7 +81,9 @@ const proxy = http.createServer((req, res) => {
 // ---------- sesión y equipo (navegador) ----------
 async function session(username, pass = password) {
   let cookie = "";
-  async function request(path, { method = "GET", body, timeout = 15000 } = {}) {
+  // El navegador no corta la recarga de estados por tiempo; con varios
+  // equipos en estrés un GET de ~4 MB puede superar 15 s en esta PC.
+  async function request(path, { method = "GET", body, timeout = 60000 } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
@@ -251,14 +256,14 @@ async function main() {
   const admin = await session("admin.pruebas", "Pruebas2026!");
   check((await admin.request("operations/test-operating-date")).data.ok, "API local no disponible");
   await admin.request("admin/test-operating-date/disable", { method: "POST", body: {} });
-  const A = await createSeller(admin, "pachecoa", `Vendedora A ${run}`, "Novo Pacheco");
-  const B = await createSeller(admin, "pachecob", `Vendedora B ${run}`, "Novo Pacheco");
-  const C = await createSeller(admin, "congresoc", `Vendedora C ${run}`, "Congreso");
-  const D = await createSeller(admin, "congresod", `Vendedora D ${run}`, "Congreso");
-  for (const site of ["Novo Pacheco", "Congreso"]) await resetCash(admin, site);
+  const A = await createSeller(admin, "pachecoa", `Vendedora A ${run}`, SITE_A);
+  const B = await createSeller(admin, "pachecob", `Vendedora B ${run}`, SITE_A);
+  const C = await createSeller(admin, "congresoc", `Vendedora C ${run}`, SITE_B);
+  const D = await createSeller(admin, "congresod", `Vendedora D ${run}`, SITE_B);
+  for (const site of [SITE_A, SITE_B]) await resetCash(admin, site);
 
-  const pa = await new Device("A", A.api, "Novo Pacheco", A.fullName).load();
-  await scenario("Preparación: apertura de caja e ingreso de 1000 unidades (Novo Pacheco)", async () => {
+  const pa = await new Device("A", A.api, SITE_A, A.fullName).load();
+  await scenario(`Preparación: apertura de caja e ingreso de 1000 unidades (${SITE_A})`, async () => {
     openShift(pa); restock(pa, 1000); await pa.drain();
     check(!pa.queue.writes.length, "la apertura no se confirmó");
   });
@@ -271,7 +276,7 @@ async function main() {
     check(pa.queue.writes.length === 1, "la cola perdió la operación tras la falla");
     const second = await pa.drain();
     check(second?.kind === "saved" && !pa.queue.writes.length, `el reintento no confirmó: ${second?.message}`);
-    await verify(admin, "Novo Pacheco", [saleId], label);
+    await verify(admin, SITE_A, [saleId], label);
     return "1 venta, 1 pago, 1 movimiento de stock y 1 de caja";
   });
   await lossCase("lose-response", "Corte después de guardar (respuesta perdida) → reintento sin duplicar");
@@ -284,7 +289,7 @@ async function main() {
     faults.push("server-500", "server-500", "server-500");
     for (let attempt = 0; attempt < 3; attempt++) check((await pa.drain())?.kind === "retry", "el 500 no se trató como reintento");
     check((await pa.drain())?.kind === "saved", "no guardó tras los 500");
-    await verify(admin, "Novo Pacheco", [saleId], "500");
+    await verify(admin, SITE_A, [saleId], "500");
   });
 
   await scenario("Sin conexión: 38 ventas acumuladas + 1 posterior (caso Dharling: 2 envíos, 39 operaciones)", async () => {
@@ -295,7 +300,7 @@ async function main() {
     check(pa.queue.writes.length === 2 && pa.pending() === 39, `se esperaban 2 envíos y 39 operaciones, hay ${pa.queue.writes.length}/${pa.pending()}`);
     await pa.drain();
     check(!pa.queue.writes.length, "quedaron pendientes");
-    await verify(admin, "Novo Pacheco", ids, "offline");
+    await verify(admin, SITE_A, ids, "offline");
     return "39 ventas guardadas una sola vez";
   });
 
@@ -306,17 +311,17 @@ async function main() {
     check(both.every((result) => result.kind === "saved"), `ambos debían confirmar (uno como ya procesado): ${JSON.stringify(both)}`);
     await pa.drain();
     check(!pa.queue.writes.length, "quedó pendiente");
-    await verify(admin, "Novo Pacheco", [saleId], "paralelo");
+    await verify(admin, SITE_A, [saleId], "paralelo");
     return both.map((result) => result.kind).join(" + ");
   });
 
   await scenario("Cambio de usuario: A con 3 ventas sin enviar, B vende 2 en el mismo local y luego A sincroniza", async () => {
     const ids = [sell(pa, "A-1"), sell(pa, "A-2"), sell(pa, "A-3")];
-    const pb = await new Device("B", B.api, "Novo Pacheco", B.fullName).load();
+    const pb = await new Device("B", B.api, SITE_A, B.fullName).load();
     ids.push(sell(pb, "B-1"), sell(pb, "B-2"));
     await pb.drain(); check(!pb.queue.writes.length, "B no sincronizó");
     await pa.drain(); check(!pa.queue.writes.length, `A no sincronizó: ${pa.queue.blocked ?? ""}`);
-    await verify(admin, "Novo Pacheco", ids, "cambio de usuario");
+    await verify(admin, SITE_A, ids, "cambio de usuario");
     return "5 ventas de ambas usuarias conservadas";
   });
 
@@ -328,27 +333,27 @@ async function main() {
     await A.api.relogin();
     await pa.drain();
     check(!pa.queue.writes.length, "no envió tras reingresar");
-    await verify(admin, "Novo Pacheco", [saleId], "sesión");
+    await verify(admin, SITE_A, [saleId], "sesión");
   });
 
-  await scenario("Stock de Novo Pacheco = 1000 − ventas, sin descuentos dobles", async () => {
-    const { state } = await serverState(admin, "Novo Pacheco");
-    const sold = sales.get("Novo Pacheco").length;
-    const movementsSum = Number(sql(`SELECT COALESCE(SUM(quantity),0) FROM lartisan_stock_movements WHERE site='Novo Pacheco' AND product_id=${PRODUCT} AND detail LIKE '${run}%'`));
+  await scenario(`Stock de ${SITE_A} = 1000 − ventas, sin descuentos dobles`, async () => {
+    const { state } = await serverState(admin, SITE_A);
+    const sold = sales.get(SITE_A).length;
+    const movementsSum = Number(sql(`SELECT COALESCE(SUM(quantity),0) FROM lartisan_stock_movements WHERE site='${SITE_A}' AND product_id=${PRODUCT} AND detail LIKE '${run}%'`));
     check(movementsSum === 1000 - sold, `movimientos suman ${movementsSum}, se esperaba ${1000 - sold}`);
     check(Number(state.stock[PRODUCT]) >= 1000 - sold, "el saldo quedó por debajo de lo vendido");
     return `${sold} ventas, movimientos netos ${movementsSum}`;
   });
 
-  // ---------- Congreso: varios equipos y conflictos de caja ----------
-  const c1 = await new Device("C", C.api, "Congreso", C.fullName).load();
-  await scenario("Preparación: apertura (C) e ingreso de 1000 unidades (Congreso)", async () => {
+  // ---------- SITE_B: varios equipos y conflictos de caja ----------
+  const c1 = await new Device("C", C.api, SITE_B, C.fullName).load();
+  await scenario(`Preparación: apertura (C) e ingreso de 1000 unidades (${SITE_B})`, async () => {
     openShift(c1); restock(c1, 1000); await c1.drain();
     check(!c1.queue.writes.length, "no se confirmó la apertura");
   });
 
   await scenario("Dos equipos venden a la vez en el mismo local (10 + 10, envíos intercalados)", async () => {
-    const d1 = await new Device("D", D.api, "Congreso", D.fullName).load();
+    const d1 = await new Device("D", D.api, SITE_B, D.fullName).load();
     await c1.load();
     const ids = [];
     await Promise.all([c1, d1].map(async (device) => {
@@ -356,12 +361,12 @@ async function main() {
       while (device.queue.writes.length && !device.queue.blocked) await device.drain();
       check(!device.queue.writes.length, `${device.name} quedó con pendientes: ${device.queue.blocked ?? ""}`);
     }));
-    await verify(admin, "Congreso", ids, "dos equipos");
+    await verify(admin, SITE_B, ids, "dos equipos");
     return "20 ventas combinadas sin pérdidas";
   });
 
   await scenario("Estrés: 3 equipos × 15 ventas a la vez, con cortes aleatorios", async () => {
-    const devices = await Promise.all([[C, "E1"], [D, "E2"], [C, "E3"]].map(([seller, name]) => new Device(name, seller.api, "Congreso", seller.fullName).load()));
+    const devices = await Promise.all([[C, "E1"], [D, "E2"], [C, "E3"]].map(([seller, name]) => new Device(name, seller.api, SITE_B, seller.fullName).load()));
     const ids = [];
     await Promise.all(devices.map(async (device) => {
       for (let n = 0; n < 15; n++) {
@@ -372,29 +377,29 @@ async function main() {
       for (let attempt = 0; attempt < 10 && device.queue.writes.length && !device.queue.blocked; attempt++) await device.drain();
       check(!device.queue.writes.length, `${device.name} quedó con pendientes: ${device.queue.blocked ?? device.queue.writes.length}`);
     }));
-    await verify(admin, "Congreso", ids, "estrés");
+    await verify(admin, SITE_B, ids, "estrés");
     return "45 ventas, cada una exactamente una vez";
   });
 
   await scenario("Ráfaga: 6 equipos envían a la vez desde la misma revisión", async () => {
-    const devices = await Promise.all(Array.from({ length: 6 }, (_, index) => new Device(`R${index}`, index % 2 ? D.api : C.api, "Congreso", index % 2 ? D.fullName : C.fullName).load()));
+    const devices = await Promise.all(Array.from({ length: 6 }, (_, index) => new Device(`R${index}`, index % 2 ? D.api : C.api, SITE_B, index % 2 ? D.fullName : C.fullName).load()));
     const ids = devices.map((device) => sell(device, "rafaga"));
     await Promise.all(devices.map((device) => device.drain()));
     for (const device of devices) while (device.queue.writes.length && !device.queue.blocked) await device.drain();
     check(devices.every((device) => !device.queue.writes.length), `quedaron pendientes: ${devices.map((d) => d.queue.blocked ?? d.queue.writes.length).join(",")}`);
-    await verify(admin, "Congreso", ids, "ráfaga");
+    await verify(admin, SITE_B, ids, "ráfaga");
   });
 
   await scenario("Caja antigua vs vigente: C vende sin conexión; D cierra el turno y abre otro; C sincroniza", async () => {
     await c1.load();
     const oldShift = c1.local.activeShift.id;
     const ids = [sell(c1, "turno-viejo-1"), sell(c1, "turno-viejo-2"), sell(c1, "turno-viejo-3")];
-    const d1 = await new Device("D", D.api, "Congreso", D.fullName).load();
+    const d1 = await new Device("D", D.api, SITE_B, D.fullName).load();
     closeShift(d1); await d1.drain(); const newShift = openShift(d1); await d1.drain();
     check(!d1.queue.writes.length, `D no pudo hacer el relevo: ${d1.queue.blocked ?? ""}`);
     await c1.drain();
     check(!c1.queue.writes.length, `las ventas del turno anterior quedaron trabadas: ${c1.queue.blocked ?? ""}`);
-    const { state } = await verify(admin, "Congreso", ids, "caja antigua");
+    const { state } = await verify(admin, SITE_B, ids, "caja antigua");
     check(state.cashOpen === true && state.activeShift?.id === newShift, "se sobrescribió la caja vigente");
     check(state.shiftLog.some((shift) => shift.id === oldShift && shift.closedAtISO), "se perdió el cierre del turno anterior");
     return "ventas guardadas en su turno; caja vigente intacta";
@@ -404,38 +409,38 @@ async function main() {
     await c1.load();
     const saleId = sell(c1, "antes-de-cierre-obsoleto");
     closeShift(c1);
-    const d1 = await new Device("D", D.api, "Congreso", D.fullName).load();
+    const d1 = await new Device("D", D.api, SITE_B, D.fullName).load();
     closeShift(d1); await d1.drain(); const current = openShift(d1); await d1.drain();
     check(!d1.queue.writes.length, "D no pudo relevar");
     await c1.drain();
     check(!c1.queue.writes.length, `quedó trabado: ${c1.queue.blocked ?? ""}`);
-    const { state } = await verify(admin, "Congreso", [saleId], "cierre obsoleto");
+    const { state } = await verify(admin, SITE_B, [saleId], "cierre obsoleto");
     check(state.cashOpen === true && state.activeShift?.id === current, "el cierre obsoleto cerró la caja vigente");
   });
 
   await scenario("Relevo sin conexión: D cierra con arqueo y abre su turno antes de que salga el envío (un solo envío acumulado)", async () => {
-    const d1 = await new Device("D", D.api, "Congreso", D.fullName).load();
+    const d1 = await new Device("D", D.api, SITE_B, D.fullName).load();
     const closing = d1.local.activeShift.id;
     const saleId = sell(d1, "antes-del-relevo");
     closeShift(d1); const opened = openShift(d1);
     check(d1.queue.writes.length === 1, "se esperaba un único envío acumulado");
     const result = await d1.drain();
     check(!d1.queue.writes.length, `el relevo quedó trabado (${result?.kind}): ${d1.queue.blocked ?? result?.message ?? ""}`);
-    const { state } = await verify(admin, "Congreso", [saleId], "relevo sin conexión");
+    const { state } = await verify(admin, SITE_B, [saleId], "relevo sin conexión");
     check(state.activeShift?.id === opened && state.shiftLog.some((shift) => shift.id === closing && shift.closedAtISO), "el relevo no quedó registrado");
   });
 
   await scenario("Apertura en conflicto: C abre sin conexión mientras D ya abrió → 422, cola detenida y conservada", async () => {
-    const d1 = await new Device("D", D.api, "Congreso", D.fullName).load();
+    const d1 = await new Device("D", D.api, SITE_B, D.fullName).load();
     closeShift(d1); await d1.drain();
     await c1.load();
     openShift(c1); const pendingSale = sell(c1, "en-apertura-conflictiva");
-    sales.get("Congreso").pop(); // no debe guardarse: queda para conciliar
+    sales.get(SITE_B).pop(); // no debe guardarse: queda para conciliar
     await d1.load(); const winner = openShift(d1); await d1.drain();
     const result = await c1.drain();
     check(result?.kind === "rejected", `se esperaba rechazo definitivo (422), llegó ${result?.kind}: ${result?.message}`);
     check(c1.queue.blocked && c1.pending() >= 1, "la cola no quedó conservada");
-    const { state } = await serverState(admin, "Congreso");
+    const { state } = await serverState(admin, SITE_B);
     check(state.activeShift?.id === winner, "se sobrescribió la caja vigente");
     check(!(state.sales ?? []).some((sale) => sale.id === pendingSale), "se guardó una venta de una apertura rechazada");
     return `mensaje: «${result.message.slice(0, 90)}…»`;
@@ -456,15 +461,15 @@ async function main() {
     await verify(admin, "Maure", [saleId], "ventana");
   });
 
-  await scenario("Congreso: totales en tablas normalizadas", async () => {
-    const ids = sales.get("Congreso");
-    await verify(admin, "Congreso", ids, "Congreso total");
-    const movementsSum = Number(sql(`SELECT COALESCE(SUM(quantity),0) FROM lartisan_stock_movements WHERE site='Congreso' AND product_id=${PRODUCT} AND detail LIKE '${run}%'`));
+  await scenario(`${SITE_B}: totales en tablas normalizadas`, async () => {
+    const ids = sales.get(SITE_B);
+    await verify(admin, SITE_B, ids, `${SITE_B} total`);
+    const movementsSum = Number(sql(`SELECT COALESCE(SUM(quantity),0) FROM lartisan_stock_movements WHERE site='${SITE_B}' AND product_id=${PRODUCT} AND detail LIKE '${run}%'`));
     check(movementsSum === 1000 - ids.length, `movimientos suman ${movementsSum}, se esperaba ${1000 - ids.length}`);
     return `${ids.length} ventas, movimientos netos ${movementsSum}`;
   });
 
-  for (const site of ["Novo Pacheco", "Congreso"]) await resetCash(admin, site);
+  for (const site of [SITE_A, SITE_B]) await resetCash(admin, site);
   proxy.closeAllConnections(); proxy.close();
   const failed = results.filter((item) => !item.ok);
   console.log(`\n${failed.length ? "✗" : "✓"} ${results.length - failed.length}/${results.length} escenarios (${run})`);
