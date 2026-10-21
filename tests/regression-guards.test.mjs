@@ -201,3 +201,11 @@ test("Registro técnico: los errores del servidor quedan visibles para Administr
   assert.deepEqual(remaining, ["LARTISAN API database initialization failed: ", "LARTISAN operation sync failure audit failed: "], "un error nuevo debe usar system_error() para que Administración lo vea");
   assert.match(page, /adminReport === "Errores" && <SystemErrorLog \/>/);
 });
+
+test("Ingresos de mercadería: el cruce con las revisiones fija la collation", () => {
+  // En producción las tablas quedaron con collations distintas y el listado
+  // fallaba siempre con SQLSTATE 1267. Prueba con base: tests/stock-receipts-collation.php.
+  const receipts = read("donweb-api/stock_receipts.php");
+  assert.match(receipts, /e\.movement_id = m\.id COLLATE utf8mb4_unicode_ci AND e\.site = m\.site COLLATE utf8mb4_unicode_ci/);
+  assert.match(read("donweb-api/index.php"), /list_stock_receipt_movements\(\$pdo, \$receiptSite, \$offset\)/);
+});
