@@ -196,6 +196,9 @@ main > header > :first-child {
   color: var(--artisan-navy-deep);
 }
 #menu-principal nav button.bg-\[\#183a67\] {
+  /* La regla de #menu-principal pisa text-white: sin esto el ítem activo
+     quedaba azul sobre azul, invisible. */
+  color: #fff;
   border-color: rgb(255 255 255 / 20%);
   background: linear-gradient(135deg, #245184, var(--artisan-navy-deep)) !important;
   box-shadow: 0 8px 16px rgb(12 40 73 / 20%);
@@ -292,7 +295,9 @@ tbody tr:nth-child(even) { background-color: rgb(247 250 253 / 72%); }
   #menu-principal { box-shadow: 0 12px 28px rgb(14 40 73 / 12%); }
   #menu-principal nav button { min-height: 44px; }
   .rounded-xl.border.bg-white, .rounded-2xl.border.bg-white, .report-navigation { border-radius: .95rem; }
-  .fixed.bottom-5.right-72 { right: 5.25rem !important; padding-inline: .85rem !important; }
+  /* «Arriba» a la izquierda: a la derecha quedan Chat y Ayuda apilados
+     (a 5.25rem se superponía con Ayuda). */
+  .fixed.bottom-5.right-72 { right: auto !important; left: 1.25rem; padding-inline: .85rem !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
