@@ -289,12 +289,18 @@ export default function Home() {
   const serverRevision = useRef<Record<string, number>>({});
   const outboxRef = useRef<{ userId: string; ready: Promise<OperationalOutbox> } | null>(null);
   const checkingCashOpeningRef = useRef(false);
-  const drainingSites = useRef(new Set<string>());
+  // Envío en curso por local: quien pide drenar un local ocupado espera ese mismo envío.
+  const drainingSites = useRef(new Map<string, Promise<void>>());
   // Último estado confirmado por local en esta sesión y si el servidor tuvo que combinarlo.
   const lastAcknowledged = useRef<Record<string, { stateJson: string; merged: boolean }>>({});
   // Locales que Central ve solo para gestionar pedidos y ajustes (no los opera).
   const centralOnlySites = useRef(new Set<string>());
   const reloadAfterDrain = useRef(false);
+  // Desde «Cambiar usuario» no se encola nada más: lo que entrara después de
+  // vaciar la cola quedaría atrapado con la sesión ya cerrada.
+  const loggingOutRef = useRef(false);
+  // Local cuyo envío falló por última vez: es el único que puede limpiar el aviso.
+  const syncFailureSite = useRef<string | null>(null);
   const pendingReceiptRef = useRef<Sale | null>(null);
   const syncingAdjustmentIds = useRef(new Set<string>());
   // Evita aplicar dos veces una carga propia ya existente al recuperar una
@@ -584,6 +590,7 @@ export default function Home() {
       return false;
     }
     setOperationalReady(false);
+    loggingOutRef.current = false;
     setUser(next);
     const rememberedSite = window.localStorage.getItem(`lartisan:last-site:${next.id}`);
     const allowedSites = next.accessAllLocations ? configuredSites : next.locations || [];
@@ -1516,13 +1523,22 @@ export default function Home() {
    */
   const drainSite = async (local: string) => {
     const outbox = await getOutbox();
-    if (!outbox || drainingSites.current.has(local)) return;
-    drainingSites.current.add(local);
+    if (!outbox) return;
+    const running = drainingSites.current.get(local);
+    if (running) return running;
+    let finishDrain = () => {};
+    drainingSites.current.set(local, new Promise<void>((resolve) => { finishDrain = resolve; }));
     let lastResult: SendResult["kind"] | null = null;
     try {
       while (navigator.onLine) {
         const queue = outbox.get(local);
         const write = queue.writes[0];
+        if (write && queue.blocked) {
+          // El rechazo se guarda con la cola: tras recargar o volver a
+          // ingresar solo quedaba el contador de pendientes, sin el motivo.
+          syncFailureSite.current = local;
+          setSyncFailure(`La API rechazó una operación de ${local}: ${queue.blocked}`);
+        }
         if (!write || queue.blocked) break;
         await outbox.markSent(local, write.requestId);
         // Si parte exactamente de lo que el servidor acaba de confirmar sin
@@ -1533,11 +1549,13 @@ export default function Home() {
         const result = await sendPendingWrite(exactBase ? { ...write, baseRevision: serverRevision.current[local] ?? write.baseRevision } : write);
         lastResult = result.kind;
         if (result.kind === "retry") {
+          syncFailureSite.current = local;
           setSyncFailure(`Pendiente de sincronización en ${local}: ${result.message || "sin respuesta de la API"}`);
           setMessage(`La operación quedó pendiente en este equipo. ${result.message || "Se reintentará sola."} No repitas el cobro.`);
           break;
         }
         if (result.kind === "session") {
+          syncFailureSite.current = local;
           setSyncFailure(`Sesión vencida al guardar una operación de ${local}.`);
           setMessage("Tu sesión venció. Volvé a ingresar: las operaciones pendientes siguen guardadas en este equipo y se enviarán.");
           break;
@@ -1547,13 +1565,20 @@ export default function Home() {
           if (write.event.action === "Límites operativos actualizados") {
             setLimitsSaveStatus(`No se guardaron los cambios: ${result.message}`);
           }
+          syncFailureSite.current = local;
           setSyncFailure(`La API rechazó una operación de ${local}: ${result.message}`);
           setMessage(`No se pudo guardar en ${local}: ${result.message} Las operaciones siguen guardadas en este equipo; avisá a Administración antes de cerrar la sesión.`);
           break;
         }
         await outbox.acknowledge(local, write.requestId);
         if (typeof result.revision === "number") serverRevision.current[local] = result.revision;
-        setSyncFailure("");
+        // Solo el local que falló puede limpiar su aviso: si otro local
+        // confirmaba después, el rechazo de Maure desaparecía de la pantalla y
+        // la cola seguía trabada sin que nadie viera el motivo.
+        if (syncFailureSite.current === local) {
+          syncFailureSite.current = null;
+          setSyncFailure("");
+        }
         lastPersistedSnapshot.current[local] = JSON.stringify(write.state);
         lastAcknowledged.current[local] = { stateJson: lastPersistedSnapshot.current[local], merged: Boolean(result.merged) };
         if (result.merged) reloadAfterDrain.current = true;
@@ -1570,6 +1595,7 @@ export default function Home() {
       }
     } finally {
       drainingSites.current.delete(local);
+      finishDrain();
       setPendingSync(outbox.count());
       // Una operación encolada mientras terminaba este envío no debe esperar al
       // próximo reintento automático.
@@ -1613,7 +1639,7 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, site, testOperatingDate.active, testOperatingDate.site, testOperatingDate.businessDate]);
   useEffect(() => {
-    if (!user || !operationalReady || operationalVersion === 0) return;
+    if (!user || !operationalReady || operationalVersion === 0 || loggingOutRef.current) return;
     const event = operationalEventRef.current || {
       action: "Actualización operativa",
       detail: "Cambios registrados en el sistema.",
@@ -2588,10 +2614,34 @@ export default function Home() {
     cashRemaining = cashControlIsOpen ? counted - (requiresEnvelope ? envelope : 0) : 0,
     cashVariance = cashControlIsOpen ? counted - expected : 0;
   const logout = async () => {
+    // La cola es de quien registró las operaciones: después de cerrar su
+    // sesión nadie más puede enviarlas desde este equipo. En un relevo, la
+    // última venta solía seguir en viaje al tocar «Cambiar usuario»; llegaba
+    // al servidor ya sin sesión (401) y quedaba atrapada en la cola de la
+    // vendedora saliente. Se confirma todo antes de salir.
+    loggingOutRef.current = true;
+    const outbox = await getOutbox();
+    if (outbox && outbox.count() > 0) {
+      setMessage("Enviando operaciones pendientes antes de cambiar de usuario…");
+      await flushPendingWrites().catch(() => undefined);
+      const pending = outbox.count();
+      if (pending > 0 && !window.confirm(`Quedan ${pending} operaciones sin confirmar por el servidor. Si cerrás la sesión, solo se enviarán cuando ${user?.name ?? "este usuario"} vuelva a ingresar en este equipo, y nadie podrá abrir caja en ${site} hasta entonces. ¿Cerrar la sesión igualmente?`)) {
+        loggingOutRef.current = false;
+        setMessage(`No se cerró la sesión: quedan ${pending} operaciones pendientes. Revisá la conexión y usá «Sincronizar pendientes» antes de cambiar de usuario.`);
+        return;
+      }
+    }
     await fetch(`${API_BASE}/auth/logout`, {
       method: "POST",
       credentials: "include",
     }).catch(() => undefined);
+    // Sin esto, quien ingresa a continuación enviaba al entrar un guardado
+    // con la última acción de la sesión anterior («Venta registrada») a su
+    // nombre y veía el ticket de una venta ajena.
+    operationalEventRef.current = null;
+    setOperationalVersion(0);
+    pendingReceiptRef.current = null;
+    setReceiptSale(null);
     setUser(null);
     setPassword("");
     setCurrentPassword("");
@@ -2603,7 +2653,11 @@ export default function Home() {
     if (!user) return;
     const inactivityMs = 6 * 60 * 60 * 1000;
     let timeout = 0;
-    const closeForInactivity = () => {
+    const closeForInactivity = async () => {
+      // Último intento con la sesión vigente: después de salir la cola queda
+      // esperando a que este mismo usuario vuelva a ingresar.
+      loggingOutRef.current = true;
+      await flushPendingWrites().catch(() => undefined);
       void fetch(`${API_BASE}/auth/logout`, {
         method: "POST",
         credentials: "include",
@@ -2617,7 +2671,7 @@ export default function Home() {
     };
     const resetInactivityTimer = () => {
       window.clearTimeout(timeout);
-      timeout = window.setTimeout(closeForInactivity, inactivityMs);
+      timeout = window.setTimeout(() => void closeForInactivity(), inactivityMs);
     };
     const activityEvents: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "scroll"];
     activityEvents.forEach((event) => window.addEventListener(event, resetInactivityTimer, { passive: true }));
@@ -2626,6 +2680,8 @@ export default function Home() {
       window.clearTimeout(timeout);
       activityEvents.forEach((event) => window.removeEventListener(event, resetInactivityTimer));
     };
+  // El temporizador se instala por sesión; flushPendingWrites lee la cola vigente.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
   const changeOwnPassword = async () => {
     if (newPassword !== confirmNewPassword) {
@@ -9895,6 +9951,11 @@ export default function Home() {
           </div>
         </div>
       )}
+      {/* Arriba, Chat y Ayuda en una sola barra centrada: en la esquina
+          derecha tapaban «Cobrar venta» y el resto del panel de cobro. Sin
+          transform en la barra: los paneles abiertos son fixed y un
+          transform los ubicaría relativos a ella. */}
+      <div className="floating-dock no-print fixed inset-x-0 bottom-4 z-50 mx-auto flex w-fit items-center gap-2">
       <AiHelpChat
         key={`${user.role}:${user.name}:${site}`}
         role={user.role}
@@ -9952,16 +10013,17 @@ export default function Home() {
         onSupportCreated={user.role === "administracion" ? () => void loadAdminSecurityData() : undefined}
       />
       {user.role !== "compras" && (
-        <div className="no-print fixed bottom-5 right-40 z-50 max-sm:bottom-20 max-sm:right-5">
+        <div className="relative order-2">
           {chatOpen && (
-            <section role="dialog" aria-modal="false" aria-label="Chat interno de L’ARTISAN" className="absolute bottom-16 right-0 h-[min(680px,calc(100vh-7rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[#183a67]/20 bg-white shadow-2xl max-sm:fixed max-sm:bottom-32 max-sm:left-3 max-sm:right-3 max-sm:h-[min(640px,calc(100vh-9rem))] max-sm:w-auto">
+            <section role="dialog" aria-modal="false" aria-label="Chat interno de L’ARTISAN" className="fixed bottom-20 right-5 z-50 h-[min(680px,calc(100vh-7rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[#183a67]/20 bg-white shadow-2xl max-sm:left-3 max-sm:right-3 max-sm:h-[min(640px,calc(100vh-7rem))] max-sm:w-auto">
               <InternalChatPanel userId={user.id} floating onClose={() => setChatOpen(false)} />
             </section>
           )}
           <ChatUnreadIndicator open={chatOpen} onOpen={() => setChatOpen((value) => !value)} />
         </div>
       )}
-      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-72 z-50 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
+      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="floating-top order-1 rounded-full bg-[#183a67] px-4 py-2.5 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
+      </div>
     </main>
   );
 }
