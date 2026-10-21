@@ -2225,6 +2225,59 @@ if ($method === 'GET' && $route === 'cash/history') {
     json_response(['ok' => true, 'site' => $site, 'sessions' => $sessions]);
 }
 
+// Informe de solo lectura. La venta normalizada determina si está activa;
+// el tipo de promoción se recupera del estado operativo o de su archivo.
+if ($method === 'GET' && $route === 'reports/promotions') {
+    $viewer = require_user($pdo, ['administracion', 'supervisora']);
+    if (!user_can_report($viewer, 'Resumen') && !user_can_report($viewer, 'Promociones')) {
+        json_response(['ok' => false, 'error' => 'No tenés permiso para consultar este informe.'], 403);
+    }
+    $from = (string) ($_GET['from'] ?? '');
+    $to = (string) ($_GET['to'] ?? '');
+    $start = DateTimeImmutable::createFromFormat('!Y-m-d', $from);
+    $end = DateTimeImmutable::createFromFormat('!Y-m-d', $to);
+    if (!$start || !$end || $start->format('Y-m-d') !== $from || $end->format('Y-m-d') !== $to || $end < $start || $start->diff($end)->days > 6) {
+        json_response(['ok' => false, 'error' => 'Elegí un período válido de hasta siete días.'], 422);
+    }
+    $sites = array_values(array_filter(operational_sites(), static fn (string $site): bool => user_can_access_site($viewer, $site)));
+    if (!$sites) json_response(['ok' => true, 'rows' => [], 'unavailable' => 0]);
+    $marks = implode(',', array_fill(0, count($sites), '?'));
+    $query = $pdo->prepare("SELECT id, site FROM lartisan_sales WHERE status = 'activa' AND occurred_at >= ? AND occurred_at < DATE_ADD(?, INTERVAL 1 DAY) AND site IN ($marks) ORDER BY occurred_at, id LIMIT 10001");
+    $query->execute(array_merge([$from, $to], $sites));
+    $sales = $query->fetchAll();
+    if (count($sales) > 10000) json_response(['ok' => false, 'error' => 'Demasiadas ventas para este período; consultá un rango más corto.'], 422);
+    $metadata = [];
+    $states = $pdo->prepare("SELECT site, state_json FROM operation_site_states WHERE site IN ($marks)");
+    $states->execute($sites);
+    foreach ($states->fetchAll() as $stateRow) {
+        $state = json_decode((string) $stateRow['state_json'], true);
+        foreach (($state['sales'] ?? []) as $sale) {
+            if (is_array($sale) && !empty($sale['id'])) $metadata[$stateRow['site']][(string) $sale['id']] = $sale;
+        }
+    }
+    foreach (array_chunk($sales, 500) as $batch) {
+        $ids = array_column($batch, 'id');
+        $idMarks = implode(',', array_fill(0, count($ids), '?'));
+        $archive = $pdo->prepare("SELECT site, item_key, item_json FROM operation_archive WHERE field = 'sales' AND site IN ($marks) AND item_key IN ($idMarks)");
+        $archive->execute(array_merge($sites, $ids));
+        foreach ($archive->fetchAll() as $record) {
+            $sale = json_decode((string) $record['item_json'], true);
+            if (is_array($sale) && !isset($metadata[$record['site']][$record['item_key']])) $metadata[$record['site']][$record['item_key']] = $sale;
+        }
+    }
+    $rows = []; $unavailable = 0;
+    foreach ($sales as $sale) {
+        $detail = $metadata[$sale['site']][$sale['id']] ?? null;
+        if (!is_array($detail)) { $unavailable++; continue; }
+        $promotion = trim((string) ($detail['promotion'] ?? ''));
+        if ($promotion === '') continue;
+        $key = json_encode([$sale['site'], $promotion]);
+        if (!isset($rows[$key])) $rows[$key] = ['site' => $sale['site'], 'promotion' => $promotion, 'count' => 0];
+        $rows[$key]['count']++;
+    }
+    json_response(['ok' => true, 'rows' => array_values($rows), 'unavailable' => $unavailable]);
+}
+
 if ($method === 'GET' && $route === 'admin/report-sales') {
     require_user($pdo, ['administracion']);
     ensure_normalized_operations_schema($pdo);

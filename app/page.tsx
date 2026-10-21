@@ -30,6 +30,7 @@ import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
 import StockOutflows from "./modules/stock/StockOutflows";
 import StockOutflowAlerts from "./modules/stock/StockOutflowAlerts";
+import PromotionReport from "./modules/reports/PromotionReport";
 import { AttendanceReport, PersonnelManager, ScheduleManager } from "./modules/asistencia/ScheduleManager";
 import PersonnelFilesPanel from "./modules/administracion/PersonnelFilesPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
@@ -4936,6 +4937,7 @@ export default function Home() {
               <p className="mt-4 rounded bg-[#eef2f6] p-4 text-sm">
                 El perfil autorizado puede consultar los locales asignados. Estos reportes son de seguimiento; los permisos de Administración permanecen separados.
               </p>
+              {(user.reportPermissions.includes("Resumen") || user.reportPermissions.includes("Promociones")) && <PromotionReport />}
             </>
           ) : tab === "Tareas" ? (
             <>
