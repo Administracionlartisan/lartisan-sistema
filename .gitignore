@@ -62,3 +62,4 @@ next-env.d.ts
 /entregables/
 output/*.tgz
 output/*.tar.gz
+/donweb-api/lartisan-*-config.php
