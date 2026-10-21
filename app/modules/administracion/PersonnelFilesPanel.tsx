@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 type PersonnelFile = { id: string; name: string; username: string; accessRole: string; jobTitle: string | null; site: string | null; status: string; createdAt: string; updatedAt: string };
-const titles: Record<string, string> = { jefe_area: "Jefe de área", cocinero: "Cocinero/a", ayudante_cocina: "Ayudante de cocina" };
+const titles: Record<string, string> = { jefe_area: "Jefe de área", cocinero: "Cocinero/a", ayudante_cocina: "Ayudante de cocina", repositor: "Repositor/a", vendedor: "Vendedor/a", supervisora: "Supervisora", repartidor: "Repartidor/a" };
 
 export default function PersonnelFilesPanel({ apiBase }: { apiBase: string }) {
   const [files, setFiles] = useState<PersonnelFile[]>([]); const [notice, setNotice] = useState("");

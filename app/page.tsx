@@ -30,7 +30,11 @@ import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
 import StockOutflows from "./modules/stock/StockOutflows";
+import StockReceiptHistory from "./modules/stock/StockReceiptHistory";
 import StockOutflowAlerts from "./modules/stock/StockOutflowAlerts";
+import PromotionReport from "./modules/reports/PromotionReport";
+import PromotionManager from "./modules/promotions/PromotionManager";
+import { promotionDiscount } from "./modules/promotions/calculate";
 import { AttendanceReport, PersonnelManager, ScheduleManager } from "./modules/asistencia/ScheduleManager";
 import PersonnelFilesPanel from "./modules/administracion/PersonnelFilesPanel";
 import { CASH_HISTORY_TEMPLATE, parseHistoryCsv, SALES_HISTORY_TEMPLATE } from "./modules/administracion/historyImport";
@@ -97,6 +101,7 @@ const blankLocation = (): LocationConfig => ({
   contactName: "", contactPhone: "", active: true, latitude: null, longitude: null, radiusMeters: 100, maxAccuracyMeters: 75,
 });
 export default function Home() {
+  const [activePromotions, setActivePromotions] = useState<Array<{ id: string; name: string; percentage: number; startsOn: string; endsOn: string; productIds: number[] | null; site: string }>>([]);
   // En producción el portal se determina por el subdominio. El parámetro
   // ?portal=admin o ?portal=ventas permite revisar ambos accesos localmente.
   const portal = (() => {
@@ -128,6 +133,7 @@ export default function Home() {
     [recoverySending, setRecoverySending] = useState(false),
     [site, setSite] = useState("Recoleta"),
     [tab, setTab] = useState("Ventas"),
+    [supervisionView, setSupervisionView] = useState(false),
     [navOpen, setNavOpen] = useState(false),
     [chatOpen, setChatOpen] = useState(false),
     [trainingWelcomeOpen, setTrainingWelcomeOpen] = useState(false),
@@ -244,6 +250,17 @@ export default function Home() {
     [drive, setDrive] = useState("");
   const activeSites = useMemo(() => locations.filter((location) => location.active).map((location) => location.site), [locations]);
   const configuredSites = activeSites.length ? activeSites : SITES;
+  useEffect(() => {
+    if (!user || !site) return;
+    let alive = true;
+    const load = () => fetch(`${API_BASE}/promotions?site=${encodeURIComponent(site)}`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => { if (!response.ok) throw new Error("No se pudieron actualizar promociones"); return response.json() as Promise<{ promotions?: typeof activePromotions }>; })
+      .then((data: { promotions?: typeof activePromotions }) => { if (alive) setActivePromotions((data.promotions ?? []).map((item) => ({ ...item, site }))); })
+      .catch(() => { if (alive) setActivePromotions([]); });
+    void load();
+    const timer = window.setInterval(load, 60000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [user, site]);
   // La fecha simulada nunca se toma de un campo libre ni del reloj del equipo.
   // Sólo se activa si la API la habilitó para Maure y conserva la hora real.
   const operationalNow = useCallback(() => {
@@ -574,8 +591,9 @@ export default function Home() {
       ? rememberedSite
       : allowedSites[0] || next.location || "Recoleta";
     setSite(initialSite);
+    setSupervisionView(next.role === "supervisora");
     setPayment((METHODS[initialSite] || METHODS.Recoleta || ["Efectivo"])[0]);
-    setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : next.role === "personal" ? "Fichaje" : "Ventas");
+    setTab(next.role === "administracion" ? "Administración" : next.role === "compras" ? "MRP" : next.role === "personal" ? "Fichaje" : next.role === "supervisora" ? (next.reportPermissions.length > 0 ? "Reportes" : "Tareas") : "Ventas");
     setMessage("");
     return true;
   };
@@ -1781,7 +1799,10 @@ export default function Home() {
       0,
     );
   const discountableTotal = Math.max(0, total - invitationTotal);
-  const requestedDiscountAmount = discountMode === "amount"
+  const selectedCampaign = isPromotion ? activePromotions.find((item) => item.site === site && `campaign:${item.id}` === promotion) : undefined;
+  const requestedDiscountAmount = selectedCampaign
+    ? promotionDiscount(cart, invitedQuantities, selectedCampaign.productIds, selectedCampaign.percentage)
+    : discountMode === "amount"
     ? Math.round(Math.max(0, fixedDiscount))
     : Math.round((discountableTotal * Math.max(0, discount)) / 100);
   // Un descuento fijo nunca puede superar lo que queda por cobrar. El límite
@@ -2100,7 +2121,8 @@ export default function Home() {
   const canManageSchedules =
     user?.role === "administracion" || (user?.role === "supervisora" && user.reportPermissions.includes("Personal"));
   const canViewSupervisorReports =
-    user?.role === "supervisora" && user.reportPermissions.length > 0;
+    (user?.role === "supervisora" && user.reportPermissions.length > 0) ||
+    (user?.role === "supervisora" && user.actionPermissions.includes("gestionarPromociones"));
   const managesCentralOrders =
     can("pedidos") &&
     site === "Villa Mitre" &&
@@ -2525,6 +2547,7 @@ export default function Home() {
         const end = Math.min(start + hourInterval, 24);
         const matching = sales.filter((sale) => {
           const date = new Date(sale.createdAtISO);
+          if (Number.isNaN(date.getTime())) return false;
           const saleDate = date.toISOString().slice(0, 10);
           return (
             sale.status === "activa" &&
@@ -3733,6 +3756,12 @@ export default function Home() {
     if (!cart.length) return setMessage("Agregá productos a la venta.");
     if (isPromotion && !promotion)
       return setMessage("Seleccioná el tipo de promoción antes de cobrar.");
+    if (isPromotion && promotion.startsWith("campaign:") && !selectedCampaign)
+      return setMessage("La promoción ya no está disponible. Actualizá la selección antes de cobrar.");
+    if (selectedCampaign && (dateKey(operationalNow()) < selectedCampaign.startsOn || dateKey(operationalNow()) > selectedCampaign.endsOn))
+      return setMessage("La promoción está fuera de vigencia.");
+    if (selectedCampaign && discountAmount === 0)
+      return setMessage("No hay productos incluidos en esta promoción para cobrar.");
     const selectedPromotion = SALE_PROMOTIONS.find((item) => item.name === promotion);
     if (selectedPromotion?.method && (splitPayment || payment !== selectedPromotion.method))
       return setMessage(`La promoción ${selectedPromotion.name} requiere cobrar con ${selectedPromotion.method}.`);
@@ -3780,7 +3809,8 @@ export default function Home() {
       items: [...cart],
       gross: total,
       discount: total - net,
-      promotion: isPromotion ? promotion : undefined,
+      promotion: isPromotion ? (selectedCampaign?.name ?? promotion) : undefined,
+      promotionId: selectedCampaign?.id,
       net,
       method: splitPayment ? "Múltiple" : payment,
       invoiceType,
@@ -4720,7 +4750,7 @@ export default function Home() {
           ...(can("mrp") ? ["MRP"] : []),
           ...(can("comprasProduccion") ? ["Compras de producción"] : []),
         ];
-  const tabs = [
+  const allTabs = [
     ...baseTabs,
     ...(managesCentralOrders ? ["Central de pedidos"] : []),
     ...(canManageSchedules ? ["Horarios"] : []),
@@ -4728,6 +4758,9 @@ export default function Home() {
     ...(canManageSchedules ? ["Asistencia"] : []),
     ...(canViewSupervisorReports ? ["Reportes"] : []),
   ];
+  const tabs = user.role === "supervisora" && supervisionView
+    ? allTabs.filter((item) => ["Tareas", "Horarios", "Personal", "Asistencia", "Reportes"].includes(item))
+    : allTabs;
   const adminTaskAlertCount = user.role === "administracion"
     ? aiSupportRequests.filter((request) => request.status === "pendiente").length +
       resetRequests.filter((request) => request.status === "Pendiente").length
@@ -4740,7 +4773,7 @@ export default function Home() {
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
-      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { setSite(local); setTab("Stock"); }} />}
+      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { setSupervisionView(false); setSite(local); setTab("Stock"); }} />}
       {attendanceReminder && user.role !== "administracion" && user.role !== "compras" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="attendance-reminder-title">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -4794,13 +4827,21 @@ export default function Home() {
                 </p>
               ) : (
                 <select
-                  value={site}
+                  value={user.role === "supervisora" && supervisionView ? "__supervision__" : site}
                   onChange={(e) => {
+                    if (user.role === "supervisora" && e.target.value === "__supervision__") {
+                      setSupervisionView(true);
+                      setTab(canViewSupervisorReports ? "Reportes" : "Tareas");
+                      return;
+                    }
+                    setSupervisionView(false);
                     setSite(e.target.value);
                     setPayment((METHODS[e.target.value] || METHODS.Recoleta || ["Efectivo"])[0]);
+                    if (user.role === "supervisora") setTab("Stock");
                   }}
                   className="mt-2 w-full rounded border p-2"
                 >
+                  {user.role === "supervisora" && <option value="__supervision__">Supervisión</option>}
                   {(user.accessAllLocations ? configuredSites : user.locations?.length ? user.locations : configuredSites).map((s) => (
                     <option key={s}>{s}</option>
                   ))}
@@ -4874,6 +4915,7 @@ export default function Home() {
                 h="Reportes de supervisión"
                 p="Seguimiento operativo de ventas, stock, pedidos y cajas por sucursal."
               />
+              <StockReceiptHistory site={site} sites={user.accessAllLocations ? configuredSites : (user.locations ?? []).filter((local) => configuredSites.includes(local))} products={products} canReview={user.role === "supervisora" || user.role === "administracion"} />
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl border bg-white p-5">
                   <p className="text-sm">Ventas de esta sesión</p>
@@ -4924,6 +4966,16 @@ export default function Home() {
               <p className="mt-4 rounded bg-[#eef2f6] p-4 text-sm">
                 El perfil autorizado puede consultar los locales asignados. Estos reportes son de seguimiento; los permisos de Administración permanecen separados.
               </p>
+              {(user.reportPermissions.includes("Resumen") || user.reportPermissions.includes("Promociones")) && <PromotionReport />}
+              {user.role === "supervisora" && user.actionPermissions.includes("gestionarPromociones") && <PromotionManager
+                sites={user.accessAllLocations ? configuredSites : (user.locations ?? []).filter((local) => configuredSites.includes(local))}
+                products={products}
+                save={async (draft) => {
+                  const response = await fetch(`${API_BASE}/promotions`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+                  const result = await response.json() as { ok?: boolean; error?: string };
+                  if (!response.ok || !result.ok) throw new Error(result.error || "No se pudo guardar la promoción.");
+                }}
+              />}
             </>
           ) : tab === "Tareas" ? (
             <>
@@ -5226,6 +5278,7 @@ export default function Home() {
                           className="mt-1 w-full rounded border bg-white p-2 font-normal"
                         >
                           <option value="">Seleccionar promoción…</option>
+                          {activePromotions.filter((item) => item.site === site).map((item) => <option key={item.id} value={`campaign:${item.id}`}>{item.name} · {item.percentage}%</option>)}
                           {SALE_PROMOTIONS.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
                         </select>
                       </label>
@@ -5234,11 +5287,13 @@ export default function Home() {
                       <p className="mt-2 text-xs text-slate-600">
                         {SALE_PROMOTIONS.find((item) => item.name === promotion)?.discount !== undefined
                           ? "El descuento y el medio de pago se aplicaron según la promoción."
-                          : "La promoción queda identificada en la venta. Cargá el descuento solo si corresponde."}
+                          : selectedCampaign
+                            ? "El descuento de la promoción se calcula automáticamente sobre los productos incluidos."
+                            : "La promoción queda identificada en la venta. Cargá el descuento solo si corresponde."}
                       </p>
                     )}
                   </div>
-                  <fieldset className="mt-3">
+                  <fieldset className="mt-3" disabled={Boolean(selectedCampaign)}>
                     <legend className="text-sm font-bold">Descuento</legend>
                     <div className="mt-1 flex gap-4 text-sm font-bold">
                       <label className="flex items-center gap-2"><input type="radio" name="discount-mode" checked={discountMode === "percentage"} onChange={() => setDiscountMode("percentage")} /> Porcentaje</label>
@@ -5504,6 +5559,30 @@ export default function Home() {
                               Ticket
                             </button>
                             </div>
+                            {paymentCorrectionSaleId === sale.id && (() => {
+                              const salePayments = payments.filter((item) => item.saleId === sale.id);
+                              const currentDescription = salePayments.map((item) => `${item.method} ${money.format(item.amount)}`).join(" + ") || sale.method;
+                              return (
+                                <div className="mt-3 rounded border-2 border-[#183a67] bg-[#f7fafc] p-3 text-xs">
+                                  <p className="font-bold">Corregir medio de pago · #{sale.id.slice(0, 8)}</p>
+                                  <p className="mt-1">Total {money.format(sale.net)} · registrado: {currentDescription}</p>
+                                  {salePayments.length > 1 && <p className="mt-1 rounded bg-amber-50 p-2 text-amber-900">Esta venta tuvo pago dividido. Esta corrección reunirá el total en un solo medio; verificá el comprobante antes de confirmar.</p>}
+                                  <label className="mt-2 block font-bold">Medio realmente cobrado
+                                    <select value={paymentCorrectionMethod} onChange={(event) => setPaymentCorrectionMethod(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal">
+                                      {methods.map((method) => <option key={method}>{method}</option>)}
+                                    </select>
+                                  </label>
+                                  <label className="mt-2 block font-bold">Motivo de la corrección
+                                    <input value={paymentCorrectionReason} onChange={(event) => setPaymentCorrectionReason(event.target.value)} placeholder="Ej.: se cobró con tarjeta y se registró efectivo" className="mt-1 w-full rounded border p-2 font-normal" />
+                                  </label>
+                                  <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, el movimiento queda vinculado al turno original. Si ese turno ya cerró, el cierre histórico no se reabre ni se altera.</p>
+                                  <div className="mt-3 flex gap-2">
+                                    <button onClick={() => changeSalePayment(sale, paymentCorrectionMethod)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
+                                    <button onClick={() => setPaymentCorrectionSaleId(null)} className="rounded border px-3 py-2 font-bold">Cancelar</button>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ))
                     ) : (
@@ -5511,33 +5590,6 @@ export default function Home() {
                         No hay ventas de este local que coincidan con la búsqueda.
                       </p>
                     )}
-                    {paymentCorrectionSaleId && (() => {
-                      const sale = sales.find((item) => item.id === paymentCorrectionSaleId);
-                      if (!sale) return null;
-                      const salePayments = payments.filter((item) => item.saleId === sale.id);
-                      const currentDescription = salePayments.map((item) => `${item.method} ${money.format(item.amount)}`).join(" + ") || sale.method;
-                      const isSplit = salePayments.length > 1;
-                      return (
-                        <div className="mt-3 rounded border-2 border-[#183a67] bg-[#f7fafc] p-3 text-xs">
-                          <p className="font-bold">Corregir medio de pago · #{sale.id.slice(0, 8)}</p>
-                          <p className="mt-1">Total {money.format(sale.net)} · registrado: {currentDescription}</p>
-                          {isSplit && <p className="mt-1 rounded bg-amber-50 p-2 text-amber-900">Esta venta tuvo pago dividido. Esta corrección reunirá el total en un solo medio; verificá el comprobante antes de confirmar.</p>}
-                          <label className="mt-2 block font-bold">Medio realmente cobrado
-                            <select value={paymentCorrectionMethod} onChange={(event) => setPaymentCorrectionMethod(event.target.value)} className="mt-1 w-full rounded border p-2 font-normal">
-                              {methods.map((method) => <option key={method}>{method}</option>)}
-                            </select>
-                          </label>
-                          <label className="mt-2 block font-bold">Motivo de la corrección
-                            <input value={paymentCorrectionReason} onChange={(event) => setPaymentCorrectionReason(event.target.value)} placeholder="Ej.: se cobró con tarjeta y se registró efectivo" className="mt-1 w-full rounded border p-2 font-normal" />
-                          </label>
-                          <p className="mt-2 text-slate-600">No se modifica la venta, el total, el stock ni la factura/CAE. Si cambia Efectivo, el movimiento queda vinculado al turno original. Si ese turno ya cerró, el cierre histórico no se reabre ni se altera.</p>
-                          <div className="mt-3 flex gap-2">
-                            <button onClick={() => changeSalePayment(sale, paymentCorrectionMethod)} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Confirmar corrección</button>
-                            <button onClick={() => setPaymentCorrectionSaleId(null)} className="rounded border px-3 py-2 font-bold">Cancelar</button>
-                          </div>
-                        </div>
-                      );
-                    })()}
                   </div>
                 </aside>
               </div>
@@ -5897,6 +5949,7 @@ export default function Home() {
                 p="La venta descuenta una unidad de la presentación vendida."
               />
               {(["vendedora", "supervisora"].includes(user.role)) && <StockOutflows site={site} products={products.filter((product) => product.active !== false)} canRequest={can("egresos")} canApprove={canApproveStockOutflows} pendingSync={pendingSync} refreshStock={loadOperationalData} />}
+              <StockReceiptHistory site={site} products={products} canReview={user.role === "supervisora" || user.role === "administracion"} />
               <p className="mb-4 rounded-xl border border-[#b8c8dd] bg-[#eef2f6] p-3 text-sm text-[#183a67]">
                 <b>Stock ideal:</b> define hasta qué cantidad se propone reponer cada producto. Solo las supervisoras autorizadas por Administración pueden editarlo; el resto de los perfiles lo consulta.
               </p>
@@ -8210,15 +8263,15 @@ export default function Home() {
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
                     <h2 className="font-bold">
-                      Permisos de reportes administrativos
+                      Permisos de reportes y supervisión
                     </h2>
                     <p className="mt-1 text-sm text-slate-500">
-                      Cada administrativo verá únicamente los reportes marcados en
-                      su perfil.
+                      En supervisión, Personal habilita horarios, personal y asistencia;
+                      Resumen habilita los reportes operativos. La aprobación de egresos se asigna por separado en permisos de acciones.
                     </p>
                   </div>
                   <label className="text-sm font-bold">
-                    Buscar administrativo
+                    Buscar usuario
                     <input
                       value={actionPermissionSearch}
                       onChange={(event) => setActionPermissionSearch(event.target.value)}
@@ -8230,7 +8283,7 @@ export default function Home() {
                 {managedUsers
                   .filter((profile) => {
                     const search = actionPermissionSearch.trim().toLocaleLowerCase("es");
-                    return profile.role === "administracion" && (!search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search));
+                    return ["administracion", "supervisora"].includes(profile.role) && (!search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search));
                   })
                   .map((profile) => (
                     <div
@@ -8245,12 +8298,12 @@ export default function Home() {
                         </span>
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {ADMIN_REPORTS.map((report) => {
+                        {ADMIN_REPORTS.filter((report) => profile.role === "administracion" || ["Personal", "Resumen"].includes(report.id)).map((report) => {
                           const checked = profile.reportPermissions.includes(
                             report.id,
                           );
                           const last =
-                            checked && profile.reportPermissions.length === 1;
+                            profile.role === "administracion" && checked && profile.reportPermissions.length === 1;
                           return (
                             <label
                               key={report.id}
@@ -8273,7 +8326,7 @@ export default function Home() {
                                   })
                                 }
                               />
-                              {report.title}
+                              {profile.role === "supervisora" && report.id === "Resumen" ? "Reportes operativos de supervisión" : report.title}
                             </label>
                           );
                         })}
@@ -8333,7 +8386,7 @@ export default function Home() {
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {ACTION_PERMISSIONS.filter((permission) =>
-                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock", "aprobarEgresoMercaderia"].includes(permission.id) || profile.role === "supervisora",
+                          !["gestionarStockIdeal", "autoaprobarStockPropio", "aprobarAjustesStock", "aprobarEgresoMercaderia", "gestionarPromociones"].includes(permission.id) || profile.role === "supervisora",
                         ).map((permission) => (
                           <label
                             key={permission.id}

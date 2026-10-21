@@ -13,6 +13,9 @@ require __DIR__ . '/internal_chat.php';
 require __DIR__ . '/training.php';
 require __DIR__ . '/attendance_presence.php';
 require __DIR__ . '/stock_outflow.php';
+require __DIR__ . '/stock_receipts.php';
+require __DIR__ . '/promotions.php';
+require __DIR__ . '/promotion_calculation.php';
 
 configure_cors($config);
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
@@ -53,12 +56,51 @@ foreach ([
     'internal_chat' => static fn () => ensure_internal_chat_schema($pdo),
     'training' => static fn () => ensure_training_schema($pdo),
     'attendance_presence' => static fn () => ensure_attendance_presence_schema($pdo),
+    'promotions' => static fn () => ensure_promotions_schema($pdo),
 ] as $schema => $ensure) {
     try {
         $ensure();
     } catch (Throwable $error) {
         system_error($pdo, 'deferred ' . $schema . ' schema update', $error->getMessage());
     }
+}
+
+if ($route === 'stock/receipts') {
+    $receiptUser = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    if ($method === 'POST' && !empty($receiptUser['must_change_password'])) json_response(['ok' => false, 'error' => 'Cambiá tu contraseña temporal antes de operar.'], 403);
+    $body = $method === 'POST' ? request_body() : [];
+    $receiptSite = trim((string) ($body['site'] ?? $_GET['site'] ?? ''));
+    if (!user_can_access_site($receiptUser, $receiptSite)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+    ensure_stock_receipt_review_schema($pdo);
+    if ($method === 'GET') {
+        $offset = min(1000000, max(0, (int) ($_GET['offset'] ?? 0)));
+        $query = $pdo->prepare("SELECT m.id, m.site, m.product_id, m.movement_type, m.quantity, m.remito, m.detail, m.occurred_at, m.created_by, r.status AS review_status, r.observation, r.reviewer_name, r.reviewed_at FROM lartisan_stock_movements m LEFT JOIN stock_receipt_review_events r ON r.id = (SELECT MAX(e.id) FROM stock_receipt_review_events e WHERE e.movement_id = m.id AND e.site = m.site) WHERE m.site = ? AND m.movement_type IN ('Ingreso por remito', 'Ingreso manual', 'Recepción de pedido') ORDER BY m.occurred_at DESC, m.id DESC LIMIT 101 OFFSET " . $offset);
+        $query->execute([$receiptSite]);
+        json_response(['ok' => true, 'movements' => $query->fetchAll()]);
+    }
+    if ($method === 'POST') {
+        if (!in_array($receiptUser['role'], ['supervisora', 'administracion'], true)) json_response(['ok' => false, 'error' => 'Solo supervisión puede revisar ingresos.'], 403);
+        $movementId = trim((string) ($body['movementId'] ?? ''));
+        $status = (string) ($body['status'] ?? '');
+        $observation = trim((string) ($body['observation'] ?? ''));
+        if (!in_array($status, ['revisado', 'diferencia'], true) || ($status === 'diferencia' && $observation === '') || mb_strlen($observation) > 500) json_response(['ok' => false, 'error' => 'Indicá un estado válido y una observación para las diferencias.'], 422);
+        $query = $pdo->prepare("SELECT id FROM lartisan_stock_movements WHERE id = ? AND site = ? AND movement_type IN ('Ingreso por remito', 'Ingreso manual', 'Recepción de pedido')");
+        $query->execute([$movementId, $receiptSite]);
+        if (!$query->fetch()) json_response(['ok' => false, 'error' => 'No se encontró el ingreso.'], 404);
+        $pdo->beginTransaction();
+        try {
+            $query = $pdo->prepare('INSERT INTO stock_receipt_review_events (movement_id, site, status, observation, reviewer_id, reviewer_name) VALUES (?, ?, ?, ?, ?, ?)');
+            $query->execute([$movementId, $receiptSite, $status, $observation, (int) $receiptUser['id'], (string) ($receiptUser['full_name'] ?? $receiptUser['username'])]);
+            audit($pdo, (int) $receiptUser['id'], 'stock_receipt_reviewed', $receiptSite . ' · ' . $movementId . ' · ' . $status);
+            $pdo->commit();
+            json_response(['ok' => true]);
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            system_error($pdo, 'stock receipt review failed', $error->getMessage(), $receiptSite);
+            json_response(['ok' => false, 'error' => 'No se pudo guardar la revisión.'], 500);
+        }
+    }
+    json_response(['ok' => false, 'error' => 'Método no permitido.'], 405);
 }
 
 // Las solicitudes se guardan fuera del snapshot operativo y se deciden bajo
@@ -455,8 +497,8 @@ if ($method === 'GET' && $route === 'attendance/schedule-users') {
 if ($method === 'GET' && $route === 'attendance/personnel') {
     $manager = require_user($pdo); ensure_attendance_presence_schema($pdo);
     if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager, 'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para gestionar personal.'],403);
-    $rows = $pdo->query("SELECT id,full_name,username,role,job_title,assigned_locations,assigned_location,active FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
-    $out=[]; foreach($rows as $row){ if (($manager['role'] ?? '') !== 'administracion' && !array_intersect(assigned_locations($manager), assigned_locations($row))) continue; $out[]=['id'=>(int)$row['id'],'name'=>$row['full_name'],'username'=>$row['username'],'role'=>$row['role'],'jobTitle'=>$row['job_title'],'sites'=>assigned_locations($row)]; }
+    $rows = $pdo->query("SELECT id,full_name,username,role,job_title,assigned_locations,assigned_location,access_all_locations,active FROM users WHERE active=1 ORDER BY full_name")->fetchAll();
+    $out=[]; foreach($rows as $row){ $locations=array_values(array_filter(operational_sites(),static fn(string $site): bool => (($manager['role'] ?? '') === 'administracion' || user_can_access_site($manager,$site)) && user_can_access_site($row,$site))); if (!$locations) continue; $out[]=['id'=>(int)$row['id'],'name'=>$row['full_name'],'username'=>$row['username'],'role'=>$row['role'],'jobTitle'=>$row['job_title'],'sites'=>$locations]; }
     json_response(['ok'=>true,'personnel'=>$out]);
 }
 
@@ -464,7 +506,7 @@ if ($method === 'POST' && $route === 'attendance/personnel') {
     $manager = require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
     if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager, 'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para dar de alta personal.'],403);
     $name=trim((string)($body['fullName']??'')); $username=mb_strtolower(trim((string)($body['username']??'')),'UTF-8'); $password=(string)($body['temporaryPassword']??''); $title=(string)($body['jobTitle']??''); $site=trim((string)($body['site']??''));
-    $titles=['jefe_area','cocinero','ayudante_cocina'];
+    $titles=['jefe_area','cocinero','ayudante_cocina','repositor','vendedor','supervisora','repartidor'];
     if ($name==='' || !valid_username($username) || !valid_password($password) || !in_array($title,$titles,true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Revisá nombre, usuario, contraseña, cargo y local.'],422);
     if (($manager['role'] ?? '') !== 'administracion' && !user_can_access_site($manager,$site)) json_response(['ok'=>false,'error'=>'No podés dar de alta personal para ese local.'],403);
     ensure_personnel_files_schema($pdo);
@@ -482,6 +524,27 @@ if ($method === 'POST' && $route === 'attendance/personnel') {
         throw $e;
     }
     audit($pdo,(int)$manager['id'],'attendance_personnel_created','user_id='.$id.';file_id='.$fileId.';site='.$site.';title='.$title); json_response(['ok'=>true,'id'=>$id,'personnelFileId'=>$fileId],201);
+}
+
+// Vincular un cargo a una cuenta existente no cambia su rol ni sus permisos.
+if ($method === 'POST' && $route === 'attendance/personnel/job-title') {
+    $manager=require_user($pdo); ensure_attendance_presence_schema($pdo); $body=request_body();
+    if (($manager['role'] ?? '') !== 'administracion' && (($manager['role'] ?? '') !== 'supervisora' || !user_can_report($manager,'Personal'))) json_response(['ok'=>false,'error'=>'No tenés permiso para gestionar personal.'],403);
+    $id=(int)($body['employeeUserId']??0); $title=(string)($body['jobTitle']??''); $site=trim((string)($body['site']??''));
+    if ($id<=0 || !in_array($title,['jefe_area','cocinero','ayudante_cocina','repositor','vendedor','supervisora','repartidor'],true) || !in_array($site,operational_sites(),true)) json_response(['ok'=>false,'error'=>'Elegí una persona, cargo y local válidos.'],422);
+    ensure_personnel_files_schema($pdo);
+    try {
+        $pdo->beginTransaction();
+        $stmt=$pdo->prepare('SELECT id,role,active,assigned_location,assigned_locations,access_all_locations FROM users WHERE id=? FOR UPDATE'); $stmt->execute([$id]); $employee=$stmt->fetch();
+        if (!$employee || !(bool)$employee['active']) { $pdo->rollBack(); json_response(['ok'=>false,'error'=>'Usuario no disponible.'],404); }
+        if (!user_can_access_site($employee,$site) || (($manager['role'] ?? '') !== 'administracion' && (!user_can_access_site($manager,$site) || in_array($employee['role'],['administracion','compras'],true)))) { $pdo->rollBack(); json_response(['ok'=>false,'error'=>'No podés asignar ese local a esta persona.'],403); }
+        $pdo->prepare('UPDATE users SET job_title=? WHERE id=?')->execute([$title,$id]);
+        $fileId=bin2hex(random_bytes(16));
+        $pdo->prepare("INSERT INTO lartisan_personnel_files (id,employee_user_id,job_title,assigned_site,status,created_by) VALUES (?,?,?,?, 'activo',?) ON DUPLICATE KEY UPDATE job_title=VALUES(job_title), assigned_site=VALUES(assigned_site)")->execute([$fileId,$id,$title,$site,(int)$manager['id']]);
+        audit($pdo,(int)$manager['id'],'attendance_personnel_title_updated','user_id='.$id.';site='.$site.';title='.$title);
+        $pdo->commit();
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+    json_response(['ok'=>true]);
 }
 
 if ($method === 'GET' && $route === 'admin/personnel-files') {
@@ -551,6 +614,40 @@ if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
     if ($sessionUser && !empty($sessionUser['must_change_password'])) {
         json_response(['ok' => false, 'error' => 'Primero debés cambiar la contraseña temporal.'], 403);
     }
+}
+
+if ($route === 'promotions' && in_array($method, ['GET', 'POST'], true)) {
+    $promotionUser = require_user($pdo, ['vendedora', 'supervisora', 'administracion']);
+    ensure_promotions_schema($pdo);
+    if ($method === 'POST') {
+        if (($promotionUser['role'] ?? '') !== 'administracion' && (($promotionUser['role'] ?? '') !== 'supervisora' || !user_can_action($promotionUser, 'gestionarPromociones'))) {
+            json_response(['ok' => false, 'error' => 'No tenés permiso para gestionar promociones.'], 403);
+        }
+        try { $draft = validate_promotion_draft(request_body()); }
+        catch (InvalidArgumentException $e) { json_response(['ok' => false, 'error' => $e->getMessage()], 422); }
+        foreach ($draft['sites'] as $promotionSite) {
+            if (!user_can_access_site($promotionUser, $promotionSite)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+        }
+        if ($draft['productIds'] !== null) {
+            $prices = catalog_price_lists($pdo);
+            foreach ($draft['productIds'] as $id) if (!isset($prices[$id])) json_response(['ok' => false, 'error' => 'Hay productos fuera del catálogo.'], 422);
+        }
+        $id = sprintf('%s-%s-4%s-%s%s-%s', bin2hex(random_bytes(4)), bin2hex(random_bytes(2)), substr(bin2hex(random_bytes(2)), 1), dechex(random_int(8, 11)), substr(bin2hex(random_bytes(2)), 1), bin2hex(random_bytes(6)));
+        $stmt = $pdo->prepare('INSERT INTO lartisan_promotions (id, name, percentage, starts_on, ends_on, sites_json, product_ids_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([$id, $draft['name'], $draft['percentage'], $draft['startsOn'], $draft['endsOn'], json_encode($draft['sites'], JSON_UNESCAPED_UNICODE), $draft['productIds'] === null ? null : json_encode($draft['productIds']), (int) $promotionUser['id'], date('Y-m-d H:i:s')]);
+        audit($pdo, (int) $promotionUser['id'], 'promotion_created', $id);
+        json_response(['ok' => true, 'id' => $id]);
+    }
+    $site = trim((string) ($_GET['site'] ?? ''));
+    if ($site === '' || !user_can_access_site($promotionUser, $site)) json_response(['ok' => false, 'error' => 'Local no autorizado.'], 403);
+    $rows = $pdo->query('SELECT id, name, percentage, starts_on, ends_on, sites_json, product_ids_json, disabled_at FROM lartisan_promotions ORDER BY created_at DESC')->fetchAll();
+    $result = [];
+    foreach ($rows as $row) {
+        $sites = json_decode((string) $row['sites_json'], true);
+        if (!is_array($sites) || !in_array($site, $sites, true) || $row['disabled_at'] !== null || date('Y-m-d') < $row['starts_on'] || date('Y-m-d') > $row['ends_on']) continue;
+        $result[] = ['id' => $row['id'], 'name' => $row['name'], 'percentage' => (float) $row['percentage'], 'startsOn' => $row['starts_on'], 'endsOn' => $row['ends_on'], 'productIds' => $row['product_ids_json'] === null ? null : json_decode((string) $row['product_ids_json'], true)];
+    }
+    json_response(['ok' => true, 'promotions' => $result]);
 }
 
 if ($method === 'GET' && $route === 'admin/arca/status') {
@@ -1978,6 +2075,13 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             $invoiceFindings = [];
         }
         $untrimmedState = $state;
+        // No confirmar una campaña alterada: la transacción se revierte y el
+        // equipo conserva la operación para conciliación, sin repetir el cobro.
+        $syncStage = 'validar_promocion';
+        $promotionFindings = promotion_sale_findings($pdo, $previousState, $untrimmedState, $site);
+        if ($promotionFindings) {
+            throw new OperationalSyncRejected('No se pudo validar la promoción de la venta.');
+        }
         $syncStage = 'recortar';
         [$state] = compact_operational_state($untrimmedState, $config);
         $syncStage = 'archivar_recorte';
@@ -2202,6 +2306,59 @@ if ($method === 'GET' && $route === 'cash/history') {
         'envelopeAmount' => $row['envelope_amount'] === null ? null : (float) $row['envelope_amount'],
     ], $statement->fetchAll());
     json_response(['ok' => true, 'site' => $site, 'sessions' => $sessions]);
+}
+
+// Informe de solo lectura. La venta normalizada determina si está activa;
+// el tipo de promoción se recupera del estado operativo o de su archivo.
+if ($method === 'GET' && $route === 'reports/promotions') {
+    $viewer = require_user($pdo, ['administracion', 'supervisora']);
+    if (!user_can_report($viewer, 'Resumen') && !user_can_report($viewer, 'Promociones')) {
+        json_response(['ok' => false, 'error' => 'No tenés permiso para consultar este informe.'], 403);
+    }
+    $from = (string) ($_GET['from'] ?? '');
+    $to = (string) ($_GET['to'] ?? '');
+    $start = DateTimeImmutable::createFromFormat('!Y-m-d', $from);
+    $end = DateTimeImmutable::createFromFormat('!Y-m-d', $to);
+    if (!$start || !$end || $start->format('Y-m-d') !== $from || $end->format('Y-m-d') !== $to || $end < $start || $start->diff($end)->days > 6) {
+        json_response(['ok' => false, 'error' => 'Elegí un período válido de hasta siete días.'], 422);
+    }
+    $sites = array_values(array_filter(operational_sites(), static fn (string $site): bool => user_can_access_site($viewer, $site)));
+    if (!$sites) json_response(['ok' => true, 'rows' => [], 'unavailable' => 0]);
+    $marks = implode(',', array_fill(0, count($sites), '?'));
+    $query = $pdo->prepare("SELECT id, site FROM lartisan_sales WHERE status = 'activa' AND occurred_at >= ? AND occurred_at < DATE_ADD(?, INTERVAL 1 DAY) AND site IN ($marks) ORDER BY occurred_at, id LIMIT 10001");
+    $query->execute(array_merge([$from, $to], $sites));
+    $sales = $query->fetchAll();
+    if (count($sales) > 10000) json_response(['ok' => false, 'error' => 'Demasiadas ventas para este período; consultá un rango más corto.'], 422);
+    $metadata = [];
+    $states = $pdo->prepare("SELECT site, state_json FROM operation_site_states WHERE site IN ($marks)");
+    $states->execute($sites);
+    foreach ($states->fetchAll() as $stateRow) {
+        $state = json_decode((string) $stateRow['state_json'], true);
+        foreach (($state['sales'] ?? []) as $sale) {
+            if (is_array($sale) && !empty($sale['id'])) $metadata[$stateRow['site']][(string) $sale['id']] = $sale;
+        }
+    }
+    foreach (array_chunk($sales, 500) as $batch) {
+        $ids = array_column($batch, 'id');
+        $idMarks = implode(',', array_fill(0, count($ids), '?'));
+        $archive = $pdo->prepare("SELECT site, item_key, item_json FROM operation_archive WHERE field = 'sales' AND site IN ($marks) AND item_key IN ($idMarks)");
+        $archive->execute(array_merge($sites, $ids));
+        foreach ($archive->fetchAll() as $record) {
+            $sale = json_decode((string) $record['item_json'], true);
+            if (is_array($sale) && !isset($metadata[$record['site']][$record['item_key']])) $metadata[$record['site']][$record['item_key']] = $sale;
+        }
+    }
+    $rows = []; $unavailable = 0;
+    foreach ($sales as $sale) {
+        $detail = $metadata[$sale['site']][$sale['id']] ?? null;
+        if (!is_array($detail)) { $unavailable++; continue; }
+        $promotion = trim((string) ($detail['promotion'] ?? ''));
+        if ($promotion === '') continue;
+        $key = json_encode([$sale['site'], $promotion]);
+        if (!isset($rows[$key])) $rows[$key] = ['site' => $sale['site'], 'promotion' => $promotion, 'count' => 0];
+        $rows[$key]['count']++;
+    }
+    json_response(['ok' => true, 'rows' => array_values($rows), 'unavailable' => $unavailable]);
 }
 
 if ($method === 'GET' && $route === 'admin/report-sales') {
@@ -2440,7 +2597,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'gestionarPromociones', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
     // Si la edición no trae permisos, se conservan tal cual. NULL significa "los
     // del cargo": convertirlo en [] al bloquear o cambiar de local dejaba al
     // usuario sin ningún permiso (por ejemplo, sin poder cobrar).
