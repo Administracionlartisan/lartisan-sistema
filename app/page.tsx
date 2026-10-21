@@ -8209,15 +8209,15 @@ export default function Home() {
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
                     <h2 className="font-bold">
-                      Permisos de reportes administrativos
+                      Permisos de reportes y supervisión
                     </h2>
                     <p className="mt-1 text-sm text-slate-500">
-                      Cada administrativo verá únicamente los reportes marcados en
-                      su perfil.
+                      En supervisión, Personal habilita horarios, personal y asistencia;
+                      Resumen habilita los reportes operativos. La aprobación de egresos se asigna por separado en permisos de acciones.
                     </p>
                   </div>
                   <label className="text-sm font-bold">
-                    Buscar administrativo
+                    Buscar usuario
                     <input
                       value={actionPermissionSearch}
                       onChange={(event) => setActionPermissionSearch(event.target.value)}
@@ -8229,7 +8229,7 @@ export default function Home() {
                 {managedUsers
                   .filter((profile) => {
                     const search = actionPermissionSearch.trim().toLocaleLowerCase("es");
-                    return profile.role === "administracion" && (!search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search));
+                    return ["administracion", "supervisora"].includes(profile.role) && (!search || `${profile.name} ${profile.username}`.toLocaleLowerCase("es").includes(search));
                   })
                   .map((profile) => (
                     <div
@@ -8244,12 +8244,12 @@ export default function Home() {
                         </span>
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {ADMIN_REPORTS.map((report) => {
+                        {ADMIN_REPORTS.filter((report) => profile.role === "administracion" || ["Personal", "Resumen"].includes(report.id)).map((report) => {
                           const checked = profile.reportPermissions.includes(
                             report.id,
                           );
                           const last =
-                            checked && profile.reportPermissions.length === 1;
+                            profile.role === "administracion" && checked && profile.reportPermissions.length === 1;
                           return (
                             <label
                               key={report.id}
@@ -8272,7 +8272,7 @@ export default function Home() {
                                   })
                                 }
                               />
-                              {report.title}
+                              {profile.role === "supervisora" && report.id === "Resumen" ? "Reportes operativos de supervisión" : report.title}
                             </label>
                           );
                         })}

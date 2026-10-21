@@ -30,3 +30,11 @@ test("editing a user without permissions keeps the stored ones (NULL = role defa
   assert.match(api, /\$actionPermissionsValue = array_key_exists\('actionPermissions', \$body\) \? json_encode\(\$actionPermissions, JSON_UNESCAPED_UNICODE\) : \$existing\['action_permissions'\];/);
   assert.match(api, /\$reportPermissionsValue = array_key_exists\('reportPermissions', \$body\)/);
 });
+
+test("administration can grant and revoke supervisor personnel and overview permissions", () => {
+  assert.match(source, /\["administracion", "supervisora"\]\.includes\(profile\.role\)/);
+  assert.match(source, /\["Personal", "Resumen"\]\.includes\(report\.id\)/);
+  assert.match(source, /profile\.role === "administracion" && checked && profile\.reportPermissions\.length === 1/);
+  assert.match(source, /user\?\.role === "supervisora" && user\.reportPermissions\.includes\("Personal"\)/);
+  assert.match(source, /user\?\.role === "supervisora" && user\.reportPermissions\.length > 0/);
+});
