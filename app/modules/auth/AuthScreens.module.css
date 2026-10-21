@@ -1,8 +1,8 @@
 .screen { min-height: 100vh; display: grid; place-items: center; padding: 1.25rem; color: #183a67; background: radial-gradient(circle at 85% 10%, rgb(222 182 120 / .2), transparent 25rem), linear-gradient(135deg, #fbf8f2, #eef3fa); }
 .card { width: 100%; max-width: 28rem; padding: 1.9rem; border: 1px solid rgb(19 56 98 / .16); border-radius: 1.25rem; background: rgb(255 253 248 / .94); box-shadow: 0 22px 46px rgb(17 48 82 / .13), 0 3px 8px rgb(17 48 82 / .06); backdrop-filter: blur(14px); }
 .loading { padding: 1rem 1.25rem; border: 1px solid #d9d4c9; border-radius: .75rem; background: white; font-weight: 700; box-shadow: 0 1px 3px rgb(0 0 0 / .1); }
-.brand { font-family: serif; font-size: 1.875rem; font-weight: 700; letter-spacing: .15em; }
-.eyebrow { margin-top: .5rem; color: #ec3a35; font-size: .875rem; font-weight: 700; }
+.brand { display: block; width: min(13rem, 70%); height: auto; color: #183a67; }
+.eyebrow { margin-top: 1rem; color: #ec3a35; font-size: .875rem; font-weight: 700; }
 .title { margin-top: 1.5rem; font-size: 1.5rem; font-weight: 700; }
 .description { margin-top: .5rem; color: #475569; font-size: .875rem; }
 .label { display: block; margin-top: 1rem; font-size: .875rem; font-weight: 700; }
