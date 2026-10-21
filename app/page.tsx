@@ -21,6 +21,7 @@ import { AccessScreen, ForcePasswordChangeScreen, SecureLoading } from "./module
 import MrpPanel from "./modules/administracion/MrpPanel";
 import CatalogEditor from "./modules/administracion/CatalogEditor";
 import SystemErrorLog from "./modules/administracion/SystemErrorLog";
+import BrandLogo from "./components/BrandLogo";
 import { useCatalog } from "./modules/config/useCatalog";
 import { addConfirmedThirdPartyProducts, findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
@@ -4797,11 +4798,9 @@ export default function Home() {
         </div>
       )}
       <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b bg-[#fffdf8] px-4 py-3 sm:px-5">
-        <b className="font-serif text-xl tracking-[.15em] sm:text-2xl" aria-label="L'ARTISAN sistema interno">
-          L&apos;ARTISAN
-        </b>
+        <BrandLogo className="h-6 w-auto shrink-0 text-[#183a67] sm:h-7" title="L'ARTISAN sistema interno" />
         <div className="flex items-center gap-3 text-sm sm:text-right">
-          <span className={`rounded-full px-2 py-1 text-xs font-bold ${connectionMode === "En línea" ? "bg-[#eef5ef] text-green-800" : "bg-[#fff5d8] text-[#9c302a]"}`} title={connectionMode === "En línea" ? "Las operaciones se guardan en el sistema" : "Las operaciones quedan pendientes hasta recuperar conexión"}>
+          <span className={`whitespace-nowrap rounded-full px-2 py-1 text-xs font-bold ${connectionMode === "En línea" ? "bg-[#eef5ef] text-green-800" : "bg-[#fff5d8] text-[#9c302a]"}`} title={connectionMode === "En línea" ? "Las operaciones se guardan en el sistema" : "Las operaciones quedan pendientes hasta recuperar conexión"}>
             {connectionMode === "En línea" ? "● En línea" : "● Contingencia"}
           </span>
           <button onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen} aria-controls="menu-principal" className="rounded border px-3 py-2 font-bold lg:hidden">Menú</button>
@@ -4813,7 +4812,9 @@ export default function Home() {
           </div>
         </div>
       </header>
-      <div className="grid lg:grid-cols-[230px_1fr]">
+      {/* minmax(0, 1fr): la columna de contenido no crece con una tabla o formulario
+          ancho; ese contenido se desplaza dentro de su propio recuadro. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[230px_minmax(0,1fr)]">
         <aside id="menu-principal" className={`${navOpen ? "block" : "hidden"} border-b bg-[#fffdf8] p-4 lg:block lg:min-h-[calc(100vh-65px)] lg:border-r`}>
           {!(["administracion", "compras"] as Role[]).includes(user.role) && (
             <>
@@ -4876,7 +4877,7 @@ export default function Home() {
             ))}
           </nav>
         </aside>
-        <section className="p-4 sm:p-5 md:p-8">
+        <section className="min-w-0 p-4 sm:p-5 md:p-8">
           {trainingWelcomeOpen && user.role === "vendedora" && <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="Bienvenida a capacitación"><div className="mx-auto max-w-6xl rounded-3xl bg-[#f7f3eb] p-5 shadow-2xl"><SalesTrainingPanel role={user.role} onClose={() => setTrainingWelcomeOpen(false)} /></div></div>}
           {(!catalog.ready || catalog.error) && <div role="status" className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
             {catalog.error ? `Catálogo: ${catalog.error}` : "Cargando catálogo central…"}
@@ -9960,7 +9961,7 @@ export default function Home() {
           <ChatUnreadIndicator open={chatOpen} onOpen={() => setChatOpen((value) => !value)} />
         </div>
       )}
-      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-72 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
+      <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="no-print fixed bottom-5 right-72 z-50 rounded-full bg-[#183a67] px-4 py-3 text-sm font-bold text-white shadow-lg" aria-label="Volver al inicio" title="Volver al inicio">↑ Arriba</button>
     </main>
   );
 }

@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
+import BrandLogo from "../../components/BrandLogo";
 import styles from "./AuthScreens.module.css";
 
 export function SecureLoading() {
@@ -38,7 +39,7 @@ export function AccessScreen(props: AccessScreenProps) {
   return (
     <main className={styles.screen}>
       <section className={styles.card}>
-        <p className={styles.brand}>L&apos;ARTISAN</p>
+        <BrandLogo className={styles.brand} tagline />
         <p className={styles.eyebrow}>{portal === "admin" ? "ADMINISTRACIÓN CENTRAL" : "VENTAS Y OPERACIÓN DE LOCALES"}</p>
         <h1 className={styles.title}>{portal === "admin" ? "Acceso administrativo" : "Ingresar"}</h1>
         <label className={`${styles.label} ${styles.firstLabel}`}>{portal === "admin" ? "Usuario o correo laboral" : "Usuario"}</label>
@@ -86,7 +87,7 @@ export function ForcePasswordChangeScreen({ currentPassword, setCurrentPassword,
   return (
     <main className={styles.screen}>
       <section className={styles.card}>
-        <p className={styles.brand}>L&apos;ARTISAN</p>
+        <BrandLogo className={styles.brand} tagline />
         <p className={styles.eyebrow}>SEGURIDAD</p>
         <h1 className={styles.title}>Creá tu contraseña personal</h1>
         <p className={styles.description}>La clave provisoria debe reemplazarse antes de utilizar el sistema.</p>
