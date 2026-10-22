@@ -4839,9 +4839,10 @@ export default function Home() {
     ...(canManageSchedules ? ["Personal"] : []),
     ...(canManageSchedules ? ["Asistencia"] : []),
     ...(canViewSupervisorReports ? ["Reportes"] : []),
+    ...(user.role === "supervisora" && canApproveStockOutflows ? ["Solicitudes"] : []),
   ];
   const tabs = user.role === "supervisora" && supervisionView
-    ? allTabs.filter((item) => ["Tareas", "Horarios", "Personal", "Asistencia", "Reportes"].includes(item))
+    ? allTabs.filter((item) => ["Tareas", "Horarios", "Personal", "Asistencia", "Reportes", "Solicitudes"].includes(item))
     : allTabs;
   const adminTaskAlertCount = user.role === "administracion"
     ? aiSupportRequests.filter((request) => request.status === "pendiente").length +
@@ -4855,7 +4856,7 @@ export default function Home() {
       : ADMIN_REPORTS;
   return (
     <main className="min-h-screen bg-[#f7f3eb] text-[#183a67]">
-      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { setSupervisionView(false); setSite(local); setTab("Stock"); }} />}
+      {canApproveStockOutflows && <StockOutflowAlerts onOpen={(local) => { if (user.role === "supervisora") { setSupervisionView(true); setTab("Solicitudes"); } else { setSupervisionView(false); setSite(local); setTab("Stock"); } }} />}
       {attendanceReminder && user.role !== "administracion" && user.role !== "compras" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="attendance-reminder-title">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -4969,7 +4970,14 @@ export default function Home() {
             <b>Atención de sincronización.</b> {syncFailure} Las operaciones siguen guardadas en este equipo. No repitas el cobro; usá “Sincronizar pendientes” desde Tareas tras corregir la causa.
           </div>}
           {message && <div role="status" aria-live="polite" className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-[#b9d8c0] bg-[#eef5ef] p-3 text-sm font-semibold shadow-sm"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="shrink-0 underline">Cerrar</button></div>}
-          {tab === "Capacitación" ? (
+          {tab === "Solicitudes" && user.role === "supervisora" && canApproveStockOutflows ? (
+            <>
+              <Heading k="SUPERVISIÓN" h="Solicitudes" p="Revisá y resolvé las solicitudes de egreso de los locales asignados." />
+              {(user.accessAllLocations ? configuredSites : (user.locations ?? []).filter((local) => configuredSites.includes(local))).map((local) => (
+                <StockOutflows key={local} site={local} products={products.filter((product) => product.active !== false)} canRequest={false} canApprove pendingSync={pendingSync} refreshStock={loadOperationalData} />
+              ))}
+            </>
+          ) : tab === "Capacitación" ? (
             <SalesTrainingPanel role={user.role} admin={user.role === "administracion"} />
           ) : tab === "Historial de ventas" ? (
             <>

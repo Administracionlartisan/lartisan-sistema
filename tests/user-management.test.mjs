@@ -39,10 +39,12 @@ test("administration can grant and revoke supervisor personnel and overview perm
   assert.match(source, /user\?\.role === "supervisora" && user\.reportPermissions\.length > 0/);
 });
 
-test("supervision view keeps the operational site real and opens an outflow at its branch", () => {
+test("supervision keeps the operational site real and opens a central requests view", () => {
   assert.match(source, /setSupervisionView\(next\.role === "supervisora"\)/);
   assert.match(source, /value="__supervision__">Supervisión<\/option>/);
   assert.match(source, /setSupervisionView\(false\); setSite\(local\); setTab\("Stock"\)/);
   assert.doesNotMatch(source, /setSite\("__supervision__"\)/);
-  assert.match(source, /\["Tareas", "Horarios", "Personal", "Asistencia", "Reportes"\]\.includes\(item\)/);
+  assert.match(source, /\["Tareas", "Horarios", "Personal", "Asistencia", "Reportes", "Solicitudes"\]\.includes\(item\)/);
+  assert.match(source, /setSupervisionView\(true\); setTab\("Solicitudes"\)/);
+  assert.match(source, /key=\{local\} site=\{local\}.*canRequest=\{false\} canApprove/);
 });
