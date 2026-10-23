@@ -808,11 +808,17 @@ if ($method === 'POST' && $route === 'fiscal/sale-document/issue') {
         if (!preg_match('/^[a-f0-9-]{36}$/i', $saleReference)) {
             throw new InvalidArgumentException('La referencia de venta es inválida.');
         }
-        $saleQuery = $pdo->prepare('SELECT site FROM lartisan_sales WHERE id=? LIMIT 1');
+        $saleQuery = $pdo->prepare('SELECT site, invoice_type, customer_name, customer_document_number, customer_address FROM lartisan_sales WHERE id=? LIMIT 1');
         $saleQuery->execute([$saleReference]);
         $sale = $saleQuery->fetch();
         if (!$sale || !user_can_access_site($fiscalUser, (string) $sale['site'])) {
             json_response(['ok' => false, 'error' => 'No tenés acceso a la venta indicada.'], 403);
+        }
+        // No facturar datos locales que el servidor haya rechazado o aún no haya guardado.
+        foreach (['expectedInvoiceType' => 'invoice_type', 'expectedCustomer' => 'customer_name', 'expectedDocumentNumber' => 'customer_document_number', 'expectedAddress' => 'customer_address'] as $expected => $stored) {
+            if (array_key_exists($expected, $input) && trim((string) $input[$expected]) !== trim((string) ($sale[$stored] ?? ''))) {
+                throw new InvalidArgumentException('Los datos fiscales todavía no coinciden con la venta guardada. Revisá la sincronización; no se solicitó el CAE.');
+            }
         }
         $document = arca_prepare_fiscal_document($pdo, $config, (int) $fiscalUser['id'], ['saleReference' => $saleReference]);
         $issued = arca_issue_fiscal_document($pdo, $config, (int) $fiscalUser['id'], (int) $document['id']);
@@ -2072,6 +2078,8 @@ if ($isLegacyOperationWrite || $isSyncOperationWrite) {
             }
             $invoiceFindings = [];
         }
+        $syncStage = 'validar_cuenta_corriente';
+        $state = enforce_credit_sale_transitions($previousState, $state, $site);
         $untrimmedState = $state;
         // No confirmar una campaña alterada: la transacción se revierte y el
         // equipo conserva la operación para conciliación, sin repetir el cobro.

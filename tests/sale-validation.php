@@ -6,6 +6,9 @@ declare(strict_types=1);
 
 $_SERVER['REQUEST_METHOD'] = 'CLI';
 require __DIR__ . '/../donweb-api/bootstrap.php';
+if (!class_exists('OperationalSyncRejected')) {
+    class OperationalSyncRejected extends RuntimeException {}
+}
 
 $failures = 0;
 function check(string $label, bool $condition): void
@@ -66,6 +69,31 @@ check('pagos que no suman el neto', in_array('pagos_distintos', $rules($run([], 
 $modified = $base;
 $modified['sales'][1]['net'] -= 2000; $modified['sales'][1]['discount'] += 2000;
 check('bajar el neto de una venta ya registrada', in_array('venta_modificada', $rules($run($base, $modified)), true));
+
+$credit = $sale('credito', [$item(1)]);
+$credit['customerId'] = 'cliente-restaurante';
+$credit['customerGroup'] = 'Restaurante';
+$credit['paymentStatus'] = 'Pendiente';
+$creditState = enforce_credit_sale_transitions([], ['sales' => [$credit], 'payments' => []], 'Recoleta');
+check('venta de restaurante a cuenta se acepta sin pago', ($creditState['sales'][0]['paymentStatus'] ?? null) === 'Pendiente');
+try {
+    enforce_credit_sale_transitions([], ['sales' => [$credit], 'payments' => [$pay($credit)]], 'Recoleta');
+    check('rechaza pago junto con venta a cuenta', false);
+} catch (OperationalSyncRejected $expected) {
+    check('rechaza pago junto con venta a cuenta', str_contains($expected->getMessage(), 'no puede registrar un pago'));
+}
+$paidCredit = $credit;
+$paidCredit['paymentStatus'] = 'Pagada';
+$paidCredit['paidAtISO'] = '2026-10-23T12:00:00.000Z';
+$collected = enforce_credit_sale_transitions(['sales' => [$credit], 'payments' => []], ['sales' => [$paidCredit], 'payments' => [$pay($credit, $credit['net'], 'Transferencia')]], 'Recoleta');
+check('cobranza posterior cambia una venta pendiente a pagada', ($collected['sales'][0]['paymentStatus'] ?? null) === 'Pagada');
+try {
+    $invalid = $paidCredit; $invalid['paymentStatus'] = 'Pendiente';
+    enforce_credit_sale_transitions(['sales' => [$paidCredit], 'payments' => [$pay($credit)]], ['sales' => [$invalid], 'payments' => []], 'Recoleta');
+    check('rechaza volver una venta cobrada a pendiente', false);
+} catch (OperationalSyncRejected $expected) {
+    check('rechaza volver una venta cobrada a pendiente', str_contains($expected->getMessage(), 'ya cobrada'));
+}
 
 echo $failures === 0 ? "\nTodas las reglas se cumplen.\n" : "\n$failures reglas fallaron.\n";
 exit($failures === 0 ? 0 : 1);

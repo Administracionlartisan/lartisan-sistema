@@ -989,6 +989,39 @@ function validate_operational_sales(array $previous, array $state, string $site,
 }
 
 /**
+ * Una venta a cuenta no es un cobro incompleto: debe pertenecer a un cliente
+ * comercial identificado y no puede llevar pagos hasta que Villa Mitre
+ * registre la cobranza. El control se hace en el servidor para que una cola
+ * vieja o una edición del navegador no convierta una venta ya cobrada en deuda.
+ */
+function enforce_credit_sale_transitions(array $previous, array $state, string $site): array
+{
+    $beforeSales = operational_items_by_id($previous['sales'] ?? []);
+    $payments = operational_payments_by_sale($state['payments'] ?? []);
+    foreach (is_array($state['sales'] ?? null) ? $state['sales'] : [] as $index => $sale) {
+        if (!is_array($sale) || !is_scalar($sale['id'] ?? null)) continue;
+        $saleId = (string) $sale['id'];
+        $before = $beforeSales[$saleId] ?? null;
+        $pending = ($sale['paymentStatus'] ?? 'Pagada') === 'Pendiente';
+        if (!$pending) {
+            $state['sales'][$index]['paymentStatus'] = 'Pagada';
+            continue;
+        }
+        // Una anulación de una venta aún no cobrada no genera deuda ni pago.
+        if (($sale['status'] ?? 'activa') === 'anulada') continue;
+        if (is_array($before) && ($before['paymentStatus'] ?? 'Pagada') !== 'Pendiente') {
+            throw new OperationalSyncRejected('No se puede convertir una venta ya cobrada en cuenta corriente.');
+        }
+        if (!is_scalar($sale['customerId'] ?? null) || !in_array($sale['customerGroup'] ?? null, ['Restaurante', 'Franquicia'], true)) {
+            throw new OperationalSyncRejected('Una venta a cuenta requiere un cliente de Restaurante o Franquicia seleccionado.');
+        }
+        $amount = array_sum(array_map(static fn (array $payment): float => (float) ($payment['amount'] ?? 0), $payments[$saleId] ?? []));
+        if (abs($amount) > 0.01) throw new OperationalSyncRejected('Una venta a cuenta no puede registrar un pago hasta que se marque como cobrada.');
+    }
+    return $state;
+}
+
+/**
  * El tipo de comprobante de una venta ya registrada solo puede cambiarlo quien
  * puede anular ventas, y nunca si la venta ya tiene un comprobante ARCA emitido
  * o en curso. Un cambio no permitido se descarta (se conserva el anterior) y se

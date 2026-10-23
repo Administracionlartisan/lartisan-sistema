@@ -52,6 +52,8 @@ export type Sale = {
   invoiceType: "Factura B" | "Factura B electrónica" | "Factura B fiscal" | "Factura A" | "Remito interno" | "Ticket";
   customer: string;
   customerId?: string;
+  /** Grupo vigente al momento de vender; no cambia si luego se reclasifica el cliente. */
+  customerGroup?: CustomerGroup;
   customerDocumentType?: "Consumidor final" | "DNI" | "CUIT";
   customerDocumentNumber?: string;
   customerTaxCondition?: string;
@@ -60,6 +62,9 @@ export type Sale = {
   invitedQuantities?: Record<number, number>;
   channel: "Mostrador" | "Online";
   status: "activa" | "anulada";
+  paymentStatus?: "Pagada" | "Pendiente";
+  dueAtISO?: string;
+  paidAtISO?: string;
 };
 
 export type SavedOrder = {
@@ -128,7 +133,8 @@ export type AuditEvent = { id: string; at: string; site: string; action: string;
 export type Payment = { method: string; amount: number; saleId?: string; site?: string; shiftId?: string; createdAtISO?: string };
 /** Cliente persistido con clave documental única: los datos comerciales nunca se
  * deducen por nombre para evitar unir personas distintas. */
-export type CustomerRecord = { id: string; site: string; name: string; documentType: "DNI" | "CUIT" | "Otro"; documentNumber: string; email?: string; phone?: string; address?: string; consentPromotions: boolean; createdAt: string; updatedAt: string; createdBy: string; active: boolean };
+export type CustomerGroup = "Restaurante" | "Franquicia" | "Almacén" | "Sin grupo";
+export type CustomerRecord = { id: string; site: string; name: string; documentType: "DNI" | "CUIT" | "Otro"; documentNumber: string; customerGroup?: CustomerGroup; creditTermDays?: number; email?: string; phone?: string; address?: string; consentPromotions: boolean; createdAt: string; updatedAt: string; createdBy: string; active: boolean };
 export type PriceChange = { id: string; at: string; percentage: number; category: string; effectiveDate: string; beforePrices: Record<number, number>; afterPrices: Record<number, number> };
 export type EmployeeSchedule = { id: string; employee: string; site: string; startsAt: string; endsAt: string; toleranceMinutes: number };
 

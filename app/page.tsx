@@ -26,6 +26,7 @@ import { useCatalog } from "./modules/config/useCatalog";
 import { addConfirmedThirdPartyProducts, findScannedProduct, RETIRED_CATALOG_CODES } from "./modules/config/catalogModel";
 import PurchaseCostsPanel from "./modules/administracion/PurchaseCostsPanel";
 import CustomerPanel from "./modules/clientes/CustomerPanel";
+import { customerGroupOf } from "./modules/clientes/customerGroups";
 import InternalChatPanel from "./modules/chat/InternalChatPanel";
 import ChatUnreadIndicator from "./modules/chat/ChatUnreadIndicator";
 import SalesTrainingPanel from "./modules/capacitacion/SalesTrainingPanel";
@@ -46,7 +47,7 @@ import type {
   ExpenseSyncSnapshot,
   OperationalLimits, OperationalSnapshot, PasswordResetRequest, Payment,
   PriceChange, Product, ReturnTransaction, Role, Sale, SavedOrder,
-  InitialStockLoad, StockAdjustment, StockMovement, StockRequest, SystemHealth, CustomerRecord,
+  InitialStockLoad, StockAdjustment, StockMovement, StockRequest, SystemHealth, CustomerGroup, CustomerRecord,
   PostCloseCancellationAdjustment,
 } from "./modules/shared/types";
 import {
@@ -165,6 +166,7 @@ export default function Home() {
     [customerTaxCondition, setCustomerTaxCondition] = useState(""),
     [customerAddress, setCustomerAddress] = useState(""),
     [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null),
+    [customerGroupFilter, setCustomerGroupFilter] = useState<CustomerGroup | "Todos">("Todos"),
     [customers, setCustomers] = useState<CustomerRecord[]>([]),
     [invitedQuantities, setInvitedQuantities] = useState<Record<number, number>>({}),
     [message, setMessage] = useState(""),
@@ -186,6 +188,7 @@ export default function Home() {
     [fiscalReceipt, setFiscalReceipt] = useState<{ pointOfSale: number; voucherType: number; voucherNumber: number; cae: string; caeExpiresOn?: string; net: number; vat: number; total: number; customerName: string; customerDocumentType: string; customerDocumentNumber?: string; customerTaxCondition?: string; invoiceType: string; qrUrl: string } | null>(null),
     [fiscalReceiptQr, setFiscalReceiptQr] = useState(""),
     [fiscalReceiptChecking, setFiscalReceiptChecking] = useState(false),
+    [fiscalReceiptError, setFiscalReceiptError] = useState(""),
     [saleSearch, setSaleSearch] = useState(""),
     [invoiceCorrection, setInvoiceCorrection] = useState<{ saleId: string; name: string; cuit: string; address: string } | null>(null),
     [paymentCorrectionSaleId, setPaymentCorrectionSaleId] = useState<string | null>(null),
@@ -304,6 +307,7 @@ export default function Home() {
   // Local cuyo envío falló por última vez: es el único que puede limpiar el aviso.
   const syncFailureSite = useRef<string | null>(null);
   const pendingReceiptRef = useRef<Sale | null>(null);
+  const pendingFiscalCorrectionRef = useRef<Sale | null>(null);
   const syncingAdjustmentIds = useRef(new Set<string>());
   // Evita aplicar dos veces una carga propia ya existente al recuperar una
   // sesión. Es útil cuando se habilita la autoaprobación después de que la
@@ -1594,6 +1598,12 @@ export default function Home() {
           setReceiptSale(pendingReceipt);
           setMessage(`Venta confirmada y guardada: ${money.format(pendingReceipt.net)}. Ya podés imprimir el ticket.`);
         }
+        const correction = pendingFiscalCorrectionRef.current;
+        if (correction && correction.site === local && write.state.sales?.some((sale) => sale.id === correction.id && sale.invoiceType === "Factura A" && sale.customerDocumentNumber === correction.customerDocumentNumber && sale.customer === correction.customer && sale.customerAddress === correction.customerAddress)) {
+          pendingFiscalCorrectionRef.current = null;
+          setReceiptSale(correction);
+          setMessage("Corrección enviada. Se comprobarán los datos guardados antes de solicitar el CAE.");
+        }
         setSyncStatus("Operación guardada en la base de datos.");
       }
     } finally {
@@ -1788,6 +1798,9 @@ export default function Home() {
   const methods = METHODS[site] || METHODS.Recoleta || ["Efectivo"],
     cats = ["Todos", ...Array.from(new Set(products.map((p) => p.category)))],
     [cat, setCat] = useState("Todos");
+  const selectedCustomerForSale = customers.find((item) => item.id === selectedCustomerId && item.site === site);
+  const selectedCustomerGroup = customerGroupOf(selectedCustomerForSale);
+  const selectedCustomerIsCredit = selectedCustomerGroup === "Restaurante" || selectedCustomerGroup === "Franquicia";
   const visible = products.filter((product) =>
     (cat === "Todos" || product.category === cat) &&
     `${product.name} ${product.detail} ${product.category} ${product.code} ${product.barcode}`.toLowerCase().includes(productSearch.trim().toLowerCase()),
@@ -3824,7 +3837,9 @@ export default function Home() {
     const selectedPromotion = SALE_PROMOTIONS.find((item) => item.name === promotion);
     if (selectedPromotion?.method && (splitPayment || payment !== selectedPromotion.method))
       return setMessage(`La promoción ${selectedPromotion.name} requiere cobrar con ${selectedPromotion.method}.`);
-    const rawPayments = splitPayment
+    if (selectedCustomerIsCredit && !selectedCustomerForSale)
+      return setMessage("Elegí el cliente registrado antes de vender a cuenta corriente.");
+    const rawPayments = selectedCustomerIsCredit ? [] : splitPayment
       ? splitPayments.filter((item) => item.amount > 0)
       : [{ method: payment, amount: net }];
     const currentPayments = Object.values(
@@ -3836,7 +3851,7 @@ export default function Home() {
         return grouped;
       }, {}),
     );
-    if (!currentPayments.length || Math.round(currentPayments.reduce((sum, item) => sum + item.amount, 0)) !== net)
+    if (!selectedCustomerIsCredit && (!currentPayments.length || Math.round(currentPayments.reduce((sum, item) => sum + item.amount, 0)) !== net))
       return setMessage("El total de los medios de pago debe coincidir con el total de la venta.");
     if (effectiveDiscountPercent > siteLimits.maxDiscount + 0.0001)
       return setMessage(
@@ -3871,10 +3886,11 @@ export default function Home() {
       promotion: isPromotion ? (selectedCampaign?.name ?? promotion) : undefined,
       promotionId: selectedCampaign?.id,
       net,
-      method: splitPayment ? "Múltiple" : payment,
+      method: selectedCustomerIsCredit ? "Cuenta corriente" : splitPayment ? "Múltiple" : payment,
       invoiceType,
       customer: isValidationTest ? `PRUEBA DE VALIDACIÓN · ${customer}` : customer,
       customerId: selectedCustomerId || undefined,
+      customerGroup: selectedCustomerForSale ? selectedCustomerGroup : undefined,
       customerDocumentType,
       customerDocumentNumber: customerDocumentNumber.replace(/\D/g, ""),
       customerTaxCondition,
@@ -3883,8 +3899,10 @@ export default function Home() {
       invitedQuantities,
       channel: saleChannel,
       status: "activa",
+      paymentStatus: selectedCustomerIsCredit ? "Pendiente" : "Pagada",
+      dueAtISO: selectedCustomerIsCredit && selectedCustomerForSale ? new Date(saleNow.getTime() + (selectedCustomerForSale.creditTermDays || 0) * 86_400_000).toISOString() : undefined,
     };
-    setPayments((x) => [
+    if (!selectedCustomerIsCredit) setPayments((x) => [
       ...x,
       ...currentPayments.map((item) => ({
         ...item,
@@ -3898,7 +3916,7 @@ export default function Home() {
     pendingReceiptRef.current = sale;
     setConfirmedReceiptId(null);
     setReceiptSale(null);
-    currentPayments.forEach((item) =>
+    if (!selectedCustomerIsCredit) currentPayments.forEach((item) =>
       appendCashLedgerEntry({
         kind: invitation ? "Invitación" : "Venta",
         direction: item.method === "Efectivo" ? "Ingreso" : "Informativo",
@@ -3926,11 +3944,11 @@ export default function Home() {
       }),
     );
     setMessage(
-      `${invitation ? "Invitación" : "Venta"}${isPromotion ? ` · ${promotion}` : ""} pendiente de confirmación: ${money.format(net)}. No recargues hasta ver “Operación guardada”.`,
+      `${invitation ? "Invitación" : selectedCustomerIsCredit ? "Venta a cuenta corriente" : "Venta"}${isPromotion ? ` · ${promotion}` : ""} pendiente de confirmación: ${money.format(net)}. No recargues hasta ver “Operación guardada”.`,
     );
     recordAudit(
       "Venta registrada",
-      `${sale.id.slice(0, 8)} · ${money.format(net)} · ${splitPayment ? "cobro múltiple" : payment}${isPromotion ? ` · ${promotion}` : ""}`,
+      `${sale.id.slice(0, 8)} · ${money.format(net)} · ${selectedCustomerIsCredit ? "cuenta corriente" : splitPayment ? "cobro múltiple" : payment}${isPromotion ? ` · ${promotion}` : ""}`,
     );
     setCart([]);
     setDiscount(0);
@@ -3943,6 +3961,28 @@ export default function Home() {
     setSplitPayments([{ method: "Efectivo", amount: 0 }, { method: "Transferencia", amount: 0 }]);
     setCustomer("Consumidor final");
     setSelectedCustomerId(null);
+  };
+  const collectCreditSale = (sale: Sale, method: string) => {
+    if (!can("cobrar")) return setMessage("Tu usuario no tiene permiso para registrar cobranzas.");
+    if (sale.site !== site || sale.status !== "activa" || sale.paymentStatus !== "Pendiente") return setMessage("Esta venta ya no está pendiente de cobro.");
+    if (!cashIsOpen || !activeShift) return setMessage("Abrí la caja del local antes de registrar la cobranza.");
+    if (!methods.includes(method)) return setMessage("Elegí un medio de cobro válido.");
+    const paidAtISO = new Date().toISOString();
+    setSales((items) => items.map((item) => item.id === sale.id ? { ...item, paymentStatus: "Pagada", paidAtISO, method } : item));
+    setPayments((items) => [...items, { method, amount: sale.net, saleId: sale.id, site, shiftId: activeShift.id, createdAtISO: paidAtISO }]);
+    appendCashLedgerEntry({
+      kind: "Cobranza cuenta corriente",
+      direction: method === "Efectivo" ? "Ingreso" : "Informativo",
+      amount: sale.net,
+      cashImpact: method === "Efectivo" ? sale.net : 0,
+      paymentMethod: method,
+      reference: sale.id,
+      shiftId: activeShift.id,
+      detail: `${sale.customer} · ${sale.customerGroup || "Cliente"} · venta ${sale.id.slice(0, 8)}`,
+    });
+    recordAudit("Cobranza registrada", `${sale.id.slice(0, 8)} · ${sale.customer} · ${method} · ${money.format(sale.net)}`);
+    setPendingSync((value) => value + 1);
+    setMessage("Cobranza pendiente de confirmación del servidor. No repitas la operación.");
   };
   const printReceipt = () => {
     if (!receiptSale) return;
@@ -3971,21 +4011,24 @@ export default function Home() {
     const controller = new AbortController();
     setFiscalReceipt(null);
     setFiscalReceiptQr("");
+    setFiscalReceiptError("");
     const expectsFiscal = ["Factura A", "Factura B", "Factura B electrónica", "Factura B fiscal"].includes(receiptSaleInvoiceType || "");
     setFiscalReceiptChecking(expectsFiscal);
     let attempts = 0;
     const loadFiscalReceipt = async () => {
       if (attempts === 0 && expectsFiscal) {
         try {
-          await fetch(`${API_BASE}/fiscal/sale-document/issue`, {
+          const issueResponse = await fetch(`${API_BASE}/fiscal/sale-document/issue`, {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ saleReference: receiptSaleId }),
+            body: JSON.stringify({ saleReference: receiptSaleId, expectedInvoiceType: receiptSale?.invoiceType, expectedCustomer: receiptSale?.customer, expectedDocumentNumber: receiptSale?.customerDocumentNumber, expectedAddress: receiptSale?.customerAddress }),
             signal: controller.signal,
           });
+          const issueData = await issueResponse.json().catch(() => ({})) as { error?: string };
+          if (!issueResponse.ok && !controller.signal.aborted) setFiscalReceiptError(issueData.error || "No se pudo confirmar la emisión fiscal. No repitas la venta.");
         } catch {
-          // La consulta posterior conserva el estado real del comprobante.
+          if (!controller.signal.aborted) setFiscalReceiptError("No se confirmó la respuesta de emisión. No reintentes hasta consultar el estado fiscal.");
         }
       }
       try {
@@ -3997,6 +4040,7 @@ export default function Home() {
           const document = data.document || null;
           if (document && !controller.signal.aborted) {
             setFiscalReceipt(document);
+            setFiscalReceiptError("");
             const image = await QRCode.toDataURL(document.qrUrl, { errorCorrectionLevel: "M", margin: 1, width: 180 });
             if (!controller.signal.aborted) setFiscalReceiptQr(image);
             setFiscalReceiptChecking(false);
@@ -4012,7 +4056,7 @@ export default function Home() {
     };
     void loadFiscalReceipt();
     return () => controller.abort();
-  }, [receiptSaleId, receiptSaleInvoiceType]);
+  }, [receiptSaleId, receiptSaleInvoiceType, receiptSale?.invoiceType, receiptSale?.customer, receiptSale?.customerDocumentNumber, receiptSale?.customerAddress]);
   /* eslint-enable react-hooks/set-state-in-effect */
   /** Envía siempre la misma identidad: reintentar nunca puede crear otro ajuste. */
   const syncPostCloseCancellation = async (adjustment: PostCloseCancellationAdjustment) => {
@@ -4178,6 +4222,8 @@ export default function Home() {
       return setMessage("Tu usuario no tiene permiso para registrar devoluciones o cambios.");
     const sale = sales.find((item) => item.id === returnSaleId && item.site === site);
     if (!sale || sale.status !== "activa") return setMessage("Elegí una venta activa del local.");
+    if (sale.paymentStatus === "Pendiente" && returnKind === "Devolución")
+      return setMessage("Esta venta sigue a cuenta corriente. Para no generar un egreso de efectivo indebido, anulala completa o pedí a Administración que concilie una devolución parcial.");
     if (!returnReason.trim()) return setMessage("Indicá el motivo de la devolución o cambio.");
     const soldQuantities = sale.items.reduce<Record<number, number>>((result, product) => {
       result[product.id] = (result[product.id] || 0) + 1;
@@ -4369,6 +4415,9 @@ export default function Home() {
       setMessage("Completá la razón social, el CUIT de 11 dígitos y el domicilio fiscal.");
       return;
     }
+    const originalSale = sales.find((sale) => sale.id === invoiceCorrection.saleId);
+    if (!originalSale) return setMessage("No se encontró la venta; no se solicitó el CAE.");
+    pendingFiscalCorrectionRef.current = { ...originalSale, invoiceType: "Factura A", customer: name, customerDocumentType: "CUIT", customerDocumentNumber: cuit, customerTaxCondition: "Responsable Inscripto", customerAddress: address };
     setSales((items) => items.map((sale) => sale.id === invoiceCorrection.saleId
       ? { ...sale, invoiceType: "Factura A", customer: name, customerDocumentType: "CUIT", customerDocumentNumber: cuit, customerTaxCondition: "Responsable Inscripto", customerAddress: address }
       : sale));
@@ -5518,10 +5567,14 @@ export default function Home() {
                   </label>
                   <label className="mt-3 block text-sm font-bold">
                     Cliente
+                    <select value={customerGroupFilter} onChange={(event) => setCustomerGroupFilter(event.target.value as CustomerGroup | "Todos")} className="mt-1 w-full rounded border p-2 font-normal">
+                      <option>Todos</option><option>Restaurante</option><option>Franquicia</option><option>Almacén</option><option>Sin grupo</option>
+                    </select>
                     <select value={selectedCustomerId || ""} onChange={(event) => { const selected = customers.find(item => item.id === event.target.value); setSelectedCustomerId(selected?.id || null); if (!selected) return; setCustomer(selected.name); setCustomerDocumentType(selected.documentType === "Otro" ? "DNI" : selected.documentType); setCustomerDocumentNumber(selected.documentNumber); setCustomerAddress(selected.address || ""); }} className="mt-1 w-full rounded border p-2 font-normal">
                       <option value="">Buscar cliente registrado por documento…</option>
-                      {customers.filter(item => item.site === site && item.active).map(item => <option key={item.id} value={item.id}>{item.name} · {item.documentType} {item.documentNumber}</option>)}
+                      {customers.filter(item => item.site === site && item.active && (customerGroupFilter === "Todos" || customerGroupOf(item) === customerGroupFilter)).map(item => <option key={item.id} value={item.id}>{item.name} · {customerGroupOf(item)} · {item.documentType} {item.documentNumber}</option>)}
                     </select>
+                    {selectedCustomerIsCredit && <p className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-900">Venta a cuenta corriente: se descontará stock y quedará pendiente de cobro. No se registra ningún ingreso en caja ahora.</p>}
                     <input
                       value={customer}
                       onChange={(event) => { setCustomer(event.target.value); setSelectedCustomerId(null); }}
@@ -5650,7 +5703,7 @@ export default function Home() {
                               </select>
                               {invoiceCorrection?.saleId === sale.id && <div className="w-full rounded border bg-slate-50 p-3 text-sm">
                                 <p className="font-bold">Datos para factura A</p>
-                                <p>Esto no emite la factura ni solicita un CAE.</p>
+                                <p>Al confirmarse los datos en el servidor, se solicitará el CAE automáticamente. No repitas la venta.</p>
                                 <label className="mt-2 block">Razón social<input className="block w-full rounded border p-2" value={invoiceCorrection.name} onChange={(event) => setInvoiceCorrection({ ...invoiceCorrection, name: event.target.value })} /></label>
                                 <label className="mt-2 block">CUIT<input className="block w-full rounded border p-2" inputMode="numeric" value={invoiceCorrection.cuit} onChange={(event) => setInvoiceCorrection({ ...invoiceCorrection, cuit: event.target.value })} /></label>
                                 <p className="mt-2">Condición fiscal: Responsable Inscripto</p>
@@ -7404,7 +7457,7 @@ export default function Home() {
               </p>
             </>
           ) : tab === "Clientes" ? (
-            <CustomerPanel site={site} customers={customers} sales={sales} returnsLog={returnsLog} canWrite={can("cobrar") || user.role === "administracion"} onSave={(record) => { const now = new Date().toISOString(); setCustomers(items => { const old = items.find(x => x.id === record.id); return old ? items.map(x => x.id === record.id ? { ...record, createdAt: old.createdAt, updatedAt: now, createdBy: old.createdBy, active: true } : x) : [{ ...record, createdAt: now, updatedAt: now, createdBy: user.name, active: true }, ...items]; }); recordAudit("Cliente actualizado", record.documentType + " " + record.documentNumber); }} onDeactivate={(id) => { setCustomers(items => items.map(item => item.id === id ? { ...item, active:false, updatedAt:new Date().toISOString() } : item)); recordAudit("Cliente desactivado", id); }} />
+            <CustomerPanel site={site} customers={customers} sales={sales} returnsLog={returnsLog} paymentMethods={methods} canWrite={can("cobrar") || user.role === "administracion"} onCollect={collectCreditSale} onSave={(record) => { const now = new Date().toISOString(); setCustomers(items => { const old = items.find(x => x.id === record.id); return old ? items.map(x => x.id === record.id ? { ...record, createdAt: old.createdAt, updatedAt: now, createdBy: old.createdBy, active: true } : x) : [{ ...record, createdAt: now, updatedAt: now, createdBy: user.name, active: true }, ...items]; }); recordAudit("Cliente actualizado", record.documentType + " " + record.documentNumber); }} onImport={(imported) => { const importedById = new Map(imported.map(item => [item.id, item])); setCustomers(items => [...imported, ...items.filter(item => !importedById.has(item.id))]); recordAudit("Clientes importados", `${imported.length} registros desde CSV`); }} onDeactivate={(id) => { setCustomers(items => items.map(item => item.id === id ? { ...item, active:false, updatedAt:new Date().toISOString() } : item)); recordAudit("Cliente desactivado", id); }} />
           ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
             <MrpPanel initialView="Recetas y costos" />
           ) : tab === "Legajos" && user.role === "administracion" ? (
@@ -9963,6 +10016,7 @@ export default function Home() {
       {receiptSale && (
         <div className="receipt-modal fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Vista previa del ticket">
           <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl">
+            {fiscalReceiptError && !fiscalReceipt && <p role="alert" className="no-print mb-3 rounded bg-red-100 p-3 text-red-900">{fiscalReceiptError}</p>}
             {confirmedReceiptId === receiptSale.id && <p role="status" className="no-print mb-3 rounded bg-green-100 p-3 text-center font-bold text-green-900">Venta confirmada y guardada en el servidor.</p>}
             {fiscalReceiptChecking ? (
               <div className="receipt-print-area mx-auto w-full max-w-[80mm] bg-white p-8 text-center font-mono text-sm text-black">
