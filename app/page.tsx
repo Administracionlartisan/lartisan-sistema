@@ -2270,9 +2270,6 @@ export default function Home() {
     ...savedOrders
       .filter((order) => order.site === site)
       .map((order) => ({ title: "Comanda abierta", detail: `${order.customer} · ${order.items.length} productos.`, action: "Ventas" })),
-    ...(!managesCentralOrders
-      ? lowStockProducts.map(({ product, current, ideal }) => ({ title: "Reposición sugerida", detail: `${product.name}: ${current}/${ideal}.`, action: "Pedido" }))
-      : []),
     ...stockRequests
       .filter((request) => request.site === site && (request.status === "Despachado" || request.status === "Despachado parcial"))
       .map((request) => ({ title: "Confirmar recepción", detail: `Pedido ${request.id.slice(0, 8)} enviado por Central.`, action: "Pedido" })),
