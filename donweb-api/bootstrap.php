@@ -1004,7 +1004,13 @@ function enforce_invoice_type_changes(PDO $pdo, array $user, array $previous, ar
     foreach ($state['sales'] as $index => $sale) {
         if (!is_array($sale) || empty($sale['id']) || !is_scalar($sale['id'])) continue;
         $before = $previousSales[(string) $sale['id']] ?? null;
-        if ($before === null || ($before['invoiceType'] ?? null) === ($sale['invoiceType'] ?? null)) continue;
+        if ($before === null) continue;
+        $fiscalFields = ['invoiceType', 'customer', 'customerDocumentType', 'customerDocumentNumber', 'customerTaxCondition', 'customerAddress'];
+        $changed = false;
+        foreach ($fiscalFields as $field) {
+            if (($before[$field] ?? null) !== ($sale[$field] ?? null)) { $changed = true; break; }
+        }
+        if (!$changed) continue;
         $reason = null;
         if (!$canChange) {
             $reason = 'sin permiso para cambiar el comprobante';
@@ -1027,7 +1033,9 @@ function enforce_invoice_type_changes(PDO $pdo, array $user, array $previous, ar
             }
         }
         if ($reason === null) continue;
-        $state['sales'][$index]['invoiceType'] = $before['invoiceType'] ?? null;
+        foreach ($fiscalFields as $field) {
+            $state['sales'][$index][$field] = $before[$field] ?? null;
+        }
         $findings[] = [(string) $sale['id'], 'modificacion', 'comprobante_rechazado',
             'Se descartó el cambio de comprobante a ' . (string) ($sale['invoiceType'] ?? '') . ': ' . $reason . '.'];
     }

@@ -187,6 +187,7 @@ export default function Home() {
     [fiscalReceiptQr, setFiscalReceiptQr] = useState(""),
     [fiscalReceiptChecking, setFiscalReceiptChecking] = useState(false),
     [saleSearch, setSaleSearch] = useState(""),
+    [invoiceCorrection, setInvoiceCorrection] = useState<{ saleId: string; name: string; cuit: string; address: string } | null>(null),
     [paymentCorrectionSaleId, setPaymentCorrectionSaleId] = useState<string | null>(null),
     [paymentCorrectionPayments, setPaymentCorrectionPayments] = useState<Payment[]>([]),
     [paymentCorrectionReason, setPaymentCorrectionReason] = useState(""),
@@ -4359,6 +4360,22 @@ export default function Home() {
       `${sale.id.slice(0, 8)} · ${nextInvoiceType}`,
     );
   };
+  const saveInvoiceCorrection = () => {
+    if (!invoiceCorrection || !can("anular")) return;
+    const name = invoiceCorrection.name.trim();
+    const cuit = invoiceCorrection.cuit.replace(/\D/g, "");
+    const address = invoiceCorrection.address.trim();
+    if (name.length < 3 || !/^\d{11}$/.test(cuit) || !address) {
+      setMessage("Completá la razón social, el CUIT de 11 dígitos y el domicilio fiscal.");
+      return;
+    }
+    setSales((items) => items.map((sale) => sale.id === invoiceCorrection.saleId
+      ? { ...sale, invoiceType: "Factura A", customer: name, customerDocumentType: "CUIT", customerDocumentNumber: cuit, customerTaxCondition: "Responsable Inscripto", customerAddress: address }
+      : sale));
+    recordAudit("Comprobante modificado", `${invoiceCorrection.saleId.slice(0, 8)} · Factura A · datos fiscales actualizados`);
+    setInvoiceCorrection(null);
+    setMessage("Cambio pendiente de confirmación del servidor. Esto no emite una factura ni un CAE.");
+  };
   const synchronizeCashClose = async (
     closeId: string,
     payload: { businessDate: string; payments: { method: string; amount: number }[]; metrics: Record<string, number> },
@@ -5620,18 +5637,26 @@ export default function Home() {
                                 value={sale.invoiceType}
                                 disabled={!can("anular")}
                                 title={can("anular") ? undefined : "Requiere permiso para anular ventas"}
-                                onChange={(event) =>
-                                  changeSaleInvoice(
-                                    sale,
-                                    event.target.value as Sale["invoiceType"],
-                                  )
-                                }
+                                onChange={(event) => {
+                                  if (event.target.value === "Factura A") {
+                                    setInvoiceCorrection({ saleId: sale.id, name: sale.customer || "", cuit: sale.customerDocumentNumber || "", address: sale.customerAddress || "" });
+                                  } else changeSaleInvoice(sale, event.target.value as Sale["invoiceType"]);
+                                }}
                                 className="rounded border p-1 disabled:opacity-60"
                               >
                                 <option>Factura B fiscal</option>
                                 <option>Factura A</option>
                                 <option>Ticket</option>
                               </select>
+                              {invoiceCorrection?.saleId === sale.id && <div className="w-full rounded border bg-slate-50 p-3 text-sm">
+                                <p className="font-bold">Datos para factura A</p>
+                                <p>Esto no emite la factura ni solicita un CAE.</p>
+                                <label className="mt-2 block">Razón social<input className="block w-full rounded border p-2" value={invoiceCorrection.name} onChange={(event) => setInvoiceCorrection({ ...invoiceCorrection, name: event.target.value })} /></label>
+                                <label className="mt-2 block">CUIT<input className="block w-full rounded border p-2" inputMode="numeric" value={invoiceCorrection.cuit} onChange={(event) => setInvoiceCorrection({ ...invoiceCorrection, cuit: event.target.value })} /></label>
+                                <p className="mt-2">Condición fiscal: Responsable Inscripto</p>
+                                <label className="mt-2 block">Domicilio fiscal<input className="block w-full rounded border p-2" value={invoiceCorrection.address} onChange={(event) => setInvoiceCorrection({ ...invoiceCorrection, address: event.target.value })} /></label>
+                                <div className="mt-2 flex gap-2"><button type="button" onClick={saveInvoiceCorrection} className="rounded bg-[#183a67] px-3 py-2 font-bold text-white">Guardar datos</button><button type="button" onClick={() => setInvoiceCorrection(null)} className="rounded border px-3 py-2">Cancelar</button></div>
+                              </div>}
                               {sale.status === "activa" && (
                               <button type="button"
                                 disabled={!can("anular")}
