@@ -3745,7 +3745,7 @@ export default function Home() {
       .filter((line) => line.quantity > 0);
     if (!lines.length) return setMessage("Ingresá al menos una cantidad mayor a cero.");
     if (!receiptReference.trim())
-      return setMessage("Indicá una referencia, por ejemplo el número de remito o quién entregó la mercadería.");
+      return setMessage("Indicá el número de remito antes de confirmar la carga.");
     const now = new Date();
     setStock((items) => {
       const nextSiteStock = { ...items[site] };
@@ -3756,8 +3756,8 @@ export default function Home() {
     });
     lines.forEach(({ product, quantity }) => {
       const movement: StockMovement = {
-        id: crypto.randomUUID(), site, productId: product.id, kind: "Ingreso manual", quantity,
-        remito: "", detail: receiptReference.trim(), at: now.toLocaleString("es-AR"),
+        id: crypto.randomUUID(), site, productId: product.id, kind: "Ingreso por remito", quantity,
+        remito: receiptReference.trim(), detail: `Carga recibida · ${receiptGroup}`, at: now.toLocaleString("es-AR"),
         atISO: now.toISOString(), createdBy: user.name,
       };
       setStockMovements((items) => [movement, ...items]);
@@ -6392,8 +6392,8 @@ export default function Home() {
                         </tbody></table>
                       </div>
                       <div className="flex flex-wrap items-end gap-3">
-                        <label className="min-w-[260px] flex-1 text-sm font-bold">Referencia de la entrega
-                          <input value={receiptReference} onChange={(event) => setReceiptReference(event.target.value)} placeholder="Ej.: Remito 1234 · entrega Central" className="mt-1 block w-full rounded border p-2 font-normal" />
+                        <label className="min-w-[260px] flex-1 text-sm font-bold">Número de remito
+                          <input value={receiptReference} onChange={(event) => setReceiptReference(event.target.value)} placeholder="Ej.: 1234" className="mt-1 block w-full rounded border p-2 font-normal" />
                         </label>
                         <button onClick={registerBulkStockReceipt} className="rounded bg-[#183a67] px-4 py-2.5 font-bold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#102d52]">Confirmar carga masiva</button>
                       </div>
