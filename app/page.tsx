@@ -10067,6 +10067,22 @@ export default function Home() {
                   <div className="mb-1 grid grid-cols-[1fr_auto_auto] gap-x-2 text-[10px] font-bold"><span>DESCRIPCIÓN</span><span>CANT.</span><span>IMPORTE</span></div>
                   {receiptSale.items.map((item) => <div key={item.id} className="grid grid-cols-[1fr_auto_auto] gap-x-2"><span>{item.name}</span><span>1</span><span>{money.format(item.price)}</span></div>)}
                 </section>
+                {(() => {
+                  const invitations = Object.entries(receiptSale.invitedQuantities || {}).flatMap(([productId, requestedQuantity]) => {
+                    const product = receiptSale.items.find((item) => item.id === Number(productId));
+                    if (!product) return [];
+                    const soldQuantity = receiptSale.items.filter((item) => item.id === product.id).length;
+                    const quantity = Math.min(soldQuantity, requestedQuantity || 0);
+                    return quantity > 0 ? [{ product, quantity, amount: product.price * quantity }] : [];
+                  });
+                  const invitationDiscount = invitations.reduce((total, invitation) => total + invitation.amount, 0);
+                  const manualDiscount = Math.max(0, receiptSale.discount - invitationDiscount);
+                  if (!invitations.length && !manualDiscount) return null;
+                  return <section className="border-b border-dashed border-black py-2">
+                    {invitations.map(({ product, quantity, amount }) => <div key={product.id} className="grid grid-cols-[1fr_auto_auto] gap-x-2 text-[10px]"><span>INVITACIÓN · {product.name}</span><span>{quantity}</span><span>-{money.format(amount)}</span></div>)}
+                    {manualDiscount > 0 && <div className="mt-1 flex justify-between"><span>Descuento adicional</span><span>-{money.format(manualDiscount)}</span></div>}
+                  </section>;
+                })()}
                 <section className="border-b border-dashed border-black py-2">
                   <div className="flex justify-between"><span>Neto gravado</span><span>{money.format(fiscalReceipt.net)}</span></div>
                   <div className="flex justify-between"><span>IVA</span><span>{money.format(fiscalReceipt.vat)}</span></div>

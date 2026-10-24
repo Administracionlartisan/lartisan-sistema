@@ -54,15 +54,25 @@ export function buildThermalReceipt(sale: Sale, salePayments: Payment[], servedB
     `Canal: ${thermalSafe(sale.channel)}`, divider,
   ];
   if (sale.promotion) lines.push(...thermalWrap(`Promocion: ${sale.promotion}`));
+  let invitationDiscount = 0;
   grouped.forEach(({ product, quantity }) => {
     lines.push(...thermalWrap(`${quantity} x ${product.name}`));
     const invited = sale.invitedQuantities?.[product.id] || 0;
-    if (invited) lines.push(`  Invitacion: ${invited} un.`);
+    if (invited) {
+      const amount = product.price * Math.min(quantity, invited);
+      invitationDiscount += amount;
+      lines.push(...thermalWrap(`  INVITACION: ${invited} x ${product.name}`));
+      lines.push(thermalPair("  Bonificacion", `-${thermalMoney(amount)}`));
+    }
   });
+  const manualDiscount = Math.max(0, sale.discount - invitationDiscount);
   lines.push(
     divider,
     thermalPair("Bruto", thermalMoney(sale.gross)),
-    thermalPair("Descuento", `-${thermalMoney(sale.discount)}`),
+  );
+  if (invitationDiscount) lines.push(thermalPair("Invitaciones", `-${thermalMoney(invitationDiscount)}`));
+  if (manualDiscount) lines.push(thermalPair("Descuento", `-${thermalMoney(manualDiscount)}`));
+  lines.push(
     thermalPair("TOTAL", thermalMoney(sale.net)),
   );
   salePayments.forEach((payment) => lines.push(thermalPair(payment.method, thermalMoney(payment.amount))));
