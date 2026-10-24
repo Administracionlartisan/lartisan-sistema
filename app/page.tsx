@@ -4464,13 +4464,16 @@ export default function Home() {
     setSyncStatus("Esta integración se configura con Apps Script desde la cuenta propietaria de las planillas.");
     setSyncStatus("Apps Script debe ser publicado una vez por el dueño de las planillas. Luego Administración carga su URL /exec y la clave compartida en el servidor; no hace falta Google Cloud.");
   };
-  const reconcileDailyCashSheet = async () => {
+  const reconcileDailyCashSheet = async (targetSite = site) => {
     if (user?.role !== "administracion") return;
-    const reason = window.prompt(`Motivo de la corrección de Drive para ${site} (${dailyCashCorrectionDate}):`)?.trim();
+    if (!targetSite || targetSite === "Todos los locales") {
+      return setSyncStatus("Elegí un local antes de corregir su cierre diario.");
+    }
+    const reason = window.prompt(`Motivo de la corrección de Drive para ${targetSite} (${dailyCashCorrectionDate}):`)?.trim();
     if (!reason) return setSyncStatus("La corrección requiere un motivo auditado.");
     setDailyCashCorrectionBusy(true); setSyncStatus("Recalculando desde las ventas confirmadas por el servidor…");
     try {
-      const response = await fetch(`${API_BASE}/admin/cash-sheets/reconcile-daily`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, businessDate: dailyCashCorrectionDate, reason }) });
+      const response = await fetch(`${API_BASE}/admin/cash-sheets/reconcile-daily`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site: targetSite, businessDate: dailyCashCorrectionDate, reason }) });
       const data = await response.json() as { ok?: boolean; error?: string; sync?: { row?: number; sheet?: string; total?: number; tickets?: number } };
       if (!response.ok || !data.ok || !data.sync) throw new Error(data.error || "Drive no confirmó la corrección.");
       setSyncStatus(`Drive corregido desde ventas confirmadas: ${data.sync.sheet || "planilla"}, fila ${data.sync.row}. Total ${money.format(data.sync.total || 0)} · ${data.sync.tickets || 0} ventas.`);
@@ -8669,6 +8672,18 @@ export default function Home() {
                 h="Panel central"
                 p="Seguimiento consolidado de ventas, cierres, personal y stock."
               />
+              <section className="mb-5 rounded-2xl border border-[#b8c8dd] bg-[#fffdf8] p-5">
+                <h2 className="text-lg font-bold text-[#183a67]">Corrección excepcional de cierre diario</h2>
+                <p className="mt-1 text-sm text-slate-600">Recalcula el día desde las ventas y pagos confirmados. Solo puede reemplazar una fila que el sistema haya escrito y que siga intacta; queda auditado.</p>
+                <div className="mt-3 flex flex-wrap items-end gap-3">
+                  <label className="text-sm font-bold">Fecha del cierre
+                    <input type="date" value={dailyCashCorrectionDate} onChange={(event) => setDailyCashCorrectionDate(event.target.value)} className="mt-1 block rounded border bg-white p-2 font-normal" />
+                  </label>
+                  <button onClick={() => void reconcileDailyCashSheet(reportSite)} disabled={dailyCashCorrectionBusy || reportSite === "Todos los locales"} className="rounded border border-[#183a67] px-4 py-2 font-bold text-[#183a67] disabled:opacity-40">{dailyCashCorrectionBusy ? "Corrigiendo…" : "Recalcular y corregir Drive"}</button>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Seleccioná un local en el filtro de abajo antes de ejecutar la corrección.</p>
+                <p className="mt-2 text-sm text-slate-600">{syncStatus}</p>
+              </section>
               <ReportNavigation reports={availableAdminReports} selectedReport={adminReport} onSelect={setAdminReport} />
               <div className="rounded-2xl border bg-white p-5">
                 <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
