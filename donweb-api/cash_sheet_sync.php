@@ -379,6 +379,7 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
     $closeId = trim((string) ($input['closeId'] ?? ''));
     $businessDate = trim((string) ($input['businessDate'] ?? ''));
     $replaceDaily = !empty($input['replaceDaily']);
+    $historicalRepair = !empty($input['historicalRepair']);
     if (!in_array($site, operational_sites(), true) || !user_can_access_site($user, $site) || !user_can_action($user, 'cobrar')) {
         throw new InvalidArgumentException('No tenés permiso para sincronizar el cierre de este local.');
     }
@@ -387,7 +388,13 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
     }
     $date = DateTimeImmutable::createFromFormat('!Y-m-d', $businessDate);
     if (!$date || $date->format('Y-m-d') !== $businessDate) throw new InvalidArgumentException('Fecha de cierre inválida.');
-    require_authorized_business_date($pdo, $site, $businessDate);
+    // Los cierres normales sólo pueden sincronizar la fecha operativa. La
+    // excepción histórica se invoca exclusivamente desde la conciliación de
+    // Administración, con cierre real y motivo auditado; no abre la ventana
+    // para que una vendedora publique operaciones de otra fecha.
+    if (!$historicalRepair || ($user['role'] ?? '') !== 'administracion') {
+        require_authorized_business_date($pdo, $site, $businessDate);
+    }
     $payments = is_array($input['payments'] ?? null) ? $input['payments'] : [];
     $safePayments = [];
     foreach ($payments as $payment) {
@@ -565,7 +572,7 @@ function cash_sheet_reconcile_daily(PDO $pdo, array $config, array $user, array 
     $sessionStatement = $pdo->prepare('SELECT counted_cash,envelope_amount,difference_amount FROM lartisan_cash_sessions WHERE site=? AND DATE(closed_at)=? ORDER BY closed_at DESC LIMIT 1');
     $sessionStatement->execute([$site, $businessDate]); $session = $sessionStatement->fetch() ?: [];
     $result = cash_sheet_sync_close($pdo, $config, $user, [
-        'site' => $site, 'closeId' => (string) $run['close_id'], 'businessDate' => $businessDate, 'replaceDaily' => true,
+        'site' => $site, 'closeId' => (string) $run['close_id'], 'businessDate' => $businessDate, 'replaceDaily' => true, 'historicalRepair' => $historicalRepair,
         'payments' => array_map(static fn (string $method, float $amount): array => ['method' => $method, 'amount' => $amount], array_keys($payments), array_values($payments)),
         'metrics' => ['total' => round($total, 2), 'tickets' => count($sales), 'discounts' => round($discounts, 2), 'counted' => (float) ($session['counted_cash'] ?? 0), 'envelope' => (float) ($session['envelope_amount'] ?? 0), 'difference' => (float) ($session['difference_amount'] ?? 0)],
     ]);
