@@ -381,6 +381,7 @@ export default function Home() {
   const [cashCountConfirmedBySite, setCashCountConfirmedBySite] = useState<Record<string, boolean>>({});
   const [dailyCashCorrectionDate, setDailyCashCorrectionDate] = useState(() => dateKey(new Date()));
   const [dailyCashCorrectionReason, setDailyCashCorrectionReason] = useState("");
+  const [dailyCashHistoricalRepair, setDailyCashHistoricalRepair] = useState(false);
   const [dailyCashCorrectionBusy, setDailyCashCorrectionBusy] = useState(false);
   const [cashClosuresResult, setCashClosuresResult] = useState<{ key: string; rows: CashHistoryRow[] } | null>(null);
   const cashClosuresKey = JSON.stringify([user?.id, tab, site, operationalVersion, isValidationTest]);
@@ -4474,11 +4475,12 @@ export default function Home() {
     if (!reason) return setSyncStatus("La corrección requiere un motivo auditado.");
     setDailyCashCorrectionBusy(true); setSyncStatus("Recalculando desde las ventas confirmadas por el servidor…");
     try {
-      const response = await fetch(`${API_BASE}/admin/cash-sheets/reconcile-daily`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site: targetSite, businessDate: dailyCashCorrectionDate, reason }) });
+      const response = await fetch(`${API_BASE}/admin/cash-sheets/reconcile-daily`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site: targetSite, businessDate: dailyCashCorrectionDate, reason, historicalRepair: dailyCashHistoricalRepair }) });
       const data = await response.json() as { ok?: boolean; error?: string; sync?: { row?: number; sheet?: string; total?: number; tickets?: number } };
       if (!response.ok || !data.ok || !data.sync) throw new Error(data.error || "Drive no confirmó la corrección.");
       setSyncStatus(`Drive corregido desde ventas confirmadas: ${data.sync.sheet || "planilla"}, fila ${data.sync.row}. Total ${money.format(data.sync.total || 0)} · ${data.sync.tickets || 0} ventas.`);
       setDailyCashCorrectionReason("");
+      setDailyCashHistoricalRepair(false);
     } catch (error) { setSyncStatus(error instanceof Error ? error.message : "No se pudo corregir Drive."); }
     finally { setDailyCashCorrectionBusy(false); }
   };
@@ -6170,7 +6172,7 @@ export default function Home() {
                       <div className="mt-3 border-t pt-3">
                         <b>Corrección excepcional de un día ya cerrado</b>
                         <p className="mt-1">Recalcula desde ventas y pagos confirmados en el servidor. Solo reemplaza una fila que el sistema escribió y que sigue intacta. La acción queda auditada.</p>
-                        <div className="mt-2 flex flex-wrap gap-2"><input type="date" value={dailyCashCorrectionDate} onChange={(event) => setDailyCashCorrectionDate(event.target.value)} className="rounded border p-2" /><input value={dailyCashCorrectionReason} onChange={(event) => setDailyCashCorrectionReason(event.target.value)} placeholder="Motivo auditado" className="min-w-56 rounded border p-2" /><button onClick={() => void reconcileDailyCashSheet()} disabled={dailyCashCorrectionBusy || !dailyCashCorrectionReason.trim()} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67] disabled:opacity-40">{dailyCashCorrectionBusy ? "Corrigiendo…" : "Recalcular y corregir Drive"}</button><button onClick={() => void authorizeCashSheets()} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67]">Ver requisitos de Apps Script</button></div>
+                        <div className="mt-2 flex flex-wrap gap-2"><input type="date" value={dailyCashCorrectionDate} onChange={(event) => setDailyCashCorrectionDate(event.target.value)} className="rounded border p-2" /><input value={dailyCashCorrectionReason} onChange={(event) => setDailyCashCorrectionReason(event.target.value)} placeholder="Motivo auditado" className="min-w-56 rounded border p-2" /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={dailyCashHistoricalRepair} onChange={(event) => setDailyCashHistoricalRepair(event.target.checked)} />Reparación histórica sin registro</label><button onClick={() => void reconcileDailyCashSheet()} disabled={dailyCashCorrectionBusy || !dailyCashCorrectionReason.trim()} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67] disabled:opacity-40">{dailyCashCorrectionBusy ? "Corrigiendo…" : "Recalcular y corregir Drive"}</button><button onClick={() => void authorizeCashSheets()} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67]">Ver requisitos de Apps Script</button></div>
                       </div>
                     )}
                   </div>
@@ -8683,6 +8685,10 @@ export default function Home() {
                   </label>
                   <label className="text-sm font-bold">Motivo auditado
                     <input value={dailyCashCorrectionReason} onChange={(event) => setDailyCashCorrectionReason(event.target.value)} placeholder="Ej.: cierre reabierto por error" className="mt-1 block rounded border bg-white p-2 font-normal" />
+                  </label>
+                  <label className="max-w-sm text-sm">
+                    <span className="font-bold"><input type="checkbox" checked={dailyCashHistoricalRepair} onChange={(event) => setDailyCashHistoricalRepair(event.target.checked)} className="mr-2" />Reparación histórica sin registro</span>
+                    <span className="mt-1 block text-xs text-slate-500">Solo para cierres antiguos que llegaron a Drive sin registro local. Reemplaza el consolidado de esa fecha y queda auditado.</span>
                   </label>
                   <button onClick={() => void reconcileDailyCashSheet(reportSite)} disabled={dailyCashCorrectionBusy || reportSite === "Todos los locales" || !dailyCashCorrectionReason.trim()} className="rounded border border-[#183a67] px-4 py-2 font-bold text-[#183a67] disabled:opacity-40">{dailyCashCorrectionBusy ? "Corrigiendo…" : "Recalcular y corregir Drive"}</button>
                 </div>

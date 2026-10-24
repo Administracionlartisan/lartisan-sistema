@@ -532,13 +532,25 @@ function cash_sheet_reconcile_daily(PDO $pdo, array $config, array $user, array 
     $site = trim((string) ($input['site'] ?? ''));
     $businessDate = trim((string) ($input['businessDate'] ?? ''));
     $reason = trim((string) ($input['reason'] ?? ''));
+    $historicalRepair = !empty($input['historicalRepair']);
     if (($user['role'] ?? '') !== 'administracion' || !in_array($site, operational_sites(), true) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $businessDate) || $reason === '') {
         throw new InvalidArgumentException('Datos o permiso insuficientes para corregir el cierre diario.');
     }
     $runStatement = $pdo->prepare("SELECT close_id, written_fields_json FROM cash_sheet_sync_runs WHERE site=? AND business_date=? AND status='verified' ORDER BY finished_at DESC LIMIT 1");
     $runStatement->execute([$site, $businessDate]);
     $run = $runStatement->fetch();
-    if (!$run) throw new InvalidArgumentException('No hay un cierre sincronizado para ese local y fecha.');
+    if (!$run) {
+        // Un cierre histórico puede existir en Drive aun cuando una versión
+        // anterior no haya guardado su corrida local. Nunca se repara por el
+        // botón normal: exige la opción explícita, un cierre real del día y
+        // deja una auditoría diferenciada.
+        if (!$historicalRepair) throw new InvalidArgumentException('No hay un cierre sincronizado para ese local y fecha.');
+        $historicalClose = $pdo->prepare('SELECT id FROM lartisan_cash_sessions WHERE site=? AND closed_at IS NOT NULL AND DATE(closed_at)=? ORDER BY closed_at DESC LIMIT 1');
+        $historicalClose->execute([$site, $businessDate]);
+        $closeId = trim((string) ($historicalClose->fetchColumn() ?: ''));
+        if (!preg_match('/^[a-f0-9-]{36}$/i', $closeId)) throw new InvalidArgumentException('No existe un cierre confirmado de ese local y fecha para reparar.');
+        $run = ['close_id' => $closeId];
+    }
     $salesStatement = $pdo->prepare("SELECT id, net_amount, discount_amount, payment_method FROM lartisan_sales WHERE site=? AND status='activa' AND occurred_at >= ? AND occurred_at < DATE_ADD(?, INTERVAL 1 DAY)");
     $salesStatement->execute([$site, $businessDate, $businessDate]);
     $sales = $salesStatement->fetchAll();
@@ -558,7 +570,8 @@ function cash_sheet_reconcile_daily(PDO $pdo, array $config, array $user, array 
         'metrics' => ['total' => round($total, 2), 'tickets' => count($sales), 'discounts' => round($discounts, 2), 'counted' => (float) ($session['counted_cash'] ?? 0), 'envelope' => (float) ($session['envelope_amount'] ?? 0), 'difference' => (float) ($session['difference_amount'] ?? 0)],
     ]);
     audit($pdo, (int) $user['id'], 'cash_sheet_daily_reconciled', $site . ' · ' . $businessDate . ' · ' . mb_substr($reason, 0, 300));
-    return $result + ['total' => round($total, 2), 'tickets' => count($sales), 'reason' => $reason];
+    if ($historicalRepair) audit($pdo, (int) $user['id'], 'cash_sheet_historical_repaired', $site . ' · ' . $businessDate . ' · ' . mb_substr($reason, 0, 300));
+    return $result + ['total' => round($total, 2), 'tickets' => count($sales), 'reason' => $reason, 'historicalRepair' => $historicalRepair];
 }
 
 function cash_sheet_http(string $url, array $options = []): array
