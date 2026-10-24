@@ -1070,7 +1070,10 @@ if ($method === 'POST' && $route === 'cash-sheets/close') {
 }
 
 if ($method === 'POST' && $route === 'admin/cash-sheets/reconcile-daily') {
-    $admin = require_user($pdo, ['administracion']);
+    $admin = require_user($pdo);
+    if (!user_can_action($admin, 'reconciliarCaja')) {
+        json_response(['ok' => false, 'error' => 'Tu usuario no tiene permiso para corregir cierres diarios.'], 403);
+    }
     try {
         $result = cash_sheet_reconcile_daily($pdo, $config, $admin, request_body());
         json_response(['ok' => true, 'sync' => $result]);
@@ -2316,14 +2319,28 @@ if ($method === 'GET' && $route === 'cash/history') {
          ORDER BY closed_at DESC LIMIT 2000'
     );
     $statement->execute([$site, $from, $to]);
-    $sessions = array_map(static fn (array $row): array => [
-        'id' => $row['id'], 'site' => $row['site'], 'openedAt' => $row['opened_at'], 'openedBy' => $row['opened_by'],
-        'initialFund' => (float) $row['initial_fund'], 'closedAt' => $row['closed_at'], 'closedBy' => $row['closed_by'],
-        'expectedCash' => $row['expected_cash'] === null ? null : (float) $row['expected_cash'],
-        'countedCash' => $row['counted_cash'] === null ? null : (float) $row['counted_cash'],
-        'differenceAmount' => $row['difference_amount'] === null ? null : (float) $row['difference_amount'],
-        'envelopeAmount' => $row['envelope_amount'] === null ? null : (float) $row['envelope_amount'],
-    ], $statement->fetchAll());
+    $paymentTotals = $pdo->prepare(
+        "SELECT COALESCE(p.payment_method, s.payment_method, 'Sin informar') AS method,
+                SUM(COALESCE(p.amount, s.net_amount)) AS amount
+         FROM lartisan_sales s
+         LEFT JOIN lartisan_sale_payments p ON p.sale_id = s.id
+         WHERE s.site = ? AND s.status = 'activa' AND s.occurred_at >= ? AND s.occurred_at <= ?
+         GROUP BY COALESCE(p.payment_method, s.payment_method, 'Sin informar')
+         ORDER BY method"
+    );
+    $sessions = [];
+    foreach ($statement->fetchAll() as $row) {
+        $paymentTotals->execute([$site, $row['opened_at'], $row['closed_at']]);
+        $sessions[] = [
+            'id' => $row['id'], 'site' => $row['site'], 'openedAt' => $row['opened_at'], 'openedBy' => $row['opened_by'],
+            'initialFund' => (float) $row['initial_fund'], 'closedAt' => $row['closed_at'], 'closedBy' => $row['closed_by'],
+            'expectedCash' => $row['expected_cash'] === null ? null : (float) $row['expected_cash'],
+            'countedCash' => $row['counted_cash'] === null ? null : (float) $row['counted_cash'],
+            'differenceAmount' => $row['difference_amount'] === null ? null : (float) $row['difference_amount'],
+            'envelopeAmount' => $row['envelope_amount'] === null ? null : (float) $row['envelope_amount'],
+            'paymentTotals' => array_map(static fn (array $payment): array => ['method' => (string) $payment['method'], 'amount' => (float) $payment['amount']], $paymentTotals->fetchAll()),
+        ];
+    }
     json_response(['ok' => true, 'site' => $site, 'sessions' => $sessions]);
 }
 
@@ -2616,7 +2633,7 @@ if ($method === 'PATCH' && preg_match('#^admin/users/(\d+)$#', $route, $matches)
     if (!is_array($reportPermissions)) $reportPermissions = [];
     if (!is_array($actionPermissions)) $actionPermissions = [];
     $reportPermissions = array_values(array_unique(array_filter($reportPermissions, 'is_string')));
-    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'gestionarPromociones', 'transferirCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
+    $actionPermissions = array_values(array_unique(array_filter($actionPermissions, static fn ($permission): bool => is_string($permission) && in_array($permission, ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'gestionarStockIdeal', 'autoaprobarStockPropio', 'aprobarAjustesStock', 'aprobarEgresoMercaderia', 'gestionarPromociones', 'transferirCaja', 'reconciliarCaja', 'exportar', 'mrp', 'editarRecetas', 'comprasProduccion', 'stockMrp'], true))));
     // Si la edición no trae permisos, se conservan tal cual. NULL significa "los
     // del cargo": convertirlo en [] al bloquear o cambiar de local dejaba al
     // usuario sin ningún permiso (por ejemplo, sin poder cobrar).

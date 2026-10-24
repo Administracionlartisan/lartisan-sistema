@@ -231,7 +231,7 @@ export type SystemHealth = {
   alerts?: Array<{ level: "atencion" | "critico"; message: string }>;
   notification?: { status: "sent" | "failed" | "unchanged" | "disabled"; sentAt?: string | null };
 };
-export type CashHistoryRow = { id: string; site: string; openedAt: string; openedBy: string; initialFund: number; closedAt?: string | null; closedBy?: string | null; expectedCash?: number | null; countedCash?: number | null; differenceAmount?: number | null; envelopeAmount?: number | null };
+export type CashHistoryRow = { id: string; site: string; openedAt: string; openedBy: string; initialFund: number; closedAt?: string | null; closedBy?: string | null; expectedCash?: number | null; countedCash?: number | null; differenceAmount?: number | null; envelopeAmount?: number | null; paymentTotals?: Array<{ method: string; amount: number }> };
 export type AuditHistoryRow = { id: string; at: string; site: string; userName: string; action: string; detail: string };
 export type AiSupportRequest = { id: string; userName: string; role: Role; site?: string; section?: string; question: string; status: "pendiente" | "resuelta"; createdAt: string };
 

@@ -40,6 +40,7 @@ export const ACTION_PERMISSIONS = [
   { id: "aprobarEgresoMercaderia", label: "Autorizar egresos de mercadería solicitados por el local (solo Supervisión)" },
   { id: "gestionarPromociones", label: "Crear promociones (solo Supervisión)" },
   { id: "transferirCaja", label: "Transferir efectivo entre cajas" },
+  { id: "reconciliarCaja", label: "Corregir cierre diario de caja en Drive" },
   { id: "exportar", label: "Exportar informes" },
   { id: "mrp", label: "Operar compras y MRP" },
   { id: "editarRecetas", label: "Editar recetas y costos" },
@@ -53,7 +54,7 @@ export const defaultActionPermissions = (role: Role) =>
     : role === "compras"
       ? ["mrp"]
     : role === "supervisora"
-      ? ["cobrar", "anular", "egresos", "pedidos", "incidencias", "stock", "transferirCaja", "exportar"]
+      ? ["cobrar", "anular", "egresos", "pedidos", "incidencias", "stock", "transferirCaja", "reconciliarCaja", "exportar"]
       : ["cobrar", "anular", "egresos", "pedidos", "incidencias", "transferirCaja"];
 
 // Las identidades se obtienen de la API después de autenticar.

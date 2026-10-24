@@ -506,7 +506,7 @@ function user_action_permissions(array $user): array
     if (($user['action_permissions'] ?? null) === null) {
         if ($user['role'] === 'compras') return ['mrp'];
         return $user['role'] === 'supervisora'
-            ? ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'exportar']
+            ? ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'stock', 'transferirCaja', 'reconciliarCaja', 'exportar']
             : ['cobrar', 'anular', 'egresos', 'pedidos', 'incidencias', 'transferirCaja'];
     }
     $decoded = json_decode((string) ($user['action_permissions'] ?? '[]'), true);

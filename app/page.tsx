@@ -377,6 +377,7 @@ export default function Home() {
   const [auditUserFilter, setAuditUserFilter] = useState("");
   const [auditActionFilter, setAuditActionFilter] = useState("");
   const [cashHistory, setCashHistory] = useState<CashHistoryRow[]>([]);
+  const [cashCountConfirmedBySite, setCashCountConfirmedBySite] = useState<Record<string, boolean>>({});
   const [dailyCashCorrectionDate, setDailyCashCorrectionDate] = useState(() => dateKey(new Date()));
   const [dailyCashCorrectionBusy, setDailyCashCorrectionBusy] = useState(false);
   const [cashClosuresResult, setCashClosuresResult] = useState<{ key: string; rows: CashHistoryRow[] } | null>(null);
@@ -559,7 +560,10 @@ export default function Home() {
   const setFund = (value: number) => updateCashField("fund", value);
   const setExpenses = (value: number) => updateCashField("expenses", value);
   const setWithdrawals = (value: number) => updateCashField("withdrawals", value);
-  const setCounted = (value: number) => updateCashField("counted", value);
+  const setCounted = (value: number) => {
+    updateCashField("counted", value);
+    setCashCountConfirmedBySite((items) => ({ ...items, [site]: true }));
+  };
   const setEnvelope = (value: number) => updateCashField("envelope", value);
   const setClosed = (value: boolean) => updateCashField("closed", value);
   const updateOperationalLimit = <K extends keyof OperationalLimits>(
@@ -4513,6 +4517,8 @@ export default function Home() {
       );
     if (requiresEnvelope && envelope > counted)
       return setMessage("El monto del sobre no puede ser mayor al efectivo físico contado.");
+    if (expected !== 0 && !cashCountConfirmedBySite[site])
+      return setMessage("Confirmá el efectivo contado, incluso si es $0. Así evitamos cierres por omisión.");
     // Una diferencia mayor al límite ya no impide cerrar: exige un motivo y
     // queda como incidencia abierta para Administración.
     const differenceExceeded = Math.abs(cashVariance) > siteLimits.maxCashDifference;
@@ -4678,6 +4684,7 @@ export default function Home() {
     setCashLedger((items) => items.filter((entry) => !(entry.shiftId === lastClosedShift.id && ["Cierre de caja", "Sobre enviado a Caja Mayor", "Gastos declarados al cierre", "Retiros declarados al cierre"].includes(entry.kind))));
     setEnvelopeRecords((items) => items.filter((entry) => !(entry.site === site && entry.at === lastClosedShift.closedAt)));
     setCashFieldsBySite((items) => ({ ...items, [site]: { ...EMPTY_CASH_FIELDS, ...items[site], counted: 0, envelope: 0, expenses: 0, withdrawals: 0 } }));
+    setCashCountConfirmedBySite((items) => ({ ...items, [site]: false }));
     setClosed(false);
     recordAudit("Caja reabierta el mismo día", `${site} · cierre ${lastClosedShift.closedAt} · ${reason}`);
     setMessage("Caja reabierta: se conserva el mismo fondo, las ventas y los cobros. El próximo cierre sustituirá la fila diaria de Drive.");
@@ -4717,6 +4724,7 @@ export default function Home() {
       ...items,
       [site]: { ...EMPTY_CASH_FIELDS, ...items[site], counted: 0, envelope: 0 },
     }));
+    setCashCountConfirmedBySite((items) => ({ ...items, [site]: false }));
     setShiftLog((items) => [shift, ...items]);
     setCashLedger((items) => [
       {
@@ -5887,8 +5895,8 @@ export default function Home() {
                       {siteCashClosuresLoading ? <p className="p-3 text-sm text-slate-500">Cargando cierres…</p>
                         : siteCashClosures.length ? (
                           <table className="w-full text-left text-xs">
-                            <thead className="bg-[#eef2f6] text-[#183a67]"><tr><th className="p-2">Abrió</th><th className="p-2">Cerró</th><th className="p-2 text-right">Esperado</th><th className="p-2 text-right">Contado</th><th className="p-2 text-right">Diferencia</th></tr></thead>
-                            <tbody>{siteCashClosures.map((closure) => <tr key={closure.id} className="border-t"><td className="p-2"><b>{closure.openedBy || "—"}</b><span className="block text-slate-500">{closure.openedAt || "—"}</span></td><td className="p-2"><b>{closure.closedBy || "—"}</b><span className="block text-slate-500">{closure.closedAt || "—"}</span></td><td className="p-2 text-right">{closure.expectedCash == null ? "—" : money.format(closure.expectedCash)}</td><td className="p-2 text-right">{closure.countedCash == null ? "—" : money.format(closure.countedCash)}</td><td className={`p-2 text-right font-bold ${(closure.differenceAmount || 0) === 0 ? "text-green-700" : "text-amber-700"}`}>{closure.differenceAmount == null ? "—" : money.format(closure.differenceAmount)}</td></tr>)}</tbody>
+                            <thead className="bg-[#eef2f6] text-[#183a67]"><tr><th className="p-2">Abrió</th><th className="p-2">Cerró</th><th className="p-2 text-right">Esperado</th><th className="p-2 text-right">Contado</th><th className="p-2 text-right">Diferencia</th><th className="p-2">Todos los medios</th></tr></thead>
+                            <tbody>{siteCashClosures.map((closure) => <tr key={closure.id} className="border-t"><td className="p-2"><b>{closure.openedBy || "—"}</b><span className="block text-slate-500">{closure.openedAt || "—"}</span></td><td className="p-2"><b>{closure.closedBy || "—"}</b><span className="block text-slate-500">{closure.closedAt || "—"}</span></td><td className="p-2 text-right">{closure.expectedCash == null ? "—" : money.format(closure.expectedCash)}</td><td className="p-2 text-right">{closure.countedCash == null ? "—" : money.format(closure.countedCash)}</td><td className={`p-2 text-right font-bold ${(closure.differenceAmount || 0) === 0 ? "text-green-700" : "text-amber-700"}`}>{closure.differenceAmount == null ? "—" : money.format(closure.differenceAmount)}</td><td className="p-2"><details><summary className="cursor-pointer font-bold text-[#183a67]">Ver detalle</summary><ul className="mt-1 space-y-1 whitespace-nowrap">{closure.paymentTotals?.length ? closure.paymentTotals.map((payment) => <li key={payment.method} className="flex justify-between gap-3"><span>{payment.method}</span><b>{money.format(payment.amount)}</b></li>) : <li className="text-slate-500">Sin cobros en el turno.</li>}</ul></details></td></tr>)}</tbody>
                           </table>
                         ) : <p className="p-3 text-sm text-slate-500">Todavía no hay cierres confirmados en este local.</p>}
                     </div>
@@ -6044,6 +6052,10 @@ export default function Home() {
                       onChange={(e) => setCounted(Number(e.target.value))}
                       className="mt-1 w-full rounded border p-2"
                     />
+                    <label className="mt-2 flex items-start gap-2 text-xs text-slate-700">
+                      <input type="checkbox" checked={Boolean(cashCountConfirmedBySite[site])} onChange={(event) => setCashCountConfirmedBySite((items) => ({ ...items, [site]: event.target.checked }))} />
+                      <span>Confirmo que el efectivo contado fue verificado físicamente, incluso si el importe es $0.</span>
+                    </label>
                   </> : <p className="mt-3 rounded bg-[#eef2f6] p-3 text-sm text-slate-600">
                     Caja cerrada: la conciliación del turno quedó registrada. Abrí una caja para iniciar una nueva conciliación.
                   </p>}
@@ -6138,10 +6150,10 @@ export default function Home() {
                       distintos ya cargados. La conexión se administra únicamente en el servidor.
                     </p>
                     <p className="mt-2 text-slate-500">{syncStatus}</p>
-                    {user.role === "administracion" && (
+                    {can("reconciliarCaja") && (
                       <div className="mt-3 border-t pt-3">
-                        <b>Corrección administrativa de un día ya cerrado</b>
-                        <p className="mt-1">Recalcula desde ventas y pagos confirmados en el servidor. Solo reemplaza una fila que el sistema escribió y que sigue intacta.</p>
+                        <b>Corrección excepcional de un día ya cerrado</b>
+                        <p className="mt-1">Recalcula desde ventas y pagos confirmados en el servidor. Solo reemplaza una fila que el sistema escribió y que sigue intacta. La acción queda auditada.</p>
                         <div className="mt-2 flex flex-wrap gap-2"><input type="date" value={dailyCashCorrectionDate} onChange={(event) => setDailyCashCorrectionDate(event.target.value)} className="rounded border p-2" /><button onClick={() => void reconcileDailyCashSheet()} disabled={dailyCashCorrectionBusy} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67] disabled:opacity-40">{dailyCashCorrectionBusy ? "Corrigiendo…" : "Recalcular y corregir Drive"}</button><button onClick={() => void authorizeCashSheets()} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67]">Ver requisitos de Apps Script</button></div>
                       </div>
                     )}
