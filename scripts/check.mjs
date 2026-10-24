@@ -22,7 +22,7 @@ const steps = [
   ["Usuarios, MRP y estructura", nodeTest("tests/user-management.test.mjs", "tests/mrp.test.mjs", "tests/module-structure.test.mjs", "tests/app-icons.test.mjs", "tests/report-navigation.test.mjs")],
   ["Catálogo", nodeTest("tests/catalog.test.mjs", "tests/catalog-runtime.test.mjs")],
   ["Pedidos y documento", nodeTest("tests/order-document.test.mjs")],
-  ["Comprobantes", nodeTest("tests/thermal-receipt.test.mjs")],
+  ["Comprobantes y ayuda de caja", nodeTest("tests/thermal-receipt.test.mjs", "tests/cash-help.test.mjs")],
   ["Ayuda y reportes", nodeTest("tests/assistant-help.test.mjs", "tests/report-guide.test.mjs")],
 ];
 if (php) {

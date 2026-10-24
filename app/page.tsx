@@ -7,6 +7,7 @@ import ReportNavigation from "./components/ReportNavigation";
 import { ADMIN_REPORTS, canOpenReport } from "./data/reportGuide";
 import Heading from "./modules/shared/components/Heading";
 import { buildThermalReceipt } from "./modules/ventas/thermalReceipt";
+import { FieldHelp } from "./modules/shared/FieldHelp";
 import { orderDocumentHtml } from "./modules/pedidos/orderDocument";
 import { buildThermalOrderReceipt } from "./modules/pedidos/thermalOrderReceipt";
 import { internalDeliveryNoteHtml } from "./modules/pedidos/internalDeliveryNote";
@@ -5929,6 +5930,7 @@ export default function Home() {
                   </p>
                   <label className="block text-sm font-bold">
                     Fondo inicial
+                    <FieldHelp>Contá el efectivo físico con el que empieza esta caja. No cargues aquí ventas, retiros ni dinero que esperás cobrar durante el día.</FieldHelp>
                   </label>
                   <input
                     type="number"
@@ -5973,7 +5975,7 @@ export default function Home() {
                     </div>
                   )}
                   <div className="mt-4 border-t pt-4">
-                    <b className="text-sm">Ajuste / movimiento de caja</b>
+                    <b className="text-sm">Ajuste / movimiento de caja<FieldHelp>Usalo solo si entra o sale efectivo por un hecho real que no es una venta ni un egreso ya registrado. Cada movimiento debe tener importe y motivo; no lo uses para ocultar una diferencia de cierre.</FieldHelp></b>
                     <select
                       value={cashAdjustmentKind}
                       onChange={(event) =>
@@ -5988,34 +5990,43 @@ export default function Home() {
                       <option>Retiro de caja</option>
                     </select>
                     {cashAdjustmentKind === "Ajuste de caja" && (
-                      <select
-                        value={cashAdjustmentImpact}
-                        onChange={(event) => setCashAdjustmentImpact(event.target.value as "Ingreso" | "Egreso")}
-                        className="mt-2 w-full rounded border p-2"
-                        aria-label="Impacto del ajuste"
-                      >
-                        <option value="Ingreso">Ajuste que suma efectivo</option>
-                        <option value="Egreso">Ajuste que resta efectivo</option>
-                      </select>
+                      <label className="mt-2 block text-sm font-bold">
+                        Impacto del ajuste<FieldHelp>Elegí “suma efectivo” solo si el dinero entró físicamente a caja. Elegí “resta efectivo” solo si salió físicamente. Si fue una venta o un gasto, registralo en su módulo correspondiente.</FieldHelp>
+                        <select
+                          value={cashAdjustmentImpact}
+                          onChange={(event) => setCashAdjustmentImpact(event.target.value as "Ingreso" | "Egreso")}
+                          className="mt-1 w-full rounded border p-2 font-normal"
+                          aria-label="Impacto del ajuste"
+                        >
+                          <option value="Ingreso">Ajuste que suma efectivo</option>
+                          <option value="Egreso">Ajuste que resta efectivo</option>
+                        </select>
+                      </label>
                     )}
-                    <input
-                      type="number"
-                      min="0"
-                      value={cashAdjustmentAmount || ""}
-                      onChange={(event) =>
-                        setCashAdjustmentAmount(Number(event.target.value))
-                      }
-                      placeholder="Importe"
-                      className="mt-2 w-full rounded border p-2"
-                    />
-                    <input
-                      value={cashAdjustmentDetail}
-                      onChange={(event) =>
-                        setCashAdjustmentDetail(event.target.value)
-                      }
-                      placeholder="Motivo"
-                      className="mt-2 w-full rounded border p-2"
-                    />
+                    <label className="mt-2 block text-sm font-bold">
+                      Importe<FieldHelp>Ingresá únicamente el monto del efectivo que entra o sale por este movimiento. No pongas el total de caja ni números negativos.</FieldHelp>
+                      <input
+                        type="number"
+                        min="0"
+                        value={cashAdjustmentAmount || ""}
+                        onChange={(event) =>
+                          setCashAdjustmentAmount(Number(event.target.value))
+                        }
+                        placeholder="Importe"
+                        className="mt-1 w-full rounded border p-2 font-normal"
+                      />
+                    </label>
+                    <label className="mt-2 block text-sm font-bold">
+                      Motivo<FieldHelp>Explicá qué pasó y, si existe, anotá la referencia. Ejemplo: “cambio para caja”, “retiro autorizado” o número de comprobante.</FieldHelp>
+                      <input
+                        value={cashAdjustmentDetail}
+                        onChange={(event) =>
+                          setCashAdjustmentDetail(event.target.value)
+                        }
+                        placeholder="Motivo"
+                        className="mt-1 w-full rounded border p-2 font-normal"
+                      />
+                    </label>
                     <button
                       onClick={registerCashAdjustment}
                       className="mt-2 w-full rounded border py-2 text-sm font-bold"
@@ -6030,7 +6041,7 @@ export default function Home() {
                     </div>
                   )}
                   <label className="mt-3 block text-sm font-bold">
-                    Retiros
+                    Retiros<FieldHelp>Informá el efectivo que ya fue retirado de esta caja durante el turno y todavía no quedó registrado como “Retiro de caja”. Si ya lo registraste arriba, no lo repitas aquí.</FieldHelp>
                   </label>
                   <input
                     type="number"
@@ -6044,7 +6055,7 @@ export default function Home() {
                       Efectivo esperado: {money.format(expected)}
                     </p>
                     <label className="mt-3 block text-sm font-bold">
-                      Efectivo contado en caja
+                      Efectivo contado en caja<FieldHelp>Contá todos los billetes y monedas que están físicamente en la caja antes de separar el sobre. Informá el total contado, incluso si da $0.</FieldHelp>
                     </label>
                     <input
                       type="number"
@@ -6062,7 +6073,7 @@ export default function Home() {
                   {requiresEnvelope && (
                     <>
                       <label className="mt-3 block text-sm font-bold">
-                        Sobre en efectivo
+                        Sobre en efectivo<FieldHelp>Informá solo el efectivo que ya separaste dentro del sobre para retirar o entregar. Ese importe forma parte de lo contado, por eso el sistema lo descuenta para calcular lo que queda en caja.</FieldHelp>
                       </label>
                       <input
                         type="number"
@@ -6091,7 +6102,7 @@ export default function Home() {
                   </>}
                   {cashControlIsOpen && Math.abs(cashVariance) > siteLimits.maxCashDifference && (
                     <label className="mt-3 block text-sm font-bold">
-                      Motivo de la diferencia (obligatorio para cerrar)
+                      Motivo de la diferencia (obligatorio para cerrar)<FieldHelp>Describí la causa real de la diferencia. No modifiques los importes para forzar cero: el sistema conserva la diferencia para que pueda revisarse.</FieldHelp>
                       <input
                         value={cashDifferenceReason}
                         onChange={(event) => setCashDifferenceReason(event.target.value)}
