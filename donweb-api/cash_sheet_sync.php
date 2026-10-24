@@ -586,7 +586,16 @@ function cash_sheet_http(string $url, array $options = []): array
     if (!function_exists('curl_init')) throw new RuntimeException('El hosting no tiene disponible cURL.');
     $handle = curl_init($url);
     $headers = $options['headers'] ?? [];
-    $settings = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 25, CURLOPT_HTTPHEADER => $headers];
+    // Las aplicaciones web de Apps Script responden primero con una redirección
+    // de Google al contenido JSON. Seguirla es necesario para poder confirmar
+    // un cierre; sin ello cURL veía un 302 y lo reportaba como fallo genérico.
+    $settings = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 25,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
+    ];
     if (($options['method'] ?? 'GET') === 'POST') {
         $settings[CURLOPT_POST] = true;
         if (array_key_exists('json', $options)) {
