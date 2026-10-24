@@ -266,7 +266,7 @@ function cash_sheet_apps_script_sync(array $config, array $payload): array
     ];
     // Contrato canónico v2: base64 del JSON UTF-8 sin escapes, firmado con
     // HMAC-SHA256. El orden de estas claves coincide con Apps Script.
-    foreach (['kind', 'adjustmentId', 'saleId', 'amount', 'paymentMethod', 'reason', 'auditReference'] as $key) {
+    foreach (['kind', 'adjustmentId', 'saleId', 'amount', 'paymentMethod', 'reason', 'auditReference', 'replaceDaily'] as $key) {
         if (array_key_exists($key, $payload) && $payload[$key] !== null) $body[$key] = $payload[$key];
     }
     $canonical = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -378,6 +378,7 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
     $site = trim((string) ($input['site'] ?? ''));
     $closeId = trim((string) ($input['closeId'] ?? ''));
     $businessDate = trim((string) ($input['businessDate'] ?? ''));
+    $replaceDaily = !empty($input['replaceDaily']);
     if (!in_array($site, operational_sites(), true) || !user_can_access_site($user, $site) || !user_can_action($user, 'cobrar')) {
         throw new InvalidArgumentException('No tenés permiso para sincronizar el cierre de este local.');
     }
@@ -402,15 +403,15 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
         if (!is_finite($value) || $value < 0 && $key !== 'difference') throw new InvalidArgumentException('Importes de cierre inválidos.');
         $safeMetrics[$key] = round($value, 2);
     }
-    $payload = ['site' => $site, 'date' => $businessDate, 'payments' => $safePayments, 'metrics' => $safeMetrics];
+    $payload = ['site' => $site, 'date' => $businessDate, 'payments' => $safePayments, 'metrics' => $safeMetrics, 'replaceDaily' => $replaceDaily];
     $payloadHash = hash('sha256', (string) json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     $existing = $pdo->prepare('SELECT * FROM cash_sheet_sync_runs WHERE close_id = ? LIMIT 1');
     $existing->execute([$closeId]);
     $run = $existing->fetch();
     if ($run) {
-        if (!hash_equals((string) $run['payload_hash'], $payloadHash)) throw new RuntimeException('Ese cierre ya fue enviado con datos distintos; no se sobrescribió la planilla.');
-        if ($run['status'] === 'verified') return ['alreadySynced' => true, 'row' => (int) $run['target_row'], 'sheet' => (string) $run['sheet_name'], 'fields' => json_decode((string) $run['written_fields_json'], true) ?: []];
-        $pdo->prepare("UPDATE cash_sheet_sync_runs SET status='running', error_message=NULL, started_at=NOW(), finished_at=NULL WHERE close_id=?")->execute([$closeId]);
+        if (!hash_equals((string) $run['payload_hash'], $payloadHash) && !$replaceDaily) throw new RuntimeException('Ese cierre ya fue enviado con datos distintos; no se sobrescribió la planilla.');
+        if ($run['status'] === 'verified' && !$replaceDaily) return ['alreadySynced' => true, 'row' => (int) $run['target_row'], 'sheet' => (string) $run['sheet_name'], 'fields' => json_decode((string) $run['written_fields_json'], true) ?: []];
+        $pdo->prepare("UPDATE cash_sheet_sync_runs SET status='running', payload_hash=?, error_message=NULL, started_at=NOW(), finished_at=NULL WHERE close_id=?")->execute([$payloadHash, $closeId]);
     } else {
         $pdo->prepare("INSERT INTO cash_sheet_sync_runs (close_id, site, business_date, status, payload_hash, triggered_by, started_at) VALUES (?, ?, ?, 'running', ?, ?, NOW())")
             ->execute([$closeId, $site, $businessDate, $payloadHash, (int) $user['id']]);
@@ -426,13 +427,14 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
                 'businessDate' => $businessDate,
                 'payments' => $safePayments,
                 'metrics' => $safeMetrics,
+                'replaceDaily' => $replaceDaily,
             ]);
             $rowNumber = (int) ($result['row'] ?? 0);
             $scriptSheet = trim((string) ($result['sheet'] ?? $sheet));
             $writtenFields = is_array($result['fields'] ?? null) ? $result['fields'] : [];
             $fieldsJson = json_encode($writtenFields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $pdo->prepare("UPDATE cash_sheet_sync_runs SET status='verified', spreadsheet_id=?, sheet_name=?, target_row=?, written_fields_json=?, finished_at=NOW() WHERE close_id=?")
-                ->execute([$spreadsheetId, $scriptSheet, $rowNumber ?: null, $fieldsJson, $closeId]);
+            $pdo->prepare("UPDATE cash_sheet_sync_runs SET status='verified', payload_hash=?, spreadsheet_id=?, sheet_name=?, target_row=?, written_fields_json=?, finished_at=NOW() WHERE close_id=?")
+                ->execute([$payloadHash, $spreadsheetId, $scriptSheet, $rowNumber ?: null, $fieldsJson, $closeId]);
             audit($pdo, (int) $user['id'], 'cash_close_synced_to_apps_script', $site . ' · fila ' . ($rowNumber ?: 'verificada'));
             return ['alreadySynced' => !empty($result['alreadySynced']), 'row' => $rowNumber, 'sheet' => $scriptSheet, 'fields' => $writtenFields];
         }
@@ -487,7 +489,7 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
             $existingValue = (string) ($values[$targetOffset][$column] ?? '');
             $formulaValue = (string) ($formulaRow[$column] ?? '');
             if (str_starts_with($formulaValue, '=')) throw new RuntimeException('La columna ' . (string) ($headers[$column] ?? '') . ' contiene una fórmula y no se reemplazó.');
-            if ($existingValue !== '' && abs(cash_sheet_number($existingValue) - $amount) > 0.01 && abs(cash_sheet_number($existingValue)) > 0.01) {
+            if (!$replaceDaily && $existingValue !== '' && abs(cash_sheet_number($existingValue) - $amount) > 0.01 && abs(cash_sheet_number($existingValue)) > 0.01) {
                 throw new RuntimeException('La columna ' . (string) ($headers[$column] ?? '') . ' ya tiene un valor distinto; no se sobrescribió.');
             }
             $cell = cash_sheet_column_name($column) . $rowNumber;
@@ -502,8 +504,8 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
         ]);
         if ($response['status'] !== 200) throw new RuntimeException('Google no confirmó la escritura del cierre.');
         $fieldsJson = json_encode($writtenFields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $pdo->prepare("UPDATE cash_sheet_sync_runs SET status='verified', spreadsheet_id=?, sheet_name=?, target_row=?, written_fields_json=?, finished_at=NOW() WHERE close_id=?")
-            ->execute([$spreadsheetId, $sheet, $rowNumber, $fieldsJson, $closeId]);
+        $pdo->prepare("UPDATE cash_sheet_sync_runs SET status='verified', payload_hash=?, spreadsheet_id=?, sheet_name=?, target_row=?, written_fields_json=?, finished_at=NOW() WHERE close_id=?")
+            ->execute([$payloadHash, $spreadsheetId, $sheet, $rowNumber, $fieldsJson, $closeId]);
         audit($pdo, (int) $user['id'], 'cash_close_synced_to_google_sheet', $site . ' · fila ' . $rowNumber);
         return ['alreadySynced' => false, 'row' => $rowNumber, 'sheet' => $sheet, 'fields' => $writtenFields];
     } catch (Throwable $error) {
@@ -512,6 +514,44 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
             ->execute([$message, $closeId]);
         throw $error;
     }
+}
+
+/** Recalcula una fila diaria desde ventas y pagos normalizados, nunca desde el
+ * navegador. Solo Administración puede corregir un día ya sincronizado. */
+function cash_sheet_reconcile_daily(PDO $pdo, array $config, array $user, array $input): array
+{
+    ensure_cash_sheet_sync_schema($pdo);
+    ensure_normalized_operations_schema($pdo);
+    $site = trim((string) ($input['site'] ?? ''));
+    $businessDate = trim((string) ($input['businessDate'] ?? ''));
+    $reason = trim((string) ($input['reason'] ?? ''));
+    if (($user['role'] ?? '') !== 'administracion' || !in_array($site, operational_sites(), true) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $businessDate) || $reason === '') {
+        throw new InvalidArgumentException('Datos o permiso insuficientes para corregir el cierre diario.');
+    }
+    $runStatement = $pdo->prepare("SELECT close_id, written_fields_json FROM cash_sheet_sync_runs WHERE site=? AND business_date=? AND status='verified' ORDER BY finished_at DESC LIMIT 1");
+    $runStatement->execute([$site, $businessDate]);
+    $run = $runStatement->fetch();
+    if (!$run) throw new InvalidArgumentException('No hay un cierre sincronizado para ese local y fecha.');
+    $salesStatement = $pdo->prepare("SELECT id, net_amount, discount_amount, payment_method FROM lartisan_sales WHERE site=? AND status='activa' AND occurred_at >= ? AND occurred_at < DATE_ADD(?, INTERVAL 1 DAY)");
+    $salesStatement->execute([$site, $businessDate, $businessDate]);
+    $sales = $salesStatement->fetchAll();
+    $payments = []; $total = 0.0; $discounts = 0.0;
+    foreach ($sales as $sale) {
+        $total += (float) $sale['net_amount']; $discounts += (float) $sale['discount_amount'];
+        $paymentStatement = $pdo->prepare('SELECT payment_method, amount FROM lartisan_sale_payments WHERE sale_id=?');
+        $paymentStatement->execute([(string) $sale['id']]); $rows = $paymentStatement->fetchAll();
+        if (!$rows) $rows = [['payment_method' => (string) ($sale['payment_method'] ?? 'Sin informar'), 'amount' => (float) $sale['net_amount']]];
+        foreach ($rows as $payment) { $method = trim((string) $payment['payment_method']); if ($method !== '') $payments[$method] = round(($payments[$method] ?? 0) + (float) $payment['amount'], 2); }
+    }
+    $sessionStatement = $pdo->prepare('SELECT counted_cash,envelope_amount,difference_amount FROM lartisan_cash_sessions WHERE site=? AND DATE(closed_at)=? ORDER BY closed_at DESC LIMIT 1');
+    $sessionStatement->execute([$site, $businessDate]); $session = $sessionStatement->fetch() ?: [];
+    $result = cash_sheet_sync_close($pdo, $config, $user, [
+        'site' => $site, 'closeId' => (string) $run['close_id'], 'businessDate' => $businessDate, 'replaceDaily' => true,
+        'payments' => array_map(static fn (string $method, float $amount): array => ['method' => $method, 'amount' => $amount], array_keys($payments), array_values($payments)),
+        'metrics' => ['total' => round($total, 2), 'tickets' => count($sales), 'discounts' => round($discounts, 2), 'counted' => (float) ($session['counted_cash'] ?? 0), 'envelope' => (float) ($session['envelope_amount'] ?? 0), 'difference' => (float) ($session['difference_amount'] ?? 0)],
+    ]);
+    audit($pdo, (int) $user['id'], 'cash_sheet_daily_reconciled', $site . ' · ' . $businessDate . ' · ' . mb_substr($reason, 0, 300));
+    return $result + ['total' => round($total, 2), 'tickets' => count($sales), 'reason' => $reason];
 }
 
 function cash_sheet_http(string $url, array $options = []): array

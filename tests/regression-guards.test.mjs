@@ -11,6 +11,8 @@ const page = read("app/page.tsx");
 const outbox = read("app/modules/shared/operationalOutbox.ts");
 const bootstrap = read("donweb-api/bootstrap.php");
 const index = read("donweb-api/index.php");
+const cashSheet = read("donweb-api/cash_sheet_sync.php");
+const cashSheetScript = read("google-apps-script/LArtisanCashCloseSync.gs");
 const htaccess = read("donweb-api/.htaccess");
 const phpFiles = readdirSync(new URL("../donweb-api/", import.meta.url)).filter((file) => file.endsWith(".php"));
 const php = Object.fromEntries(phpFiles.map((file) => [file, read(`donweb-api/${file}`)]));
@@ -88,6 +90,17 @@ test("Caja: el turno cerrado se envía como null y la apertura usa la fecha ISO"
   // Con undefined, JSON omite el campo y el servidor dejaba el turno abierto: ningún cierre llegaba a reportes.
   assert.match(page, /activeShift: activeShiftBySite\[local\] \?\? null/);
   assert.match(bootstrap, /iso_datetime\(\$session\['openedAtISO'\] \?\? null\)/);
+});
+
+test("Caja: una reapertura del mismo día conserva auditoría y Drive solo reemplaza su propio valor", () => {
+  assert.match(page, /Reabrir último cierre de hoy/);
+  assert.match(page, /Caja reabierta el mismo día/);
+  assert.match(page, /replaceDaily: Boolean\(activeShift\?\.reopenedAtISO\)/);
+  assert.match(cashSheet, /cash_sheet_reconcile_daily/);
+  assert.match(index, /admin\/cash-sheets\/reconcile-daily/);
+  assert.match(cashSheetScript, /request\.replaceDaily && priorValue !== undefined/);
+  assert.match(cashSheetScript, /fue modificada manualmente; no se sobrescribió/);
+  assert.match(bootstrap, /reapertura auditada del mismo día/);
 });
 
 test("Relevos: las ventas y la caja del local se actualizan sin cambiar de usuario", () => {

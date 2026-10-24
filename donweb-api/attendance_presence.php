@@ -208,6 +208,16 @@ function enforce_strict_cash_snapshot(array $previous, array $next, array $user,
     $shift = is_array($next['activeShift'] ?? null) ? $next['activeShift'] : null;
     $validOpening = static fn (): bool => $shift !== null && !empty($shift['id']) && ($shift['site'] ?? '') === $site
         && ($shift['openedBy'] ?? '') === (string) $user['full_name'];
+    $validSameDayReopen = static function () use ($previous, $next, $shift, $site): bool {
+        if ($shift === null || empty($shift['id']) || ($shift['site'] ?? '') !== $site || empty($shift['reopenedAtISO']) || empty($shift['reopenReason'])) return false;
+        $previousClosed = null;
+        foreach (is_array($previous['shiftLog'] ?? null) ? $previous['shiftLog'] : [] as $item) {
+            if (is_array($item) && ($item['id'] ?? '') === ($shift['id'] ?? '') && !empty($item['closedAtISO'])) { $previousClosed = $item; break; }
+        }
+        if ($previousClosed === null) return false;
+        $closed = iso_datetime($previousClosed['closedAtISO']); $reopened = iso_datetime($shift['reopenedAtISO']);
+        return $closed !== null && $reopened !== null && substr($closed, 0, 10) === substr($reopened, 0, 10);
+    };
     if ($wasOpen && $isOpen && $wasShift !== null && (!$shift || ($shift['id'] ?? '') !== ($wasShift['id'] ?? ''))) {
         // Relevo acumulado en un solo envío (cierre con arqueo y nueva apertura
         // antes de que el primero llegara al servidor): es válido si el turno
@@ -220,7 +230,7 @@ function enforce_strict_cash_snapshot(array $previous, array $next, array $user,
     if ($wasOpen && $isOpen && $wasShift !== null && $shift === null) throw new OperationalSyncRejected('No se permite cerrar un turno dejando la caja abierta.');
     if (!$wasOpen && $isOpen) {
         if (!$shift || empty($shift['id']) || ($shift['site'] ?? '') !== $site) throw new OperationalSyncRejected('La apertura debe crear una responsable activa.');
-        if (($shift['openedBy'] ?? '') !== (string) $user['full_name']) throw new OperationalSyncRejected('La caja solo puede ser abierta por la responsable de la sesión.');
+        if (!$validSameDayReopen() && ($shift['openedBy'] ?? '') !== (string) $user['full_name']) throw new OperationalSyncRejected('La caja solo puede ser abierta por la responsable de la sesión.');
     }
     if ($wasOpen && !$isOpen && $wasShift !== null && !shift_closed_in_snapshot($next, (string) ($wasShift['id'] ?? ''))) {
         throw new RuntimeException('El cierre completo debe registrar arqueo y responsable saliente antes de abrir otra caja.');

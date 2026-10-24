@@ -11,7 +11,9 @@
  * 5. Entrega la URL /exec y la misma clave al administrador del servidor,
  *    quien las carga en lartisan-cash-sheet-config.php fuera de public_html.
  *
- * Nunca se crea una fila, nunca se cambia una fórmula ni un valor distinto.
+ * Nunca se crea una fila ni se cambia una fórmula. Una reapertura del mismo
+ * día puede sustituir exclusivamente los valores que esta integración había
+ * escrito antes y que siguen intactos; no sobrescribe cambios manuales.
  * Novo Pacheco queda intencionalmente fuera de esta configuración.
  */
 
@@ -53,6 +55,7 @@ function doPost(e) {
       kind: request.kind, adjustmentId: request.adjustmentId, saleId: request.saleId,
       amount: request.amount, paymentMethod: request.paymentMethod, reason: request.reason,
       auditReference: request.auditReference,
+      replaceDaily: request.replaceDaily,
     };
     const secret = PropertiesService.getScriptProperties().getProperty('LARTISAN_SYNC_SECRET');
     let decoded = '';
@@ -105,12 +108,12 @@ function syncClose_(location, request) {
   const store = PropertiesService.getScriptProperties();
   const idempotencyKey = 'LARTISAN_CLOSE_' + request.closeId;
   const prior = store.getProperty(idempotencyKey);
-  if (prior) return JSON.parse(prior);
+  if (prior && !request.replaceDaily) return JSON.parse(prior);
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const again = store.getProperty(idempotencyKey);
-    if (again) return JSON.parse(again);
+    if (again && !request.replaceDaily) return JSON.parse(again);
     const spreadsheet = SpreadsheetApp.openById(location.spreadsheetId);
     const sheet = spreadsheet.getSheetByName(location.sheet);
     if (!sheet) throw new Error('No se encontró la pestaña configurada.');
@@ -143,12 +146,19 @@ function syncClose_(location, request) {
     });
     if (!Object.keys(writes).length) throw new Error('No hay campos válidos para actualizar.');
     const fields = {};
+    const previous = prior ? JSON.parse(prior) : null;
     Object.keys(writes).forEach(key => {
       const column = Number(key), next = writes[column], current = numeric_(values[column]);
       if (String(formulas[column] || '').startsWith('=')) throw new Error('La columna ' + headers[column] + ' contiene una fórmula y no se reemplazó.');
-      if (String(values[column] || '').trim() && Math.abs(current) > 0.01 && Math.abs(current - next) > 0.01) throw new Error('La columna ' + headers[column] + ' ya tiene un valor distinto; no se sobrescribió.');
+      const label = headers[column] || ('Columna ' + (column + 1));
+      const priorValue = previous && previous.fields ? previous.fields[label] : undefined;
+      // Una reapertura solo puede sustituir exactamente el valor que este
+      // sistema registró para ese cierre. Si una persona lo editó en Drive,
+      // se detiene para que Administración lo concilie conscientemente.
+      if (request.replaceDaily && priorValue !== undefined && Math.abs(current - Number(priorValue)) > 0.01) throw new Error('La columna ' + label + ' fue modificada manualmente; no se sobrescribió.');
+      if (!request.replaceDaily && String(values[column] || '').trim() && Math.abs(current) > 0.01 && Math.abs(current - next) > 0.01) throw new Error('La columna ' + label + ' ya tiene un valor distinto; no se sobrescribió.');
       sheet.getRange(row, column + 1).setValue(next);
-      fields[headers[column] || ('Columna ' + (column + 1))] = next;
+      fields[label] = next;
     });
     const result = { alreadySynced: false, row: row, sheet: location.sheet, fields: fields };
     store.setProperty(idempotencyKey, JSON.stringify(result));

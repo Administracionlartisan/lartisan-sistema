@@ -110,7 +110,10 @@ export type PostCloseCancellationAdjustment = {
   syncedAtISO?: string;
 };
 export type CashLedgerEntry = { id: string; site: string; shiftId?: string; kind: string; direction: "Ingreso" | "Egreso" | "Informativo"; amount: number; cashImpact: number; paymentMethod?: string; reference?: string; detail: string; at: string; atISO?: string; createdBy: string };
-export type CashShift = { id: string; site: string; openedAt: string; openedAtISO?: string; openedBy: string; initialFund: number; closedAt?: string; closedAtISO?: string; closedBy?: string; expectedCash?: number; countedCash?: number; differenceAmount?: number; envelopeAmount?: number; differenceReason?: string };
+export type CashCloseSnapshot = { closedAt: string; closedAtISO?: string; closedBy: string; expectedCash: number; countedCash: number; differenceAmount: number; envelopeAmount: number; differenceReason?: string };
+// Un cierre puede reabrirse únicamente el mismo día. El historial conserva
+// cada arqueo previo para auditoría; el turno y su fondo inicial no cambian.
+export type CashShift = { id: string; site: string; openedAt: string; openedAtISO?: string; openedBy: string; initialFund: number; closedAt?: string; closedAtISO?: string; closedBy?: string; expectedCash?: number; countedCash?: number; differenceAmount?: number; envelopeAmount?: number; differenceReason?: string; closeHistory?: CashCloseSnapshot[]; reopenedAt?: string; reopenedAtISO?: string; reopenedBy?: string; reopenReason?: string };
 export type OperationalLimits = { maxDiscount: number; maxExpense: number; maxCashDifference: number };
 export type PasswordResetRequest = { id: string; userId: string; username: string; site?: string; requestedAt: string; status: "Pendiente" | "Restablecida" };
 

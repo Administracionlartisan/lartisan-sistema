@@ -1855,9 +1855,11 @@ function sync_normalized_operations(PDO $pdo, string $site, array $state, int $u
     );
     $sessions = [];
     foreach (($state['shiftLog'] ?? []) as $session) if (is_array($session) && !empty($session['id'])) $sessions[$session['id']] = $session;
-    // El turno activo no reemplaza su versión ya cerrada del historial.
+    // El turno activo no reemplaza su versión ya cerrada del historial, salvo
+    // una reapertura auditada del mismo día: conserva el mismo turno y deja el
+    // cierre anterior dentro de closeHistory.
     $activeId = is_array($state['activeShift'] ?? null) ? (string) ($state['activeShift']['id'] ?? '') : '';
-    if ($activeId !== '' && empty($sessions[$activeId]['closedAtISO']) && empty($sessions[$activeId]['closedAt'])) $sessions[$activeId] = $state['activeShift'];
+    if ($activeId !== '' && (empty($sessions[$activeId]['closedAtISO']) && empty($sessions[$activeId]['closedAt']) || !empty($state['activeShift']['reopenedAtISO']))) $sessions[$activeId] = $state['activeShift'];
     foreach ($sessions as $session) {
         if (($previousSessions[(string) $session['id']] ?? null) === $session) continue;
         $sessionStatement->execute([

@@ -1069,6 +1069,19 @@ if ($method === 'POST' && $route === 'cash-sheets/close') {
     }
 }
 
+if ($method === 'POST' && $route === 'admin/cash-sheets/reconcile-daily') {
+    $admin = require_user($pdo, ['administracion']);
+    try {
+        $result = cash_sheet_reconcile_daily($pdo, $config, $admin, request_body());
+        json_response(['ok' => true, 'sync' => $result]);
+    } catch (InvalidArgumentException $error) {
+        json_response(['ok' => false, 'error' => $error->getMessage()], 422);
+    } catch (RuntimeException $error) {
+        system_error($pdo, 'cash-sheet daily reconciliation failed', $error->getMessage());
+        json_response(['ok' => false, 'error' => $error->getMessage()], 503);
+    }
+}
+
 if ($method === 'POST' && $route === 'cash-sheets/adjustment') {
     $user = require_user($pdo);
     try {

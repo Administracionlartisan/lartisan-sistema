@@ -376,6 +376,8 @@ export default function Home() {
   const [auditUserFilter, setAuditUserFilter] = useState("");
   const [auditActionFilter, setAuditActionFilter] = useState("");
   const [cashHistory, setCashHistory] = useState<CashHistoryRow[]>([]);
+  const [dailyCashCorrectionDate, setDailyCashCorrectionDate] = useState(() => dateKey(new Date()));
+  const [dailyCashCorrectionBusy, setDailyCashCorrectionBusy] = useState(false);
   const [cashClosuresResult, setCashClosuresResult] = useState<{ key: string; rows: CashHistoryRow[] } | null>(null);
   const cashClosuresKey = JSON.stringify([user?.id, tab, site, operationalVersion, isValidationTest]);
   const siteCashClosuresLoading = cashClosuresResult?.key !== cashClosuresKey;
@@ -4389,7 +4391,7 @@ export default function Home() {
   };
   const synchronizeCashClose = async (
     closeId: string,
-    payload: { businessDate: string; payments: { method: string; amount: number }[]; metrics: Record<string, number> },
+    payload: { businessDate: string; payments: { method: string; amount: number }[]; metrics: Record<string, number>; replaceDaily?: boolean },
   ) => {
     setSyncStatus("Enviando el cierre a la planilla del local…");
     try {
@@ -4449,6 +4451,19 @@ export default function Home() {
     setSyncStatus("Esta integración se configura con Apps Script desde la cuenta propietaria de las planillas.");
     setSyncStatus("Apps Script debe ser publicado una vez por el dueño de las planillas. Luego Administración carga su URL /exec y la clave compartida en el servidor; no hace falta Google Cloud.");
   };
+  const reconcileDailyCashSheet = async () => {
+    if (user?.role !== "administracion") return;
+    const reason = window.prompt(`Motivo de la corrección de Drive para ${site} (${dailyCashCorrectionDate}):`)?.trim();
+    if (!reason) return setSyncStatus("La corrección requiere un motivo auditado.");
+    setDailyCashCorrectionBusy(true); setSyncStatus("Recalculando desde las ventas confirmadas por el servidor…");
+    try {
+      const response = await fetch(`${API_BASE}/admin/cash-sheets/reconcile-daily`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ site, businessDate: dailyCashCorrectionDate, reason }) });
+      const data = await response.json() as { ok?: boolean; error?: string; sync?: { row?: number; sheet?: string; total?: number; tickets?: number } };
+      if (!response.ok || !data.ok || !data.sync) throw new Error(data.error || "Drive no confirmó la corrección.");
+      setSyncStatus(`Drive corregido desde ventas confirmadas: ${data.sync.sheet || "planilla"}, fila ${data.sync.row}. Total ${money.format(data.sync.total || 0)} · ${data.sync.tickets || 0} ventas.`);
+    } catch (error) { setSyncStatus(error instanceof Error ? error.message : "No se pudo corregir Drive."); }
+    finally { setDailyCashCorrectionBusy(false); }
+  };
   const enableValidationOperatingDate = async () => {
     if (user?.role !== "administracion") return;
     setTestOperatingDateBusy(true);
@@ -4507,6 +4522,9 @@ export default function Home() {
     const closePayload = {
       businessDate: dateKey(closeMoment),
       payments: totals,
+      // Una reapertura del mismo día conserva el mismo turno y sustituye solo
+      // los valores que la integración había escrito para esa fila diaria.
+      replaceDaily: Boolean(activeShift?.reopenedAtISO),
       metrics: {
         total: totals.reduce((sum, item) => sum + item.amount, 0),
         tickets: shiftSales.length,
@@ -4536,8 +4554,7 @@ export default function Home() {
     setCashDifferenceReason("");
     if (activeShift) {
       const closedNow = closeMoment;
-      const finalShift = {
-        ...activeShift,
+      const closeSnapshot = {
         closedAt: closedNow.toLocaleString("es-AR"),
         closedAtISO: closedNow.toISOString(),
         closedBy: user.name,
@@ -4546,6 +4563,11 @@ export default function Home() {
         differenceAmount: cashVariance,
         envelopeAmount: envelope,
         ...(differenceExceeded ? { differenceReason } : {}),
+      };
+      const finalShift = {
+        ...activeShift,
+        ...closeSnapshot,
+        closeHistory: [...(activeShift.closeHistory || []), closeSnapshot],
       };
       setShiftLog((items) =>
         items.map((shift) => (shift.id === finalShift.id ? finalShift : shift)),
@@ -4608,6 +4630,49 @@ export default function Home() {
     );
     setAttendanceReminder("Salida");
     setMessage("Caja cerrada. Recordá marcar tu salida en Fichaje antes de retirarte.");
+  };
+  const reopenTodayCash = () => {
+    if (!user || cashIsOpen) return;
+    const today = dateKey(operationalNow());
+    const lastClosedShift = shiftLog
+      .filter((shift) => shift.site === site && Boolean(shift.closedAtISO || shift.closedAt))
+      .sort((a, b) => Date.parse(b.closedAtISO || b.closedAt || "") - Date.parse(a.closedAtISO || a.closedAt || ""))[0];
+    if (!lastClosedShift || !lastClosedShift.closedAtISO || dateKey(new Date(lastClosedShift.closedAtISO)) !== today) {
+      setMessage("Solo se puede reabrir el último cierre del mismo día. Para otro día pedí una corrección a Administración.");
+      return;
+    }
+    const reason = window.prompt("Motivo de la reapertura (queda auditado):")?.trim();
+    if (!reason) return setMessage("La reapertura requiere un motivo auditado.");
+    const firstClose = {
+      closedAt: lastClosedShift.closedAt || new Date(lastClosedShift.closedAtISO).toLocaleString("es-AR"),
+      closedAtISO: lastClosedShift.closedAtISO,
+      closedBy: lastClosedShift.closedBy || "Sin informar",
+      expectedCash: lastClosedShift.expectedCash || 0,
+      countedCash: lastClosedShift.countedCash || 0,
+      differenceAmount: lastClosedShift.differenceAmount || 0,
+      envelopeAmount: lastClosedShift.envelopeAmount || 0,
+      ...(lastClosedShift.differenceReason ? { differenceReason: lastClosedShift.differenceReason } : {}),
+    };
+    const now = operationalNow();
+    const openShift = { ...lastClosedShift };
+    delete openShift.closedAt; delete openShift.closedAtISO; delete openShift.closedBy;
+    delete openShift.expectedCash; delete openShift.countedCash; delete openShift.differenceAmount;
+    delete openShift.envelopeAmount; delete openShift.differenceReason;
+    const reopened: CashShift = {
+      ...openShift,
+      closeHistory: lastClosedShift.closeHistory?.length ? lastClosedShift.closeHistory : [firstClose],
+      reopenedAt: now.toLocaleString("es-AR"), reopenedAtISO: now.toISOString(), reopenedBy: user.name, reopenReason: reason,
+    };
+    setCashOpenBySite((items) => ({ ...items, [site]: true }));
+    setActiveShiftBySite((items) => ({ ...items, [site]: reopened }));
+    // Se eliminan únicamente los asientos generados por el cierre equivocado;
+    // ventas, cobros y movimientos reales siguen formando el mismo arqueo.
+    setCashLedger((items) => items.filter((entry) => !(entry.shiftId === lastClosedShift.id && ["Cierre de caja", "Sobre enviado a Caja Mayor", "Gastos declarados al cierre", "Retiros declarados al cierre"].includes(entry.kind))));
+    setEnvelopeRecords((items) => items.filter((entry) => !(entry.site === site && entry.at === lastClosedShift.closedAt)));
+    setCashFieldsBySite((items) => ({ ...items, [site]: { ...EMPTY_CASH_FIELDS, ...items[site], counted: 0, envelope: 0, expenses: 0, withdrawals: 0 } }));
+    setClosed(false);
+    recordAudit("Caja reabierta el mismo día", `${site} · cierre ${lastClosedShift.closedAt} · ${reason}`);
+    setMessage("Caja reabierta: se conserva el mismo fondo, las ventas y los cobros. El próximo cierre sustituirá la fila diaria de Drive.");
   };
   const openCash = async () => {
     if (!user) return;
@@ -5862,12 +5927,12 @@ export default function Home() {
                     </div>
                   )}
                   {!cashIsOpen && (
-                    <button
-                      onClick={openCash}
-                      className="mt-3 w-full rounded bg-[#183a67] py-3 font-bold text-white"
-                    >
-                      Abrir caja
-                    </button>
+                    <div className="mt-3 grid gap-2">
+                      <button onClick={openCash} className="w-full rounded bg-[#183a67] py-3 font-bold text-white">Abrir caja nueva</button>
+                      {shiftLog.some((shift) => shift.site === site && shift.closedAtISO && dateKey(new Date(shift.closedAtISO)) === dateKey(operationalNow())) && (
+                        <button onClick={reopenTodayCash} className="w-full rounded border border-[#183a67] py-3 font-bold text-[#183a67]">Reabrir último cierre de hoy</button>
+                      )}
+                    </div>
                   )}
                   {cashIsOpen && canCorrectOpeningFund && (
                     <div className="mt-2 rounded border border-[#f0bd4e] bg-[#fff5d8] p-3 text-xs text-slate-700">
@@ -6064,12 +6129,11 @@ export default function Home() {
                     </p>
                     <p className="mt-2 text-slate-500">{syncStatus}</p>
                     {user.role === "administracion" && (
-                      <button
-                        onClick={() => void authorizeCashSheets()}
-                        className="mt-3 rounded border border-[#183a67] px-3 py-2 text-xs font-bold text-[#183a67]"
-                      >
-                        Ver requisitos de Apps Script
-                      </button>
+                      <div className="mt-3 border-t pt-3">
+                        <b>Corrección administrativa de un día ya cerrado</b>
+                        <p className="mt-1">Recalcula desde ventas y pagos confirmados en el servidor. Solo reemplaza una fila que el sistema escribió y que sigue intacta.</p>
+                        <div className="mt-2 flex flex-wrap gap-2"><input type="date" value={dailyCashCorrectionDate} onChange={(event) => setDailyCashCorrectionDate(event.target.value)} className="rounded border p-2" /><button onClick={() => void reconcileDailyCashSheet()} disabled={dailyCashCorrectionBusy} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67] disabled:opacity-40">{dailyCashCorrectionBusy ? "Corrigiendo…" : "Recalcular y corregir Drive"}</button><button onClick={() => void authorizeCashSheets()} className="rounded border border-[#183a67] px-3 py-2 font-bold text-[#183a67]">Ver requisitos de Apps Script</button></div>
+                      </div>
                     )}
                   </div>
                 </div>
