@@ -1,0 +1,31 @@
+
+> sites-project@0.1.0 check
+> node scripts/check.mjs
+
+✓ Tipos (TypeScript) (5.7 s)
+✓ Lint (sin errores) (25.7 s)
+✓ Anti-regresión (0.3 s)
+✓ Seguridad y confiabilidad (0.4 s)
+✓ Usuarios, MRP y estructura (0.9 s)
+✓ Catálogo (1.5 s)
+✓ Pedidos y documento (0.2 s)
+✓ Comprobantes y ayuda de caja (0.3 s)
+✓ Ayuda y reportes (3 s)
+✓ Sintaxis PHP index.php (0.1 s)
+✓ Sintaxis PHP bootstrap.php (0.1 s)
+✓ Sintaxis PHP arca_fiscal_queue.php (0.1 s)
+✓ Sintaxis PHP arca_wsfe.php (0.1 s)
+✓ Sintaxis PHP mrp_sync.php (0.1 s)
+✓ Sintaxis PHP pnl_sync.php (0.1 s)
+✓ Sintaxis PHP cash_sheet_sync.php (0.1 s)
+✓ Sintaxis PHP assistant.php (0.1 s)
+✓ Sintaxis PHP backup.php (0.1 s)
+✓ Sintaxis PHP monitor.php (0.1 s)
+✓ PHP operations-retention.php (0.2 s)
+✓ PHP sale-validation.php (0.1 s)
+✓ PHP timezone.php (0.1 s)
+✓ PHP stock-outflow.php (0.1 s)
+✓ PHP attendance-presence.php (0.1 s)
+✓ PHP payment-correction-concurrency.php (0.1 s)
+
+✓ Todo en orden (25 verificaciones).
