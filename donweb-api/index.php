@@ -2301,8 +2301,8 @@ if ($method === 'GET' && $route === 'cash/history') {
     ensure_normalized_operations_schema($pdo);
     $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : date('Y-m-d');
     $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? '')) ? (string) $_GET['to'] : $from;
-    if ($to < $from || (new DateTimeImmutable($from))->diff(new DateTimeImmutable($to))->days > 31) {
-        json_response(['ok' => false, 'error' => 'Elegí un rango válido de hasta 31 días.'], 422);
+    if ($to < $from || (new DateTimeImmutable($from))->diff(new DateTimeImmutable($to))->days > 3653) {
+        json_response(['ok' => false, 'error' => 'Elegí un rango válido de hasta diez años.'], 422);
     }
     $site = trim((string) ($_GET['site'] ?? ''));
     if ($site === '') $site = assigned_locations($viewer)[0] ?? '';
@@ -2313,7 +2313,7 @@ if ($method === 'GET' && $route === 'cash/history') {
         'SELECT id, site, opened_at, opened_by, initial_fund, closed_at, closed_by, expected_cash, counted_cash, difference_amount, envelope_amount
          FROM lartisan_cash_sessions
          WHERE site = ? AND closed_at IS NOT NULL AND closed_at >= ? AND closed_at < DATE_ADD(?, INTERVAL 1 DAY)
-         ORDER BY closed_at DESC LIMIT 100'
+         ORDER BY closed_at DESC LIMIT 2000'
     );
     $statement->execute([$site, $from, $to]);
     $sessions = array_map(static fn (array $row): array => [

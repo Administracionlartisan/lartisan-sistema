@@ -248,3 +248,12 @@ test("Ingresos de mercadería: el cruce con las revisiones fija la collation", (
   assert.match(receipts, /e\.movement_id = m\.id COLLATE utf8mb4_unicode_ci AND e\.site = m\.site COLLATE utf8mb4_unicode_ci/);
   assert.match(read("donweb-api/index.php"), /list_stock_receipt_movements\(\$pdo, \$receiptSite, \$offset\)/);
 });
+
+test("Ventas: clientes, comprobantes y cierres conservan datos claros", () => {
+  assert.match(page, /Buscar por nombre o documento/);
+  assert.match(page, /Cliente guardado\. Se sincronizará con el servidor\./);
+  assert.match(page, /Razón social/);
+  assert.match(page, /setInvoiceType\("Ticket"\)/, "la venta siguiente no reutiliza el comprobante fiscal anterior");
+  assert.match(page, /Historial de cierres/);
+  assert.match(index, /hasta diez años/);
+});

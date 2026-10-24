@@ -167,6 +167,7 @@ export default function Home() {
     [customerAddress, setCustomerAddress] = useState(""),
     [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null),
     [customerGroupFilter, setCustomerGroupFilter] = useState<CustomerGroup | "Todos">("Todos"),
+    [customerLookup, setCustomerLookup] = useState(""),
     [customers, setCustomers] = useState<CustomerRecord[]>([]),
     [invitedQuantities, setInvitedQuantities] = useState<Record<number, number>>({}),
     [message, setMessage] = useState(""),
@@ -1318,7 +1319,8 @@ export default function Home() {
     if (!user?.id || tab !== "Caja") return;
     let active = true;
     const today = dateKey(operationalNow());
-    fetch(`${API_BASE}/cash/history?${new URLSearchParams({ site, from: today, to: today })}`, { credentials: "include", cache: "no-store" })
+    const firstDay = new Date(operationalNow()); firstDay.setFullYear(firstDay.getFullYear() - 10);
+    fetch(`${API_BASE}/cash/history?${new URLSearchParams({ site, from: dateKey(firstDay), to: today })}`, { credentials: "include", cache: "no-store" })
       .then(async (response) => {
         const data = await response.json() as { sessions?: CashHistoryRow[]; error?: string };
         if (!response.ok) throw new Error(data.error || "No se pudieron cargar los cierres.");
@@ -2614,7 +2616,7 @@ export default function Home() {
   // la nueva apertura.
   const suggestedInitialFund = useMemo(() => {
     const lastClosedShift = shiftLog
-      .filter((shift) => shift.site === site && (shift.closedAtISO || shift.closedAt))
+      .filter((shift) => shift.site === site && shift.closedAtISO && dateKey(new Date(shift.closedAtISO)) < dateKey(operationalNow()))
       .sort((left, right) =>
         Date.parse(right.closedAtISO || right.closedAt || "") - Date.parse(left.closedAtISO || left.closedAt || ""),
       )[0];
@@ -2622,7 +2624,7 @@ export default function Home() {
     const countedAtClose = lastClosedShift.countedCash ?? lastClosedShift.expectedCash;
     if (countedAtClose == null) return null;
     return Math.max(0, countedAtClose - (lastClosedShift.envelopeAmount || 0));
-  }, [shiftLog, site]);
+  }, [shiftLog, site, operationalNow]);
   const expected = cashControlIsOpen ? ledgerCashBalance - expenses - withdrawals : 0,
     cashRemaining = cashControlIsOpen ? counted - (requiresEnvelope ? envelope : 0) : 0,
     cashVariance = cashControlIsOpen ? counted - expected : 0;
@@ -3925,6 +3927,12 @@ export default function Home() {
     setSplitPayments([{ method: "Efectivo", amount: 0 }, { method: "Transferencia", amount: 0 }]);
     setCustomer("Consumidor final");
     setSelectedCustomerId(null);
+    setCustomerLookup("");
+    setCustomerDocumentType("Consumidor final");
+    setCustomerDocumentNumber("");
+    setCustomerTaxCondition("");
+    setCustomerAddress("");
+    setInvoiceType("Ticket");
   };
   const collectCreditSale = (sale: Sale, method: string) => {
     if (!can("cobrar")) return setMessage("Tu usuario no tiene permiso para registrar cobranzas.");
@@ -5597,9 +5605,10 @@ export default function Home() {
                     <select value={customerGroupFilter} onChange={(event) => setCustomerGroupFilter(event.target.value as CustomerGroup | "Todos")} className="mt-1 w-full rounded border p-2 font-normal">
                       <option>Todos</option><option>Restaurante</option><option>Franquicia</option><option>Almacén</option><option>Sin grupo</option>
                     </select>
-                    <select value={selectedCustomerId || ""} onChange={(event) => { const selected = customers.find(item => item.id === event.target.value); setSelectedCustomerId(selected?.id || null); if (!selected) return; setCustomer(selected.name); setCustomerDocumentType(selected.documentType === "Otro" ? "DNI" : selected.documentType); setCustomerDocumentNumber(selected.documentNumber); setCustomerAddress(selected.address || ""); }} className="mt-1 w-full rounded border p-2 font-normal">
+                    <input value={customerLookup} onChange={(event) => setCustomerLookup(event.target.value)} placeholder="Buscar por nombre o documento" className="mt-1 w-full rounded border p-2 font-normal" />
+                    <select value={selectedCustomerId || ""} onChange={(event) => { const selected = customers.find(item => item.id === event.target.value); setSelectedCustomerId(selected?.id || null); if (!selected) return; setCustomer(selected.name); setCustomerDocumentType(selected.documentType === "Otro" ? "DNI" : selected.documentType); setCustomerDocumentNumber(selected.documentNumber); setCustomerTaxCondition(""); setCustomerAddress(selected.address || ""); }} className="mt-1 w-full rounded border p-2 font-normal">
                       <option value="">Buscar cliente registrado por documento…</option>
-                      {customers.filter(item => item.site === site && item.active && (customerGroupFilter === "Todos" || customerGroupOf(item) === customerGroupFilter)).map(item => <option key={item.id} value={item.id}>{item.name} · {customerGroupOf(item)} · {item.documentType} {item.documentNumber}</option>)}
+                      {customers.filter(item => item.site === site && item.active && (customerGroupFilter === "Todos" || customerGroupOf(item) === customerGroupFilter) && `${item.name} ${item.documentNumber}`.toLocaleLowerCase("es-AR").includes(customerLookup.trim().toLocaleLowerCase("es-AR"))).map(item => <option key={item.id} value={item.id}>{item.name} · {customerGroupOf(item)} · {item.documentType} {item.documentNumber}</option>)}
                     </select>
                     {selectedCustomerIsCredit && <p className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-900">Venta a cuenta corriente: se descontará stock y quedará pendiente de cobro. No se registra ningún ingreso en caja ahora.</p>}
                     <input
@@ -5613,6 +5622,7 @@ export default function Home() {
                     <b>Datos para comprobante fiscal</b>
                     <p className="mt-1 text-xs text-slate-600">Se guardan con la venta. Factura A exige CUIT, condición fiscal y domicilio.</p>
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {invoiceType === "Factura A" && <label className="font-bold sm:col-span-2">Razón social<input value={customer} onChange={(event) => { setCustomer(event.target.value); setSelectedCustomerId(null); }} className="mt-1 w-full rounded border p-2 font-normal" placeholder="Razón social del cliente" /></label>}
                       <label className="font-bold">Documento
                         <select value={customerDocumentType} onChange={(event) => setCustomerDocumentType(event.target.value as NonNullable<Sale["customerDocumentType"]>)} className="mt-1 w-full rounded border p-2 font-normal">
                           <option>Consumidor final</option><option>DNI</option><option>CUIT</option>
@@ -5869,10 +5879,10 @@ export default function Home() {
                   </div>
                   <div className="mt-6 border-t pt-4">
                     <div className="flex items-baseline justify-between gap-3">
-                      <b>Cierres confirmados de hoy</b>
+                      <b>Historial de cierres</b>
                       <span className="text-xs text-slate-500">Solo consulta</span>
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">Sirven para conciliar el lote de tarjetas entre turnos. No modifican la caja actual ni permiten reabrir un cierre.</p>
+                    <p className="mt-1 text-xs text-slate-500">Muestra los cierres anteriores del local para conciliación. No modifica la caja actual ni permite reabrir un cierre de otro día.</p>
                     <div className="mt-3 overflow-auto rounded border">
                       {siteCashClosuresLoading ? <p className="p-3 text-sm text-slate-500">Cargando cierres…</p>
                         : siteCashClosures.length ? (
@@ -5880,7 +5890,7 @@ export default function Home() {
                             <thead className="bg-[#eef2f6] text-[#183a67]"><tr><th className="p-2">Abrió</th><th className="p-2">Cerró</th><th className="p-2 text-right">Esperado</th><th className="p-2 text-right">Contado</th><th className="p-2 text-right">Diferencia</th></tr></thead>
                             <tbody>{siteCashClosures.map((closure) => <tr key={closure.id} className="border-t"><td className="p-2"><b>{closure.openedBy || "—"}</b><span className="block text-slate-500">{closure.openedAt || "—"}</span></td><td className="p-2"><b>{closure.closedBy || "—"}</b><span className="block text-slate-500">{closure.closedAt || "—"}</span></td><td className="p-2 text-right">{closure.expectedCash == null ? "—" : money.format(closure.expectedCash)}</td><td className="p-2 text-right">{closure.countedCash == null ? "—" : money.format(closure.countedCash)}</td><td className={`p-2 text-right font-bold ${(closure.differenceAmount || 0) === 0 ? "text-green-700" : "text-amber-700"}`}>{closure.differenceAmount == null ? "—" : money.format(closure.differenceAmount)}</td></tr>)}</tbody>
                           </table>
-                        ) : <p className="p-3 text-sm text-slate-500">Todavía no hay otros cierres confirmados hoy en este local.</p>}
+                        ) : <p className="p-3 text-sm text-slate-500">Todavía no hay cierres confirmados en este local.</p>}
                     </div>
                   </div>
                   <div className="mt-6 border-t pt-4">
@@ -7460,7 +7470,7 @@ export default function Home() {
               </p>
             </>
           ) : tab === "Clientes" ? (
-            <CustomerPanel site={site} customers={customers} sales={sales} returnsLog={returnsLog} paymentMethods={methods} canWrite={can("cobrar") || user.role === "administracion"} onCollect={collectCreditSale} onSave={(record) => { const now = new Date().toISOString(); setCustomers(items => { const old = items.find(x => x.id === record.id); return old ? items.map(x => x.id === record.id ? { ...record, createdAt: old.createdAt, updatedAt: now, createdBy: old.createdBy, active: true } : x) : [{ ...record, createdAt: now, updatedAt: now, createdBy: user.name, active: true }, ...items]; }); recordAudit("Cliente actualizado", record.documentType + " " + record.documentNumber); }} onDeactivate={(id) => { setCustomers(items => items.map(item => item.id === id ? { ...item, active:false, updatedAt:new Date().toISOString() } : item)); recordAudit("Cliente desactivado", id); }} />
+            <CustomerPanel site={site} customers={customers} sales={sales} returnsLog={returnsLog} paymentMethods={methods} canWrite={can("cobrar") || user.role === "administracion"} onCollect={collectCreditSale} onSave={(record) => { const now = new Date().toISOString(); setCustomers(items => { const old = items.find(x => x.id === record.id); return old ? items.map(x => x.id === record.id ? { ...record, createdAt: old.createdAt, updatedAt: now, createdBy: old.createdBy, active: true } : x) : [{ ...record, createdAt: now, updatedAt: now, createdBy: user.name, active: true }, ...items]; }); setPendingSync(value => value + 1); setMessage("Cliente guardado. Se sincronizará con el servidor."); recordAudit("Cliente actualizado", record.documentType + " " + record.documentNumber); }} onDeactivate={(id) => { setCustomers(items => items.map(item => item.id === id ? { ...item, active:false, updatedAt:new Date().toISOString() } : item)); recordAudit("Cliente desactivado", id); }} />
           ) : tab === "Recetas y costos" && user.role === "administracion" && can("mrp") ? (
             <MrpPanel initialView="Recetas y costos" />
           ) : tab === "Legajos" && user.role === "administracion" ? (
@@ -10031,6 +10041,7 @@ export default function Home() {
                   <p className="text-[13px] font-bold tracking-wide">PANDAS COORP S.R.L.</p>
                   <p>L&apos;ARTISAN</p>
                   <p>CUIT 30-71629347-1 · IVA Responsable Inscripto</p>
+                  {fiscalReceipt.invoiceType === "Factura A" && <p className="mx-auto mt-2 flex h-8 w-8 items-center justify-center border border-black text-xl font-bold">A</p>}
                   <p className="mt-2 text-[13px] font-bold">{fiscalReceipt.invoiceType.toUpperCase()}</p>
                   <p className="font-bold">ORIGINAL</p>
                 </header>

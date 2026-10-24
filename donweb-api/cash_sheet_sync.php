@@ -403,7 +403,10 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
         if (!is_finite($value) || $value < 0 && $key !== 'difference') throw new InvalidArgumentException('Importes de cierre inválidos.');
         $safeMetrics[$key] = round($value, 2);
     }
-    $payload = ['site' => $site, 'date' => $businessDate, 'payments' => $safePayments, 'metrics' => $safeMetrics, 'replaceDaily' => $replaceDaily];
+    // Keep ordinary closes compatible with the already deployed Apps Script.  The
+    // new field is sent only for the explicit, audited same-day replacement.
+    $payload = ['site' => $site, 'date' => $businessDate, 'payments' => $safePayments, 'metrics' => $safeMetrics];
+    if ($replaceDaily) $payload['replaceDaily'] = true;
     $payloadHash = hash('sha256', (string) json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     $existing = $pdo->prepare('SELECT * FROM cash_sheet_sync_runs WHERE close_id = ? LIMIT 1');
     $existing->execute([$closeId]);
@@ -420,15 +423,19 @@ function cash_sheet_sync_close(PDO $pdo, array $config, array $user, array $inpu
         $location = cash_sheet_config_for_site($config, $site);
         $spreadsheetId = trim((string) $location['spreadsheet_id']);
         $sheet = trim((string) $location['sheet']);
+        if ($replaceDaily && cash_sheet_provider($config) !== 'apps_script') {
+            throw new RuntimeException('La corrección diaria requiere la integración de Apps Script configurada.');
+        }
         if (cash_sheet_provider($config) === 'apps_script') {
-            $result = cash_sheet_apps_script_sync($config, [
+            $appsPayload = [
                 'closeId' => $closeId,
                 'site' => $site,
                 'businessDate' => $businessDate,
                 'payments' => $safePayments,
                 'metrics' => $safeMetrics,
-                'replaceDaily' => $replaceDaily,
-            ]);
+            ];
+            if ($replaceDaily) $appsPayload['replaceDaily'] = true;
+            $result = cash_sheet_apps_script_sync($config, $appsPayload);
             $rowNumber = (int) ($result['row'] ?? 0);
             $scriptSheet = trim((string) ($result['sheet'] ?? $sheet));
             $writtenFields = is_array($result['fields'] ?? null) ? $result['fields'] : [];
